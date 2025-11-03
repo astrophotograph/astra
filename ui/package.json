@@ -67,7 +67,7 @@
     "@types/sqlite3": "^3.1.11",
     "@types/suncalc": "^1.9.2",
     "eslint": "^9",
-    "eslint-config-next": "15.3.3",
+    "eslint-config-next": "16.0.1",
     "sequelize-cli": "^6.6.2",
     "tailwindcss": "^4",
     "tsx": "^4.19.2",
