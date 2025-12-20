@@ -1,0 +1,16 @@
+//! Tauri command handlers for Astra
+
+pub mod astronomy;
+pub mod backup;
+pub mod collections;
+pub mod images;
+pub mod schedules;
+pub mod todos;
+
+// Re-export all commands
+pub use astronomy::*;
+pub use backup::*;
+pub use collections::*;
+pub use images::*;
+pub use schedules::*;
+pub use todos::*;

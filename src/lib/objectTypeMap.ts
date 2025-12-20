@@ -1,0 +1,190 @@
+const ObjectTypeMap: Record<string, string> = {
+  "a2*": "alpha2 CVn Variable",
+  "AB*": "Asymptotic Giant Branch Star",
+  "Ae*": "Herbig Ae/Be Star",
+  "AGN": "Galaxy", // "Active Galaxy Nucleus",
+  "As*": "Association of Stars",
+  "bC*": "beta Cep Variable",
+  "bCG": "Blue Compact Galaxy",
+  "BD*": "Brown Dwarf",
+  "Be*": "Be Star",
+  "BH": "Black Hole",
+  "BiC": "Brightest Galaxy in a Cluster (BCG)",
+  "Bla": "Blazar",
+  "BLL": "BL Lac",
+  "blu": "Blue Object",
+  "BS*": "Blue Straggler",
+  "bub": "Bubble",
+  "BY*": "BY Dra Variable",
+  "C*": "Carbon Star",
+  "cC*": "Classical Cepheid Variable",
+  "Ce*": "Cepheid Variable",
+  "CGb": "Cometary Globule / Pillar",
+  "CGG": "Compact Group of Galaxies",
+  "Cl*": "Cluster of Stars",
+  "Cld": "Cloud",
+  "ClG": "Cluster of Galaxies",
+  "cm": "Centimetric Radio Source",
+  "cor": "Dense Core",
+  "CV*": "Cataclysmic Binary",
+  "DNe": "Dark Cloud (nebula)",
+  "dS*": "delta Sct Variable",
+  "EB*": "Eclipsing Binary",
+  "El*": "Ellipsoidal Variable",
+  "Em*": "Emission-line Star",
+  "EmG": "Emission-line galaxy",
+  "EmO": "Emission Object",
+  "Er*": "Eruptive Variable",
+  "err": "Not an Object (Error, Artefact, ...)",
+  "ev": "Transient Event",
+  "Ev*": "Evolved Star",
+  "FIR": "Far-IR source (λ >= 30 µm)",
+  "flt": "Interstellar Filament",
+  "G": "Galaxy",
+  "gam": "Gamma-ray Source",
+  "gB": "Gamma-ray Burst",
+  "gD*": "gamma Dor Variable",
+  "GiC":  "Galaxy", //"Galaxy towards a Cluster of Galaxies",
+  "GiG": "Galaxy", // "Galaxy towards a Group of Galaxies",
+  "GiP": "Galaxy", // "Galaxy in Pair of Galaxies",
+  "glb": "Globule (low-mass dark cloud)",
+  "GlC": "Globular Cluster",
+  "gLe": "Gravitational Lens",
+  "gLS": "Gravitational Lens System (lens+images)",
+  "GNe": "Nebula",
+  "GrG": "Group of Galaxies",
+  "grv": "Gravitational Source",
+  "GWE": "Gravitational Wave Event",
+  "H2G": "HII Galaxy",
+  "HB*": "Horizontal Branch Star",
+  "HH": "Herbig-Haro Object",
+  "HI": "HI (21cm) Source",
+  "HII": "HII Region",
+  "HS*": "Hot Subdwarf",
+  "HV*": "High Velocity Star",
+  "HVC": "High-velocity Cloud",
+  "HXB": "High Mass X-ray Binary",
+  "IG": "Interacting Galaxies",
+  "IR": "Infra-Red Source",
+  "Ir*": "Irregular Variable",
+  "ISM": "Interstellar Medium Object",
+  "LeG": "Gravitationally Lensed Image of a Galaxy",
+  "LeI": "Gravitationally Lensed Image",
+  "LeQ": "Gravitationally Lensed Image of a Quasar",
+  "Lev": "(Micro)Lensing Event",
+  "LIN": "LINER-type Active Galaxy Nucleus",
+  "LM*": "Low-mass Star",
+  "LP*": "Long-Period Variable",
+  "LSB": "Low Surface Brightness Galaxy",
+  "LXB": "Low Mass X-ray Binary",
+  "Ma*": "Massive Star",
+  "Mas": "Maser",
+  "MGr": "Moving Group",
+  "Mi*": "Mira Variable",
+  "MIR": "Mid-IR Source (3 to 30 µm)",
+  "mm": "Millimetric Radio Source",
+  "MoC": "Molecular Cloud",
+  "mR": "Metric Radio Source",
+  "MS*": "Main Sequence Star",
+  "mul": "Composite Object, Blend",
+  "N*": "Neutron Star",
+  "NIR": "Near-IR Source (λ < 3 µm)",
+  "No*": "Classical Nova",
+  "OH*": "OH/IR Star",
+  "OpC": "Open Cluster",
+  "Opt": "Optical Source",
+  "Or*": "Orion Variable",
+  "out": "Outflow",
+  "pA*": "Post-AGB Star",
+  "PaG": "Pair of Galaxies",
+  "PCG": "Proto Cluster of Galaxies",
+  "Pe*": "Chemically Peculiar Star",
+  "Pl": "Extra-solar Planet",
+  "PM*": "High Proper Motion Star",
+  "PN": "Planetary Nebula",
+  "PoC": "Part of Cloud",
+  "PoG": "Part of a Galaxy",
+  "Psr": "Pulsar",
+  "Pu*": "Pulsating Variable",
+  "QSO": "Quasar",
+  "Rad": "Radio Source",
+  "rB": "Radio Burst",
+  "RC*": "R CrB Variable",
+  "reg": "Region defined in the Sky",
+  "rG": "Radio Galaxy",
+  "RG*": "Red Giant Branch star",
+  "RNe": "Reflection Nebula",
+  "Ro*": "Rotating Variable",
+  "RR*": "RR Lyrae Variable",
+  "RS*": "RS CVn Variable",
+  "RV*": "RV Tauri Variable",
+  "S*": "S Star",
+  "s*b": "Blue Supergiant",
+  "s*r": "Red Supergiant",
+  "s*y": "Yellow Supergiant",
+  "SB*": "Spectroscopic Binary",
+  "SBG": "Starburst Galaxy",
+  "SCG": "Supercluster of Galaxies",
+  "SFR": "Star Forming Region",
+  "sg*": "Evolved Supergiant",
+  "sh": "Interstellar Shell",
+  "smm": "Sub-Millimetric Source",
+  "SN*": "SuperNova",
+  "SNR": "SuperNova Remnant",
+  "St*": "Stellar Stream",
+  "SX*": "SX Phe Variable",
+  "Sy*": "Symbiotic Star",
+  "Sy1": "Seyfert 1 Galaxy",
+  "Sy2": "Seyfert 2 Galaxy",
+  "SyG": "Seyfert Galaxy",
+  "TT*": "T Tauri Star",
+  "ULX": "Ultra-luminous X-ray Source",
+  "UV": "UV-emission Source",
+  "V*": "Variable Star",
+  "var": "Variable source",
+  "vid": "Underdense Region of the Universe",
+  "WD*": "White Dwarf",
+  "WR*": "Wolf-Rayet",
+  "WV*": "Type II Cepheid Variable",
+  "X": "X-ray Source",
+  "XB*": "X-ray Binary",
+  "Y*O": "Young Stellar Object"
+};
+
+export default ObjectTypeMap;
+
+// Color mapping for object types
+const typeColors: Record<string, string> = {
+  Galaxy: "#8b5cf6",      // purple
+  Nebula: "#ec4899",      // pink
+  "Globular Cluster": "#f59e0b", // amber
+  "Open Cluster": "#eab308", // yellow
+  "Planetary Nebula": "#06b6d4", // cyan
+  "Star Forming Region": "#22c55e", // green
+  Quasar: "#ef4444",      // red
+  "Variable Star": "#6366f1", // indigo
+  Default: "#64748b",     // slate
+};
+
+export interface ObjectTypeInfo {
+  label: string;
+  color: string;
+}
+
+/**
+ * Get display info for an object type
+ */
+export function getObjectTypeInfo(typeCode: string): ObjectTypeInfo {
+  const label = ObjectTypeMap[typeCode] || typeCode || "Unknown";
+
+  // Find a matching color
+  let color = typeColors.Default;
+  for (const [key, value] of Object.entries(typeColors)) {
+    if (label.toLowerCase().includes(key.toLowerCase())) {
+      color = value;
+      break;
+    }
+  }
+
+  return { label, color };
+}
