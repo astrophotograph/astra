@@ -9,8 +9,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import {
   Dialog,
   DialogContent,
@@ -27,19 +33,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  ArrowLeft,
-  Calendar,
-  Edit,
   FolderOpen,
   ImageIcon,
   Plus,
-  Save,
   Star,
   Trash2,
 } from "lucide-react";
 import { useCollection, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
-import { useCollectionImages, useImages, useUpdateImage } from "@/hooks/use-images";
-import type { Image } from "@/lib/tauri/commands";
+import { useCollectionImages, useImages, imageKeys } from "@/hooks/use-images";
+import { imageApi, type Image } from "@/lib/tauri/commands";
+import { useQueryClient } from "@tanstack/react-query";
 
 export default function CollectionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -53,16 +56,27 @@ export default function CollectionDetailPage() {
   const [addImagesDialogOpen, setAddImagesDialogOpen] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
 
+  const queryClient = useQueryClient();
   const { data: collection, isLoading, error } = useCollection(id || "");
-  const { data: collectionImages = [] } = useCollectionImages(id || "");
+  const { data: collectionImages = [], error: imagesError, isLoading: imagesLoading } = useCollectionImages(id || "");
   const { data: allImages = [] } = useImages();
   const updateCollection = useUpdateCollection();
   const deleteCollection = useDeleteCollection();
-  const updateImage = useUpdateImage();
+  const [isAddingImages, setIsAddingImages] = useState(false);
 
-  // Images not in this collection
+  // Debug logging
+  console.log("CollectionDetail debug:", {
+    id,
+    collectionImages,
+    imagesError,
+    imagesLoading,
+    collectionImagesLength: collectionImages.length,
+  });
+
+  // Images not in this collection (filter out ones already in collection)
+  const collectionImageIds = new Set(collectionImages.map((img) => img.id));
   const availableImages = allImages.filter(
-    (img) => img.collection_id !== id
+    (img) => !collectionImageIds.has(img.id)
   );
 
   // Start editing mode
@@ -96,22 +110,6 @@ export default function CollectionDetailPage() {
     }
   };
 
-  // Toggle favorite
-  const handleToggleFavorite = async () => {
-    if (!collection) return;
-
-    try {
-      await updateCollection.mutateAsync({
-        id: collection.id,
-        favorite: !collection.favorite,
-      });
-      toast.success(collection.favorite ? "Removed from favorites" : "Added to favorites");
-    } catch (err) {
-      toast.error("Failed to update favorite status");
-      console.error(err);
-    }
-  };
-
   // Delete collection
   const handleDelete = async () => {
     if (!collection) return;
@@ -130,30 +128,33 @@ export default function CollectionDetailPage() {
   const handleAddImages = async () => {
     if (!collection || selectedImages.length === 0) return;
 
+    setIsAddingImages(true);
     try {
-      // Update each selected image to belong to this collection
+      // Add each selected image to this collection via many-to-many relationship
       for (const imageId of selectedImages) {
-        await updateImage.mutateAsync({
-          id: imageId,
-          collection_id: collection.id,
-        });
+        await imageApi.addToCollection(imageId, collection.id);
       }
+      // Invalidate queries to refresh the data
+      await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
       toast.success(`Added ${selectedImages.length} image(s) to collection`);
       setAddImagesDialogOpen(false);
       setSelectedImages([]);
     } catch (err) {
       toast.error("Failed to add images");
       console.error(err);
+    } finally {
+      setIsAddingImages(false);
     }
   };
 
   // Remove image from collection
   const handleRemoveImage = async (imageId: string) => {
+    if (!collection) return;
+
     try {
-      await updateImage.mutateAsync({
-        id: imageId,
-        collection_id: "", // Remove from collection
-      });
+      await imageApi.removeFromCollection(imageId, collection.id);
+      // Invalidate queries to refresh the data
+      await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
       toast.success("Image removed from collection");
     } catch (err) {
       toast.error("Failed to remove image");
@@ -172,234 +173,208 @@ export default function CollectionDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <p className="text-muted-foreground">Loading collection...</p>
+      <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
+        <p className="text-gray-400">Loading collection...</p>
       </div>
     );
   }
 
   if (error || !collection) {
     return (
-      <div className="text-center py-12">
-        <FolderOpen className="w-12 h-12 mx-auto mb-4 opacity-50" />
-        <h2 className="text-xl font-semibold mb-2">Collection not found</h2>
-        <p className="text-muted-foreground mb-4">
-          The requested collection could not be found.
-        </p>
-        <Link to="/collections">
-          <Button>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Collections
-          </Button>
-        </Link>
+      <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
+        <div className="text-center py-12">
+          <FolderOpen className="w-12 h-12 mx-auto mb-4 text-gray-500" />
+          <h2 className="text-xl font-semibold mb-2 text-white">Collection not found</h2>
+          <p className="text-gray-400 mb-4">
+            The requested collection could not be found.
+          </p>
+          <Link to="/collections">
+            <Button variant="outline" className="bg-transparent border-gray-600 text-white hover:bg-gray-800">
+              Back to Collections
+            </Button>
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const tags = collection.tags
-    ? collection.tags.split(",").map((t) => t.trim()).filter(Boolean)
-    : [];
-
   return (
-    <div className="space-y-6">
+    <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
+      {/* Breadcrumb */}
+      <Breadcrumb className="mb-6">
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink asChild>
+              <Link to="/" className="text-gray-400 hover:text-white">
+                Home
+              </Link>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator className="text-gray-600" />
+          <BreadcrumbItem>
+            <span className="text-gray-400">Default User</span>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator className="text-gray-600" />
+          <BreadcrumbItem>
+            <BreadcrumbPage className="text-gray-300">{collection.name}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link to="/collections">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-2xl font-bold">{collection.name}</h1>
-            {collection.description && (
-              <p className="text-muted-foreground">{collection.description}</p>
-            )}
-          </div>
-        </div>
+      <div className="flex justify-between items-start mb-2">
+        <h1 className="text-3xl font-bold text-white">{collection.name}</h1>
         <div className="flex items-center gap-2">
           <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleToggleFavorite}
-            disabled={updateCollection.isPending}
+            variant="outline"
+            className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+            onClick={() => setAddImagesDialogOpen(true)}
           >
-            <Star
-              className={`w-5 h-5 ${
-                collection.favorite ? "text-yellow-500 fill-yellow-500" : ""
-              }`}
-            />
+            <Plus className="w-4 h-4 mr-2" />
+            Add Image
           </Button>
-          {!isEditing && (
-            <Button variant="outline" size="sm" onClick={handleStartEdit}>
-              <Edit className="w-4 h-4 mr-2" />
-              Edit
-            </Button>
-          )}
           <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setDeleteDialogOpen(true)}
+            variant="outline"
+            className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+            onClick={handleStartEdit}
           >
-            <Trash2 className="w-4 h-4" />
+            Edit
           </Button>
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-4 gap-6">
-        {/* Collection Info */}
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Details</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {isEditing ? (
-                <>
-                  <div>
-                    <Label>Name</Label>
-                    <Input
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label>Description</Label>
-                    <Textarea
-                      value={editDescription}
-                      onChange={(e) => setEditDescription(e.target.value)}
-                      className="mt-1"
-                      rows={3}
-                    />
-                  </div>
-                  <div>
-                    <Label>Tags</Label>
-                    <Input
-                      value={editTags}
-                      onChange={(e) => setEditTags(e.target.value)}
-                      placeholder="galaxy, nebula (comma separated)"
-                      className="mt-1"
-                    />
-                  </div>
-                  <div>
-                    <Label>Visibility</Label>
-                    <Select value={editVisibility} onValueChange={setEditVisibility}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="private">Private</SelectItem>
-                        <SelectItem value="public">Public</SelectItem>
-                        <SelectItem value="unlisted">Unlisted</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={handleSave}
-                      disabled={updateCollection.isPending}
-                      className="flex-1"
-                    >
-                      <Save className="w-4 h-4 mr-2" />
-                      {updateCollection.isPending ? "Saving..." : "Save"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => setIsEditing(false)}
-                      className="flex-1"
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm">
-                      Created {new Date(collection.created_at).toLocaleDateString()}
-                    </span>
-                  </div>
+      {/* Description */}
+      {collection.description && (
+        <p className="text-gray-300 mb-8">{collection.description}</p>
+      )}
 
-                  <div>
-                    <Label className="text-muted-foreground">Visibility</Label>
-                    <p>
-                      <Badge variant="outline" className="capitalize">
-                        {collection.visibility}
-                      </Badge>
-                    </p>
-                  </div>
-
-                  <div>
-                    <Label className="text-muted-foreground">Images</Label>
-                    <p>{collectionImages.length} images</p>
-                  </div>
-
-                  {tags.length > 0 && (
-                    <div>
-                      <Label className="text-muted-foreground">Tags</Label>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {tags.map((tag) => (
-                          <Badge key={tag} variant="secondary">
-                            {tag}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Images Grid */}
-        <div className="lg:col-span-3">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-semibold">Images</h2>
-            <Button size="sm" onClick={() => setAddImagesDialogOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add Images
-            </Button>
+      {/* Edit Dialog */}
+      <Dialog open={isEditing} onOpenChange={setIsEditing}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Edit Collection</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Update the collection details.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input
+                id="edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="bg-slate-700 border-slate-600"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">Description</Label>
+              <Textarea
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                className="bg-slate-700 border-slate-600 resize-none"
+                rows={3}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-tags">Tags</Label>
+              <Input
+                id="edit-tags"
+                value={editTags}
+                onChange={(e) => setEditTags(e.target.value)}
+                placeholder="galaxy, nebula (comma separated)"
+                className="bg-slate-700 border-slate-600"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-visibility">Visibility</Label>
+              <Select value={editVisibility} onValueChange={setEditVisibility}>
+                <SelectTrigger className="bg-slate-700 border-slate-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-700 border-slate-600">
+                  <SelectItem value="private">Private</SelectItem>
+                  <SelectItem value="public">Public</SelectItem>
+                  <SelectItem value="unlisted">Unlisted</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
+          <DialogFooter className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsEditing(false)}
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setIsEditing(false);
+                setDeleteDialogOpen(true);
+              }}
+            >
+              <Trash2 className="w-4 h-4 mr-2" />
+              Delete
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={updateCollection.isPending}
+            >
+              {updateCollection.isPending ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          {collectionImages.length === 0 ? (
-            <div className="text-center py-12 border rounded-lg bg-muted/30">
-              <ImageIcon className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p className="text-muted-foreground mb-2">No images in this collection</p>
-              <Button variant="outline" onClick={() => setAddImagesDialogOpen(true)}>
-                <Plus className="w-4 h-4 mr-2" />
-                Add Images
-              </Button>
+      {/* Images Grid */}
+      {collectionImages.length === 0 ? (
+        <div className="flex justify-end">
+          {/* Moon Phase Widget Placeholder */}
+          <div className="bg-slate-800 rounded-lg p-6 w-72">
+            <div className="flex flex-col items-center">
+              <div className="w-24 h-24 rounded-full bg-gray-700 mb-4 flex items-center justify-center">
+                <span className="text-4xl text-gray-500">
+                  <ImageIcon className="w-12 h-12" />
+                </span>
+              </div>
+              <p className="text-white text-center">No images yet</p>
+              <p className="text-gray-400 text-sm text-center mt-1">
+                Add images to this collection
+              </p>
             </div>
-          ) : (
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {collectionImages.map((image) => (
-                <ImageCard
-                  key={image.id}
-                  image={image}
-                  onRemove={() => handleRemoveImage(image.id)}
-                />
-              ))}
-            </div>
-          )}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {collectionImages.map((image) => (
+            <ImageCard
+              key={image.id}
+              image={image}
+              onRemove={() => handleRemoveImage(image.id)}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
           <DialogHeader>
             <DialogTitle>Delete Collection</DialogTitle>
           </DialogHeader>
-          <p className="text-muted-foreground">
+          <p className="text-gray-400">
             Are you sure you want to delete &quot;{collection.name}&quot;? This will not
             delete the images, but they will be removed from this collection.
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteDialogOpen(false)}
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+            >
               Cancel
             </Button>
             <Button
@@ -415,16 +390,16 @@ export default function CollectionDetailPage() {
 
       {/* Add Images Dialog */}
       <Dialog open={addImagesDialogOpen} onOpenChange={setAddImagesDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add Images to Collection</DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="text-gray-400">
               Select images to add to &quot;{collection.name}&quot;
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[400px] overflow-y-auto">
             {availableImages.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">
+              <p className="text-center text-gray-400 py-8">
                 No available images to add
               </p>
             ) : (
@@ -434,28 +409,28 @@ export default function CollectionDetailPage() {
                     key={image.id}
                     className={`relative cursor-pointer rounded-lg overflow-hidden border-2 transition-colors ${
                       selectedImages.includes(image.id)
-                        ? "border-primary"
+                        ? "border-teal-500"
                         : "border-transparent"
                     }`}
                     onClick={() => toggleImageSelection(image.id)}
                   >
-                    <div className="aspect-video bg-muted">
-                      {image.url ? (
+                    <div className="aspect-video bg-slate-700">
+                      {image.thumbnail ? (
                         <img
-                          src={image.url}
+                          src={image.thumbnail}
                           alt={image.filename}
                           className="w-full h-full object-cover"
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                          <ImageIcon className="w-8 h-8 text-muted-foreground/50" />
+                          <ImageIcon className="w-8 h-8 text-gray-500" />
                         </div>
                       )}
                     </div>
-                    <p className="text-xs p-1 truncate">{image.filename}</p>
+                    <p className="text-xs p-1 truncate text-gray-300">{image.filename}</p>
                     {selectedImages.includes(image.id) && (
-                      <div className="absolute top-1 right-1 w-5 h-5 bg-primary rounded-full flex items-center justify-center">
-                        <span className="text-xs text-primary-foreground">✓</span>
+                      <div className="absolute top-1 right-1 w-5 h-5 bg-teal-500 rounded-full flex items-center justify-center">
+                        <span className="text-xs text-white">✓</span>
                       </div>
                     )}
                   </div>
@@ -464,14 +439,18 @@ export default function CollectionDetailPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddImagesDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => setAddImagesDialogOpen(false)}
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+            >
               Cancel
             </Button>
             <Button
               onClick={handleAddImages}
-              disabled={selectedImages.length === 0 || updateImage.isPending}
+              disabled={selectedImages.length === 0 || isAddingImages}
             >
-              {updateImage.isPending
+              {isAddingImages
                 ? "Adding..."
                 : `Add ${selectedImages.length} Image${selectedImages.length !== 1 ? "s" : ""}`}
             </Button>
@@ -484,23 +463,23 @@ export default function CollectionDetailPage() {
 
 function ImageCard({ image, onRemove }: { image: Image; onRemove: () => void }) {
   return (
-    <div className="group relative rounded-lg overflow-hidden border">
+    <div className="group relative rounded-lg overflow-hidden bg-slate-800 border border-slate-700">
       <Link to={`/i/${image.id}`}>
-        <div className="aspect-video bg-muted">
-          {image.url ? (
+        <div className="aspect-video bg-slate-700">
+          {image.thumbnail ? (
             <img
-              src={image.url}
+              src={image.thumbnail}
               alt={image.filename}
               className="w-full h-full object-cover"
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
-              <ImageIcon className="w-10 h-10 text-muted-foreground/50" />
+              <ImageIcon className="w-10 h-10 text-gray-500" />
             </div>
           )}
         </div>
         <div className="p-2">
-          <p className="font-medium truncate text-sm">{image.summary || image.filename}</p>
+          <p className="font-medium truncate text-sm text-white">{image.summary || image.filename}</p>
           {image.favorite && (
             <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 inline" />
           )}

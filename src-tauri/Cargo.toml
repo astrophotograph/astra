@@ -16,7 +16,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri core
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -40,9 +40,14 @@ thiserror = "2"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+walkdir = "2"
 
 # Image handling
 image = "0.25"
+base64 = "0.22"
+
+# FITS file parsing
+fitrs = "0.5"
 
 # Python integration
 pyo3 = { version = "0.27", features = ["auto-initialize"] }

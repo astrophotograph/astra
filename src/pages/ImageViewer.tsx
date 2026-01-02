@@ -2,9 +2,11 @@
  * Image Viewer Page - View and manage individual images
  */
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
+import { marked } from "marked";
+import { imageApi } from "@/lib/tauri/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,10 +42,39 @@ export default function ImageViewerPage() {
   const [editTags, setEditTags] = useState("");
   const [editLocation, setEditLocation] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [isLoadingImage, setIsLoadingImage] = useState(false);
 
   const { data: image, isLoading, error } = useImage(id || "");
   const updateImage = useUpdateImage();
   const deleteImage = useDeleteImage();
+
+  // Fetch full image data from backend
+  useEffect(() => {
+    if (image?.id) {
+      setIsLoadingImage(true);
+      imageApi.getData(image.id)
+        .then((dataUrl) => {
+          setImageDataUrl(dataUrl);
+        })
+        .catch((err) => {
+          console.error("Failed to load image:", err);
+          // Fallback to thumbnail if available
+          if (image.thumbnail) {
+            setImageDataUrl(image.thumbnail);
+          }
+        })
+        .finally(() => {
+          setIsLoadingImage(false);
+        });
+    }
+  }, [image?.id, image?.thumbnail]);
+
+  // Parse markdown description - must be before any early returns
+  const descriptionHtml = useMemo(() => {
+    if (!image?.description) return "";
+    return marked.parse(image.description, { async: false }) as string;
+  }, [image?.description]);
 
   // Start editing mode
   const handleStartEdit = () => {
@@ -180,9 +211,13 @@ export default function ImageViewerPage() {
         {/* Image Display */}
         <div className="lg:col-span-2">
           <div className="rounded-lg overflow-hidden bg-muted">
-            {image.url ? (
+            {isLoadingImage ? (
+              <div className="aspect-video flex items-center justify-center">
+                <p className="text-muted-foreground">Loading image...</p>
+              </div>
+            ) : imageDataUrl ? (
               <img
-                src={image.url}
+                src={imageDataUrl}
                 alt={image.filename}
                 className="w-full h-auto"
               />
@@ -275,7 +310,10 @@ export default function ImageViewerPage() {
                   {image.description && (
                     <div>
                       <Label className="text-muted-foreground">Description</Label>
-                      <p className="text-sm">{image.description}</p>
+                      <div
+                        className="text-sm prose prose-sm prose-invert max-w-none"
+                        dangerouslySetInnerHTML={{ __html: descriptionHtml }}
+                      />
                     </div>
                   )}
 
@@ -313,7 +351,7 @@ export default function ImageViewerPage() {
                     <div>
                       <Label className="text-muted-foreground">Collection</Label>
                       <Link
-                        to={`/c/${image.collection_id}`}
+                        to={`/collections/${image.collection_id}`}
                         className="block text-sm text-primary hover:underline"
                       >
                         View Collection

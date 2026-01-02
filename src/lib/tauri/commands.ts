@@ -112,9 +112,9 @@ export interface Image {
   location: string | null;
   annotations: string | null;
   metadata: string | null;
-  is_synced: boolean;
   created_at: string;
   updated_at: string;
+  thumbnail: string | null;
 }
 
 export interface CreateImageInput {
@@ -256,6 +256,31 @@ export const imageApi = {
     invoke<Image>("update_image", { input }),
 
   delete: (id: string) => invoke<boolean>("delete_image", { id }),
+
+  // Many-to-many relationship methods
+  addToCollection: (imageId: string, collectionId: string) =>
+    invoke<boolean>("add_image_to_collection", { imageId, collectionId }),
+
+  removeFromCollection: (imageId: string, collectionId: string) =>
+    invoke<boolean>("remove_image_from_collection", { imageId, collectionId }),
+
+  getCollections: (imageId: string) =>
+    invoke<Collection[]>("get_image_collections", { imageId }),
+
+  // Image data methods
+  getData: (id: string) =>
+    invoke<string>("get_image_data", { id }),
+
+  getThumbnail: (id: string) =>
+    invoke<string>("get_image_thumbnail", { id }),
+};
+
+export const collectionImageApi = {
+  /**
+   * Get count of images in a collection
+   */
+  getCount: (collectionId: string) =>
+    invoke<number>("get_collection_image_count", { collectionId }),
 };
 
 // =============================================================================
@@ -465,4 +490,56 @@ export const astronomyApi = {
    */
   getSunTimes: (location: ObserverLocation) =>
     invoke<SunTimes>("get_sun_times", { location }),
+};
+
+// =============================================================================
+// Bulk Scan Types
+// =============================================================================
+
+export interface BulkScanInput {
+  directory: string;
+  tags?: string;
+  stacked_only: boolean;
+}
+
+export interface BulkScanResult {
+  images_imported: number;
+  collections_created: number;
+  images_skipped: number;
+  errors: string[];
+}
+
+export interface BulkScanPreview {
+  total_images: number;
+  stacked_images: number;
+  raw_subframes: number;
+  with_fits: number;
+  with_jpeg: number;
+  sample_files: PreviewFile[];
+}
+
+export interface PreviewFile {
+  name: string;
+  directory: string;
+  has_fits: boolean;
+  has_jpeg: boolean;
+  is_stacked: boolean;
+}
+
+// =============================================================================
+// Bulk Scan Commands
+// =============================================================================
+
+export const scanApi = {
+  /**
+   * Preview what would be imported from a directory scan
+   */
+  preview: (input: BulkScanInput) =>
+    invoke<BulkScanPreview>("preview_bulk_scan", { input }),
+
+  /**
+   * Bulk scan a directory and import images
+   */
+  scan: (input: BulkScanInput) =>
+    invoke<BulkScanResult>("bulk_scan_directory", { input }),
 };

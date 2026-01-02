@@ -1,80 +1,70 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Calendar, ListTodo, Map, Settings, Telescope } from "lucide-react";
-
-interface AppInfo {
-  name: string;
-  version: string;
-  description: string;
-}
+import { Target, ClipboardCheck, BarChart3, Settings } from "lucide-react";
 
 export default function Home() {
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-
-  useEffect(() => {
-    invoke<AppInfo>("get_app_info").then(setAppInfo);
-  }, []);
-
   const navItems = [
     {
       title: "Observations",
-      description: "Track daily observations and image collections",
+      description:
+        "Track and document your daily observations, insights, and discoveries. Keep a record of important moments and patterns you notice.",
       href: "/observations",
-      icon: Calendar,
+      icon: Target,
+      gradient: "from-violet-500 to-purple-600",
     },
     {
       title: "Todo",
-      description: "Manage your astronomical target list",
+      description:
+        "Manage your astronomical observing targets. Track celestial object visibility and mark observations complete when finished.",
       href: "/todo",
-      icon: ListTodo,
+      icon: ClipboardCheck,
+      gradient: "from-emerald-400 to-teal-500",
     },
     {
       title: "Plan",
-      description: "Plan observations with altitude data and sky maps",
+      description:
+        "Plan your observing sessions with optimal timing data. Calculate object altitudes, set goal times, and schedule your astronomical adventures.",
       href: "/plan",
-      icon: Map,
+      icon: BarChart3,
+      gradient: "from-teal-500 to-green-600",
     },
     {
       title: "Admin",
-      description: "System management and backups",
+      description:
+        "Manage system backups, restore database, and configure administrative settings for your observatory.",
       href: "/admin",
       icon: Settings,
+      gradient: "from-orange-500 to-red-500",
     },
   ];
 
   return (
-    <div className="container py-10">
-      <div className="mb-10 text-center">
-        <div className="mb-4 flex justify-center">
-          <Telescope className="h-16 w-16 text-primary" />
-        </div>
-        <h1 className="text-4xl font-bold tracking-tight">
-          {appInfo?.name || "Astra"}
+    <div className="min-h-full bg-gradient-to-br from-purple-900 via-violet-900 to-slate-900 py-16 px-4">
+      <div className="mb-12 text-center">
+        <h1 className="text-4xl font-bold tracking-tight text-white">
+          Welcome to Your Observatory
         </h1>
-        <p className="mt-2 text-lg text-muted-foreground">
-          {appInfo?.description || "Astronomy Observation Log"}
-        </p>
-        {appInfo && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            Version {appInfo.version}
-          </p>
-        )}
       </div>
 
-      <div className="mx-auto grid max-w-4xl gap-6 md:grid-cols-2">
+      <div className="mx-auto grid max-w-6xl gap-6 px-4 sm:grid-cols-2 lg:grid-cols-4">
         {navItems.map((item) => (
-          <Link key={item.href} to={item.href}>
-            <Card className="transition-colors hover:border-primary/50 hover:bg-accent">
-              <CardHeader>
-                <div className="mb-2 flex items-center gap-2">
-                  <item.icon className="h-5 w-5 text-primary" />
-                  <CardTitle>{item.title}</CardTitle>
-                </div>
-                <CardDescription>{item.description}</CardDescription>
-              </CardHeader>
-            </Card>
+          <Link key={item.href} to={item.href} className="group">
+            <div className="overflow-hidden rounded-xl transition-transform hover:scale-105">
+              {/* Gradient icon section */}
+              <div
+                className={`flex h-40 items-center justify-center bg-gradient-to-br ${item.gradient}`}
+              >
+                <item.icon className="h-16 w-16 text-white" strokeWidth={1.5} />
+              </div>
+              {/* Dark content section */}
+              <div className="bg-slate-800/90 p-5">
+                <h2 className="mb-2 text-lg font-semibold text-white">
+                  {item.title}
+                </h2>
+                <p className="text-sm leading-relaxed text-gray-400">
+                  {item.description}
+                </p>
+              </div>
+            </div>
           </Link>
         ))}
       </div>

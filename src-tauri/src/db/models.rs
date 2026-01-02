@@ -129,6 +129,7 @@ pub struct Image {
     pub metadata: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub thumbnail: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -148,7 +149,11 @@ pub struct NewImage {
     pub location: Option<String>,
     pub annotations: Option<String>,
     pub metadata: Option<String>,
+    pub thumbnail: Option<String>,
 }
+
+// Note: For Insertable, field order doesn't strictly matter as Diesel uses field names,
+// but we keep thumbnail at end for consistency with the table schema.
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize, Default)]
 #[diesel(table_name = images)]
@@ -165,6 +170,29 @@ pub struct UpdateImage {
     pub location: Option<String>,
     pub annotations: Option<String>,
     pub metadata: Option<String>,
+    pub thumbnail: Option<String>,
+}
+
+// ============================================================================
+// CollectionImage (Join Table)
+// ============================================================================
+
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = collection_images)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct CollectionImage {
+    pub id: String,
+    pub collection_id: String,
+    pub image_id: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = collection_images)]
+pub struct NewCollectionImage {
+    pub id: String,
+    pub collection_id: String,
+    pub image_id: String,
 }
 
 // ============================================================================

@@ -22,7 +22,7 @@ function App() {
           <Route path="/observations" element={<Observations />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/i/:id" element={<ImageViewer />} />
-          <Route path="/c/:id" element={<CollectionDetail />} />
+          <Route path="/collections/:id" element={<CollectionDetail />} />
         </Route>
       </Routes>
       <Toaster />

@@ -52,6 +52,7 @@ diesel::table! {
         metadata -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        thumbnail -> Nullable<Text>,
     }
 }
 
@@ -116,11 +117,22 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    collection_images (id) {
+        id -> Text,
+        collection_id -> Text,
+        image_id -> Text,
+        created_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(collections -> users (user_id));
 diesel::joinable!(images -> users (user_id));
 diesel::joinable!(images -> collections (collection_id));
 diesel::joinable!(astronomy_todos -> users (user_id));
 diesel::joinable!(observation_schedules -> users (user_id));
+diesel::joinable!(collection_images -> collections (collection_id));
+diesel::joinable!(collection_images -> images (image_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     users,
@@ -130,4 +142,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     observation_schedules,
     astro_objects,
     simbad_cache,
+    collection_images,
 );

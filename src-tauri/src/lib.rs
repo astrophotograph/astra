@@ -31,6 +31,10 @@ pub struct AppInfo {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize logging
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -88,6 +92,14 @@ pub fn run() {
             commands::create_image,
             commands::update_image,
             commands::delete_image,
+            // Image-Collection relationship commands
+            commands::add_image_to_collection,
+            commands::remove_image_from_collection,
+            commands::get_image_collections,
+            commands::get_collection_image_count,
+            // Image data serving commands
+            commands::get_image_data,
+            commands::get_image_thumbnail,
             // Schedule commands
             commands::get_schedules,
             commands::get_active_schedule,
@@ -109,6 +121,9 @@ pub fn run() {
             commands::delete_backup,
             commands::export_database,
             commands::import_database,
+            // Bulk scan commands
+            commands::bulk_scan_directory,
+            commands::preview_bulk_scan,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

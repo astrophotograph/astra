@@ -4,6 +4,7 @@ pub mod astronomy;
 pub mod backup;
 pub mod collections;
 pub mod images;
+pub mod scan;
 pub mod schedules;
 pub mod todos;
 
@@ -12,5 +13,6 @@ pub use astronomy::*;
 pub use backup::*;
 pub use collections::*;
 pub use images::*;
+pub use scan::*;
 pub use schedules::*;
 pub use todos::*;
