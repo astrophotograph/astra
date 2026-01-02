@@ -543,3 +543,91 @@ export const scanApi = {
   scan: (input: BulkScanInput) =>
     invoke<BulkScanResult>("bulk_scan_directory", { input }),
 };
+
+// =============================================================================
+// Plate Solving Types
+// =============================================================================
+
+export interface PlateSolveInput {
+  /** Image ID to plate solve */
+  id: string;
+  /** Solver type: "nova", "local", or "astap" */
+  solver: string;
+  /** API key for nova.astrometry.net (required for nova solver) */
+  apiKey?: string;
+  /** Lower bound of expected image scale (arcsec/pixel) */
+  scaleLower?: number;
+  /** Upper bound of expected image scale (arcsec/pixel) */
+  scaleUpper?: number;
+  /** Timeout in seconds */
+  timeout?: number;
+  /** Whether to query catalogs for objects after solving */
+  queryCatalogs?: boolean;
+  /** Catalogs to query (if not specified, queries all) */
+  catalogs?: string[];
+  /** Magnitude limit for bright stars */
+  starMagLimit?: number;
+}
+
+export interface PlateSolveResult {
+  success: boolean;
+  centerRa: number;
+  centerDec: number;
+  pixelScale: number;
+  rotation: number;
+  widthDeg: number;
+  heightDeg: number;
+  imageWidth: number;
+  imageHeight: number;
+  solver: string;
+  solveTime: number;
+  errorMessage?: string;
+}
+
+export interface CatalogObject {
+  name: string;
+  catalog: string;
+  objectType: string;
+  ra: number;
+  dec: number;
+  magnitude?: number;
+  size?: string;
+  sizeArcmin?: number;
+  commonName?: string;
+}
+
+export interface PlateSolveResponse extends PlateSolveResult {
+  objects: CatalogObject[];
+}
+
+// =============================================================================
+// Plate Solving Commands
+// =============================================================================
+
+export const plateSolveApi = {
+  /**
+   * Plate solve an image and optionally query catalogs for objects
+   */
+  solve: (input: PlateSolveInput) =>
+    invoke<PlateSolveResponse>("plate_solve_image", { input }),
+
+  /**
+   * Query catalogs for objects in a given sky region
+   */
+  queryRegion: (
+    centerRa: number,
+    centerDec: number,
+    widthDeg: number,
+    heightDeg: number,
+    catalogs?: string[],
+    starMagLimit?: number
+  ) =>
+    invoke<CatalogObject[]>("query_sky_region", {
+      centerRa,
+      centerDec,
+      widthDeg,
+      heightDeg,
+      catalogs,
+      starMagLimit,
+    }),
+};

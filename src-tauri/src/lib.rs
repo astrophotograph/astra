@@ -124,6 +124,9 @@ pub fn run() {
             // Bulk scan commands
             commands::bulk_scan_directory,
             commands::preview_bulk_scan,
+            // Plate solving commands
+            commands::plate_solve_image,
+            commands::query_sky_region,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

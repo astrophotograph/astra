@@ -18,6 +18,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Settings,
   Database,
   Info,
@@ -27,6 +34,7 @@ import {
   Trash2,
   RefreshCw,
   HardDrive,
+  Compass,
 } from "lucide-react";
 import { appApi, backupApi, type BackupInfo } from "@/lib/tauri/commands";
 import { MoonPhase } from "@/components/MoonPhase";
@@ -47,6 +55,14 @@ export default function AdminPage() {
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<BackupInfo | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+
+  // Plate solving settings
+  const [plateSolveSolver, setPlateSolveSolver] = useState(() =>
+    localStorage.getItem("plate_solve_solver") || "nova"
+  );
+  const [astrometryApiKey, setAstrometryApiKey] = useState(() =>
+    localStorage.getItem("astrometry_api_key") || ""
+  );
 
   // Load app info and backups
   useEffect(() => {
@@ -172,6 +188,19 @@ export default function AdminPage() {
     }
   };
 
+  // Save plate solve solver preference
+  const savePlateSolveSolver = (value: string) => {
+    setPlateSolveSolver(value);
+    localStorage.setItem("plate_solve_solver", value);
+    toast.success("Solver preference saved");
+  };
+
+  // Save astrometry API key
+  const saveAstrometryApiKey = () => {
+    localStorage.setItem("astrometry_api_key", astrometryApiKey);
+    toast.success("API key saved");
+  };
+
   // Format file size
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -273,6 +302,68 @@ export default function AdminPage() {
               <MapPin className="w-4 h-4 mr-2" />
               Get Current Location
             </Button>
+          </CardContent>
+        </Card>
+
+        {/* Plate Solving Settings */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Compass className="w-5 h-5" />
+              Plate Solving
+            </CardTitle>
+            <CardDescription>
+              Configure plate solving settings for image coordinate detection
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Solver</Label>
+              <Select value={plateSolveSolver} onValueChange={savePlateSolveSolver}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select solver" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nova">Nova (astrometry.net API)</SelectItem>
+                  <SelectItem value="local">Local (solve-field)</SelectItem>
+                  <SelectItem value="astap">ASTAP</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {plateSolveSolver === "nova" && "Uses the free nova.astrometry.net web API. Requires API key."}
+                {plateSolveSolver === "local" && "Requires local astrometry.net installation with index files."}
+                {plateSolveSolver === "astap" && "Requires ASTAP solver installed with star database."}
+              </p>
+            </div>
+
+            {plateSolveSolver === "nova" && (
+              <div className="space-y-2">
+                <Label htmlFor="api-key">Astrometry.net API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="api-key"
+                    type="password"
+                    value={astrometryApiKey}
+                    onChange={(e) => setAstrometryApiKey(e.target.value)}
+                    placeholder="Enter your API key"
+                  />
+                  <Button variant="outline" onClick={saveAstrometryApiKey}>
+                    Save
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Get your free API key from{" "}
+                  <a
+                    href="https://nova.astrometry.net/api_help"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    nova.astrometry.net
+                  </a>
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

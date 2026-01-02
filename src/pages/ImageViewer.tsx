@@ -6,7 +6,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { marked } from "marked";
-import { imageApi } from "@/lib/tauri/commands";
+import { imageApi, plateSolveApi, type CatalogObject } from "@/lib/tauri/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,14 +19,19 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   ArrowLeft,
   Calendar,
+  ChevronDown,
+  Compass,
   Edit,
   ImageIcon,
+  Loader2,
   MapPin,
   Save,
+  Sparkles,
   Star,
   Tag,
   Trash2,
@@ -44,6 +49,13 @@ export default function ImageViewerPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = useState(false);
+  const [plateSolveDialogOpen, setPlateSolveDialogOpen] = useState(false);
+  const [isPlateSolving, setIsPlateSolving] = useState(false);
+  const [plateSolveApiKey, setPlateSolveApiKey] = useState(() => {
+    return localStorage.getItem("astrometry_api_key") || "";
+  });
+  const [catalogObjects, setCatalogObjects] = useState<CatalogObject[]>([]);
+  const [objectsExpanded, setObjectsExpanded] = useState(false);
 
   const { data: image, isLoading, error } = useImage(id || "");
   const updateImage = useUpdateImage();
@@ -75,6 +87,71 @@ export default function ImageViewerPage() {
     if (!image?.description) return "";
     return marked.parse(image.description, { async: false }) as string;
   }, [image?.description]);
+
+  // Parse existing annotations when image loads
+  useEffect(() => {
+    if (image?.annotations) {
+      try {
+        const parsed = JSON.parse(image.annotations) as CatalogObject[];
+        setCatalogObjects(parsed);
+      } catch {
+        setCatalogObjects([]);
+      }
+    } else {
+      setCatalogObjects([]);
+    }
+  }, [image?.annotations]);
+
+  // Parse plate solve metadata
+  const plateSolveInfo = useMemo(() => {
+    if (!image?.metadata) return null;
+    try {
+      const metadata = JSON.parse(image.metadata);
+      return metadata.plate_solve || null;
+    } catch {
+      return null;
+    }
+  }, [image?.metadata]);
+
+  // Handle plate solve
+  const handlePlateSolve = async () => {
+    if (!image) return;
+
+    if (!plateSolveApiKey) {
+      toast.error("Please enter an Astrometry.net API key");
+      return;
+    }
+
+    // Save API key to localStorage
+    localStorage.setItem("astrometry_api_key", plateSolveApiKey);
+
+    setIsPlateSolving(true);
+    setPlateSolveDialogOpen(false);
+
+    try {
+      const result = await plateSolveApi.solve({
+        id: image.id,
+        solver: "nova",
+        apiKey: plateSolveApiKey,
+        queryCatalogs: true,
+        timeout: 300,
+      });
+
+      if (result.success) {
+        toast.success(`Plate solved in ${result.solveTime.toFixed(1)}s - found ${result.objects.length} objects`);
+        setCatalogObjects(result.objects);
+        // Refresh the image data to get updated metadata
+        updateImage.mutate({ id: image.id });
+      } else {
+        toast.error(result.errorMessage || "Plate solve failed");
+      }
+    } catch (err) {
+      toast.error("Plate solve failed: " + (err as Error).message);
+      console.error(err);
+    } finally {
+      setIsPlateSolving(false);
+    }
+  };
 
   // Start editing mode
   const handleStartEdit = () => {
@@ -190,6 +267,24 @@ export default function ImageViewerPage() {
                 image.favorite ? "text-yellow-500 fill-yellow-500" : ""
               }`}
             />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setPlateSolveDialogOpen(true)}
+            disabled={isPlateSolving}
+          >
+            {isPlateSolving ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Solving...
+              </>
+            ) : (
+              <>
+                <Compass className="w-4 h-4 mr-2" />
+                Plate Solve
+              </>
+            )}
           </Button>
           {!isEditing && (
             <Button variant="outline" size="sm" onClick={handleStartEdit}>
@@ -358,6 +453,85 @@ export default function ImageViewerPage() {
                       </Link>
                     </div>
                   )}
+
+                  {/* Plate Solve Results */}
+                  {plateSolveInfo && (
+                    <div className="pt-4 border-t">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Sparkles className="w-4 h-4 text-teal-500" />
+                        <Label className="text-teal-500">Plate Solve Results</Label>
+                      </div>
+                      <div className="space-y-2 text-sm">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-muted-foreground">RA:</span>
+                            <span className="ml-2">{plateSolveInfo.center_ra?.toFixed(4)}°</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Dec:</span>
+                            <span className="ml-2">{plateSolveInfo.center_dec?.toFixed(4)}°</span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-muted-foreground">Scale:</span>
+                            <span className="ml-2">{plateSolveInfo.pixel_scale?.toFixed(2)}″/px</span>
+                          </div>
+                          <div>
+                            <span className="text-muted-foreground">Rotation:</span>
+                            <span className="ml-2">{plateSolveInfo.rotation?.toFixed(1)}°</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">FOV:</span>
+                          <span className="ml-2">
+                            {(plateSolveInfo.width_deg * 60)?.toFixed(1)}′ × {(plateSolveInfo.height_deg * 60)?.toFixed(1)}′
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Catalog Objects */}
+                  {catalogObjects.length > 0 && (
+                    <div className="pt-4 border-t">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
+                        onClick={() => setObjectsExpanded(!objectsExpanded)}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Tag className="w-4 h-4 text-muted-foreground" />
+                          <Label className="text-muted-foreground cursor-pointer">
+                            Objects in Field ({catalogObjects.length})
+                          </Label>
+                        </div>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${objectsExpanded ? "rotate-180" : ""}`} />
+                      </Button>
+                      {objectsExpanded && (
+                        <div className="space-y-1 max-h-48 overflow-y-auto mt-2">
+                          {catalogObjects.map((obj, idx) => (
+                            <div
+                              key={`${obj.name}-${idx}`}
+                              className="flex items-center justify-between text-sm py-1 px-2 rounded hover:bg-muted/50"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-xs">
+                                  {obj.catalog}
+                                </Badge>
+                                <span>{obj.name}</span>
+                              </div>
+                              {obj.magnitude && (
+                                <span className="text-muted-foreground text-xs">
+                                  mag {obj.magnitude.toFixed(1)}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
             </CardContent>
@@ -386,6 +560,51 @@ export default function ImageViewerPage() {
               disabled={deleteImage.isPending}
             >
               {deleteImage.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Plate Solve Dialog */}
+      <Dialog open={plateSolveDialogOpen} onOpenChange={setPlateSolveDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Plate Solve Image</DialogTitle>
+            <DialogDescription>
+              Determine the sky coordinates and identify objects in this image using
+              nova.astrometry.net. You'll need an API key from{" "}
+              <a
+                href="https://nova.astrometry.net/api_help"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline"
+              >
+                astrometry.net
+              </a>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="api-key">Astrometry.net API Key</Label>
+              <Input
+                id="api-key"
+                type="password"
+                value={plateSolveApiKey}
+                onChange={(e) => setPlateSolveApiKey(e.target.value)}
+                placeholder="Enter your API key"
+              />
+              <p className="text-xs text-muted-foreground">
+                Your API key is stored locally and never sent to our servers.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPlateSolveDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handlePlateSolve} disabled={!plateSolveApiKey}>
+              <Compass className="w-4 h-4 mr-2" />
+              Start Plate Solve
             </Button>
           </DialogFooter>
         </DialogContent>

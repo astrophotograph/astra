@@ -5,6 +5,7 @@
 
 pub mod simbad;
 pub mod altitude;
+pub mod plate_solve;
 
 use pyo3::prelude::*;
 use std::path::PathBuf;

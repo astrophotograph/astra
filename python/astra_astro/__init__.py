@@ -11,14 +11,32 @@ from astra_astro.altitude import (
     AltitudePoint,
     ObserverLocation,
 )
+from astra_astro.plate_solve import (
+    solve_image,
+    PlateSolveResult,
+    SolverType,
+)
+from astra_astro.catalog_query import (
+    query_objects_in_fov,
+    CatalogObject,
+)
 
 __all__ = [
+    # SIMBAD
     "lookup_object",
     "SimbadResult",
+    # Altitude
     "calculate_altitude",
     "calculate_altitude_data",
     "AltitudePoint",
     "ObserverLocation",
+    # Plate solving
+    "solve_image",
+    "PlateSolveResult",
+    "SolverType",
+    # Catalog queries
+    "query_objects_in_fov",
+    "CatalogObject",
 ]
 
 __version__ = "0.1.0"
