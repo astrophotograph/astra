@@ -3,6 +3,7 @@
  */
 
 import { useState, useMemo } from "react";
+import { format } from "date-fns";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -245,7 +246,12 @@ export default function PlanPage() {
   };
 
   const formatTime = (time: string): string => {
-    return time.slice(0, 5);
+    try {
+      const date = new Date(time);
+      return format(date, "HH:mm");
+    } catch {
+      return time.slice(11, 16) || time;
+    }
   };
 
   return (
@@ -420,20 +426,6 @@ export default function PlanPage() {
                 size: target.size ? `${target.size}'` : undefined,
               });
               setSearchQuery(target.name);
-            }}
-            onViewInLookup={(target: RecommendedTarget) => {
-              // Set search result and switch to object lookup tab
-              setSearchResult({
-                name: target.name,
-                commonName: target.commonName,
-                objectType: target.type,
-                ra: `${target.ra.toFixed(4)}h`,
-                dec: `${target.dec > 0 ? "+" : ""}${target.dec.toFixed(4)}°`,
-                magnitude: target.magnitude?.toString(),
-                size: target.size ? `${target.size}'` : undefined,
-              });
-              setSearchQuery(target.name);
-              setActiveTab("lookup");
             }}
             onAddToSchedule={async (target: RecommendedTarget, startTime: string, duration: number) => {
               if (!activeSchedule) {

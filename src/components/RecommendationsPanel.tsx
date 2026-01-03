@@ -27,7 +27,6 @@ import { Label } from "@/components/ui/label";
 import {
   CalendarCheck,
   Clock,
-  ExternalLink,
   Eye,
   MapPin,
   Moon,
@@ -60,7 +59,6 @@ export interface ScheduleItemInfo {
 interface RecommendationsPanelProps {
   onTargetSelect?: (target: RecommendedTarget) => void;
   onAddToSchedule?: (target: RecommendedTarget, startTime: string, duration: number) => void;
-  onViewInLookup?: (target: RecommendedTarget) => void;
   scheduledObjectNames?: string[];
   scheduleItems?: ScheduleItemInfo[];
   activeScheduleName?: string;
@@ -79,7 +77,6 @@ const TYPE_CATEGORIES = [
 export function RecommendationsPanel({
   onTargetSelect,
   onAddToSchedule,
-  onViewInLookup,
   scheduledObjectNames = [],
   scheduleItems = [],
   activeScheduleName,
@@ -94,9 +91,7 @@ export function RecommendationsPanel({
   const [selectedTarget, setSelectedTarget] = useState<RecommendedTarget | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
 
-  // Add to Schedule dialog state
-  const [isAddToScheduleOpen, setIsAddToScheduleOpen] = useState(false);
-  const [targetToSchedule, setTargetToSchedule] = useState<RecommendedTarget | null>(null);
+  // Schedule time state (used in detail dialog)
   const [scheduleStartTime, setScheduleStartTime] = useState("");
   const [scheduleDuration, setScheduleDuration] = useState(30);
 
@@ -238,6 +233,19 @@ export function RecommendationsPanel({
     setSelectedTarget(target);
     setIsDetailOpen(true);
     onTargetSelect?.(target);
+
+    // Set default schedule time
+    let defaultTime: Date;
+    if (target.optimalTime && target.optimalTime > new Date()) {
+      defaultTime = target.optimalTime;
+    } else {
+      const now = new Date();
+      const minutes = Math.ceil(now.getMinutes() / 15) * 15;
+      defaultTime = new Date(now);
+      defaultTime.setMinutes(minutes, 0, 0);
+    }
+    setScheduleStartTime(format(defaultTime, "yyyy-MM-dd'T'HH:mm"));
+    setScheduleDuration(30);
   }, [onTargetSelect]);
 
   // Get altitude data for selected target
@@ -245,12 +253,6 @@ export function RecommendationsPanel({
     if (!selectedTarget) return { altitudeData: [], horizonData: [] };
     return generateAltitudeData(selectedTarget);
   }, [selectedTarget, generateAltitudeData]);
-
-  // Get altitude data for target being scheduled
-  const targetToScheduleAltitudeData = useMemo(() => {
-    if (!targetToSchedule) return { altitudeData: [], horizonData: [] };
-    return generateAltitudeData(targetToSchedule);
-  }, [targetToSchedule, generateAltitudeData]);
 
   // Convert schedule items to ScheduledBlock format for chart
   const existingScheduleBlocks = useMemo((): ScheduledBlock[] => {
@@ -261,47 +263,6 @@ export function RecommendationsPanel({
       isNew: false,
     }));
   }, [scheduleItems]);
-
-  // Create new observation block based on current time selection
-  const newObservationBlock = useMemo((): ScheduledBlock | null => {
-    if (!scheduleStartTime || !targetToSchedule) return null;
-    const startTime = new Date(scheduleStartTime);
-    const endTime = new Date(startTime.getTime() + scheduleDuration * 60 * 1000);
-    return {
-      name: targetToSchedule.name,
-      startTime,
-      endTime,
-      isNew: true,
-    };
-  }, [scheduleStartTime, scheduleDuration, targetToSchedule]);
-
-  // Open the Add to Schedule dialog
-  const openAddToScheduleDialog = useCallback((target: RecommendedTarget) => {
-    // Set default start time to optimal time or current time
-    let defaultTime: Date;
-    if (target.optimalTime && target.optimalTime > new Date()) {
-      defaultTime = target.optimalTime;
-    } else {
-      // Round to next 15 minutes
-      const now = new Date();
-      const minutes = Math.ceil(now.getMinutes() / 15) * 15;
-      defaultTime = new Date(now);
-      defaultTime.setMinutes(minutes, 0, 0);
-    }
-
-    setTargetToSchedule(target);
-    setScheduleStartTime(format(defaultTime, "yyyy-MM-dd'T'HH:mm"));
-    setScheduleDuration(30);
-    setIsAddToScheduleOpen(true);
-  }, []);
-
-  // Handle confirming add to schedule
-  const handleConfirmAddToSchedule = useCallback(() => {
-    if (!targetToSchedule || !scheduleStartTime) return;
-    onAddToSchedule?.(targetToSchedule, scheduleStartTime, scheduleDuration);
-    setIsAddToScheduleOpen(false);
-    setTargetToSchedule(null);
-  }, [targetToSchedule, scheduleStartTime, scheduleDuration, onAddToSchedule]);
 
   // Generate recommendations
   const generateRecommendations = async () => {
@@ -660,56 +621,109 @@ export function RecommendationsPanel({
                   </div>
                 </div>
 
-                {/* Altitude Chart */}
+                {/* Altitude Chart with schedule blocks */}
                 <div className="border rounded-lg p-3">
                   <h4 className="text-sm font-medium mb-2">Altitude Over Time</h4>
                   <AltitudeChart
                     data={selectedTargetAltitudeData.altitudeData}
                     horizonData={selectedTargetAltitudeData.horizonData}
+                    scheduledBlocks={[
+                      ...existingScheduleBlocks,
+                      ...(selectedTarget && scheduleStartTime && !scheduledObjectNames.includes(selectedTarget.name) ? [{
+                        name: selectedTarget.name,
+                        startTime: new Date(scheduleStartTime),
+                        endTime: new Date(new Date(scheduleStartTime).getTime() + scheduleDuration * 60 * 1000),
+                        isNew: true,
+                      }] : []),
+                    ]}
                     width={420}
-                    height={180}
+                    height={160}
                     showCurrentTime={true}
                     idealThreshold={20}
                   />
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mt-2">
+                    <div className="flex items-center gap-1">
+                      <div className="w-3 h-3 bg-green-500/20 rounded-sm" />
+                      <span>Good (20°+)</span>
+                    </div>
+                    {existingScheduleBlocks.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-red-500/20 border border-red-500/50 border-dashed rounded-sm" />
+                        <span>Scheduled</span>
+                      </div>
+                    )}
+                    {!scheduledObjectNames.includes(selectedTarget.name) && (
+                      <div className="flex items-center gap-1">
+                        <div className="w-3 h-3 bg-indigo-500/20 border border-indigo-500/50 border-dashed rounded-sm" />
+                        <span>New</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
+                {/* Schedule Time Selection - only show if not already scheduled */}
+                {onAddToSchedule && !scheduledObjectNames.includes(selectedTarget.name) && (
+                  <div className="space-y-3 p-3 bg-muted/30 rounded-lg">
+                    {activeScheduleName && (
+                      <div className="text-sm">
+                        <span className="text-muted-foreground">Adding to: </span>
+                        <span className="font-medium text-blue-500">{activeScheduleName}</span>
+                      </div>
+                    )}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label htmlFor="detail-start-time" className="text-xs">Start Time</Label>
+                        <Input
+                          id="detail-start-time"
+                          type="datetime-local"
+                          value={scheduleStartTime}
+                          onChange={(e) => setScheduleStartTime(e.target.value)}
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="detail-duration" className="text-xs">Duration (min)</Label>
+                        <Input
+                          id="detail-duration"
+                          type="number"
+                          min={5}
+                          max={240}
+                          step={5}
+                          value={scheduleDuration}
+                          onChange={(e) => setScheduleDuration(parseInt(e.target.value) || 30)}
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Current Schedule Overview */}
+                {scheduleItems.length > 0 && (
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-medium text-muted-foreground">Current Schedule</h4>
+                    <div className="border rounded-lg divide-y max-h-24 overflow-y-auto">
+                      {scheduleItems.map((item, i) => (
+                        <div key={i} className="flex items-center justify-between px-2 py-1.5 text-xs">
+                          <span className="truncate">{item.object_name}</span>
+                          <span className="text-muted-foreground flex-shrink-0 ml-2">
+                            {format(new Date(item.start_time), "HH:mm")} - {format(new Date(item.end_time), "HH:mm")}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Coordinates */}
-                <div className="text-sm text-muted-foreground">
+                <div className="text-xs text-muted-foreground">
                   <span>RA: {selectedTarget.ra.toFixed(4)}h</span>
                   <span className="mx-2">|</span>
                   <span>Dec: {selectedTarget.dec.toFixed(4)}°</span>
                 </div>
-
-                {/* Description if available */}
-                {selectedTarget.description && (
-                  <p className="text-sm text-muted-foreground">{selectedTarget.description}</p>
-                )}
-
-                {/* Recommendation reasons */}
-                {selectedTarget.reasons.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {selectedTarget.reasons.map((reason, i) => (
-                      <Badge key={i} variant="secondary" className="text-xs">
-                        {reason}
-                      </Badge>
-                    ))}
-                  </div>
-                )}
               </div>
 
-              <DialogFooter className="flex-col sm:flex-row gap-2">
-                {onViewInLookup && (
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      onViewInLookup(selectedTarget);
-                      setIsDetailOpen(false);
-                    }}
-                  >
-                    <ExternalLink className="w-4 h-4 mr-2" />
-                    View in Object Lookup
-                  </Button>
-                )}
+              <DialogFooter>
                 {onAddToSchedule && (
                   scheduledObjectNames.includes(selectedTarget.name) ? (
                     <Button variant="outline" disabled className="text-green-600">
@@ -717,163 +731,17 @@ export function RecommendationsPanel({
                       Already Scheduled
                     </Button>
                   ) : (
-                    <Button
-                      onClick={() => {
+                    <Button onClick={() => {
+                      if (selectedTarget && scheduleStartTime) {
+                        onAddToSchedule(selectedTarget, scheduleStartTime, scheduleDuration);
                         setIsDetailOpen(false);
-                        openAddToScheduleDialog(selectedTarget);
-                      }}
-                    >
+                      }
+                    }}>
                       <Plus className="w-4 h-4 mr-2" />
                       Add to Schedule
                     </Button>
                   )
                 )}
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Add to Schedule Dialog */}
-      <Dialog open={isAddToScheduleOpen} onOpenChange={(open) => {
-        setIsAddToScheduleOpen(open);
-        if (!open) setTargetToSchedule(null);
-      }}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-          {targetToSchedule && (
-            <>
-              <DialogHeader>
-                <DialogTitle>Add to Schedule</DialogTitle>
-              </DialogHeader>
-
-              {/* Target Info */}
-              <div className="p-3 bg-muted/50 rounded-lg space-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold">{targetToSchedule.name}</span>
-                  <Badge variant="outline" className="text-xs">
-                    {getObjectTypeInfo(targetToSchedule.type).label}
-                  </Badge>
-                </div>
-                {targetToSchedule.description && (
-                  <p className="text-sm text-muted-foreground">{targetToSchedule.description}</p>
-                )}
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  {targetToSchedule.magnitude !== undefined && targetToSchedule.magnitude > 0 && (
-                    <div>
-                      <span className="text-muted-foreground">Magnitude: </span>
-                      <span className="font-medium">{targetToSchedule.magnitude.toFixed(1)}</span>
-                    </div>
-                  )}
-                  <div>
-                    <span className="text-muted-foreground">Altitude: </span>
-                    <span className="font-medium">{targetToSchedule.altitude}°</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Direction: </span>
-                    <span className="font-medium">{targetToSchedule.direction}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Azimuth: </span>
-                    <span className="font-medium">{targetToSchedule.azimuth}°</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Altitude Chart with existing schedule */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium">Tonight's Altitude Profile</h4>
-                <div className="border rounded-lg p-2">
-                  <AltitudeChart
-                    data={targetToScheduleAltitudeData.altitudeData}
-                    horizonData={targetToScheduleAltitudeData.horizonData}
-                    scheduledBlocks={[
-                      ...existingScheduleBlocks,
-                      ...(newObservationBlock ? [newObservationBlock] : []),
-                    ]}
-                    width={420}
-                    height={160}
-                    showCurrentTime={true}
-                    idealThreshold={20}
-                  />
-                </div>
-                <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-indigo-500/30 border border-indigo-500 rounded-sm" />
-                    <span>Altitude curve</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-green-500/20 rounded-sm" />
-                    <span>Good (20°+)</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-red-500/20 border border-red-500/50 border-dashed rounded-sm" />
-                    <span>Scheduled</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <div className="w-3 h-3 bg-indigo-500/20 border border-indigo-500/50 border-dashed rounded-sm" />
-                    <span>New</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Schedule Name */}
-              {activeScheduleName && (
-                <div className="text-sm">
-                  <span className="text-muted-foreground">Adding to: </span>
-                  <span className="font-medium text-blue-500">{activeScheduleName}</span>
-                </div>
-              )}
-
-              {/* Time Selection */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="schedule-start-time">Start Time</Label>
-                  <Input
-                    id="schedule-start-time"
-                    type="datetime-local"
-                    value={scheduleStartTime}
-                    onChange={(e) => setScheduleStartTime(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="schedule-duration">Duration (minutes)</Label>
-                  <Input
-                    id="schedule-duration"
-                    type="number"
-                    min={5}
-                    max={240}
-                    step={5}
-                    value={scheduleDuration}
-                    onChange={(e) => setScheduleDuration(parseInt(e.target.value) || 30)}
-                  />
-                </div>
-              </div>
-
-              {/* Current Schedule Overview */}
-              {scheduleItems.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="text-sm font-medium">Current Schedule Overview</h4>
-                  <div className="border rounded-lg divide-y max-h-32 overflow-y-auto">
-                    {scheduleItems.map((item, i) => (
-                      <div key={i} className="flex items-center justify-between px-3 py-2 text-sm">
-                        <span>{item.object_name}</span>
-                        <span className="text-muted-foreground">
-                          {format(new Date(item.start_time), "HH:mm")} - {format(new Date(item.end_time), "HH:mm")}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsAddToScheduleOpen(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleConfirmAddToSchedule}>
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add to Schedule
-                </Button>
               </DialogFooter>
             </>
           )}
