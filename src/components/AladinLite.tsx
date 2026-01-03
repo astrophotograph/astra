@@ -5,7 +5,7 @@
  * Includes catalog layers, FOV overlay, and survey selection.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,6 +15,8 @@ import { Switch } from "@/components/ui/switch";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, Layers, MapPin, RotateCcw, Search, Square, Telescope } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useEquipment } from "@/contexts/EquipmentContext";
+import { useLocations } from "@/contexts/LocationContext";
 
 declare global {
   interface Window {
@@ -143,6 +145,23 @@ const FOV_PRESETS = [
   { id: "svbony", name: "SVBony 105 (78×60)", width: 78, height: 60 },
 ];
 
+/**
+ * Calculate field of view in arcminutes from sensor size and focal length
+ * FOV (arcmin) = (sensor_size_mm / focal_length_mm) * 3438
+ * where 3438 = 180 * 60 / π (radians to arcminutes conversion)
+ */
+function calculateFovArcmin(sensorSizeMm: number, focalLengthMm: number): number {
+  return (sensorSizeMm / focalLengthMm) * 3438;
+}
+
+interface EquipmentFovPreset {
+  id: string;
+  name: string;
+  width: number;  // arcminutes
+  height: number; // arcminutes
+  equipmentId: string;
+}
+
 export function AladinLite({
   height = 500,
   className = "",
@@ -160,6 +179,51 @@ export function AladinLite({
   const [survey, setSurvey] = useState("P/DSS2/color");
   const [fov, setFov] = useState(60);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Equipment context for FOV calculation
+  const { equipmentSets } = useEquipment();
+  const { activeLocation } = useLocations();
+
+  // Calculate equipment FOV presets from equipment sets
+  const equipmentFovPresets = useMemo((): EquipmentFovPreset[] => {
+    const presets: EquipmentFovPreset[] = [];
+
+    // Get equipment IDs associated with active location
+    const locationEquipmentIds = activeLocation?.equipmentIds || [];
+
+    for (const equipment of equipmentSets) {
+      // Only include equipment that has both telescope focal length and camera sensor size
+      const focalLength = equipment.telescope?.focalLength;
+      const sensorWidth = equipment.camera?.sensorWidth;
+      const sensorHeight = equipment.camera?.sensorHeight;
+
+      if (focalLength && sensorWidth && sensorHeight) {
+        const widthArcmin = calculateFovArcmin(sensorWidth, focalLength);
+        const heightArcmin = calculateFovArcmin(sensorHeight, focalLength);
+
+        // Mark if this equipment is associated with current location
+        const isLocationEquipment = locationEquipmentIds.includes(equipment.id);
+        const prefix = isLocationEquipment ? "★ " : "";
+
+        presets.push({
+          id: `equipment-${equipment.id}`,
+          name: `${prefix}${equipment.name} (${Math.round(widthArcmin)}×${Math.round(heightArcmin)}')`,
+          width: Math.round(widthArcmin),
+          height: Math.round(heightArcmin),
+          equipmentId: equipment.id,
+        });
+      }
+    }
+
+    // Sort with location equipment first
+    return presets.sort((a, b) => {
+      const aIsLocal = locationEquipmentIds.includes(a.equipmentId);
+      const bIsLocal = locationEquipmentIds.includes(b.equipmentId);
+      if (aIsLocal && !bIsLocal) return -1;
+      if (!aIsLocal && bIsLocal) return 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [equipmentSets, activeLocation]);
 
   // Catalog states
   const [catalogStates, setCatalogStates] = useState<Record<string, boolean>>({
@@ -780,7 +844,27 @@ export function AladinLite({
                 </div>
 
                 <div>
-                  <Label className="text-xs text-muted-foreground">Presets:</Label>
+                  {/* Equipment-based FOV presets */}
+                  {equipmentFovPresets.length > 0 && (
+                    <div className="mb-2">
+                      <Label className="text-xs text-muted-foreground">Your Equipment:</Label>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {equipmentFovPresets.map((preset) => (
+                          <Button
+                            key={preset.id}
+                            variant={activePreset === preset.id ? "default" : "outline"}
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => applyPreset(preset)}
+                          >
+                            {preset.name}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <Label className="text-xs text-muted-foreground">Generic Presets:</Label>
                   <div className="flex flex-wrap gap-1 mt-1">
                     {FOV_PRESETS.map((preset) => (
                       <Button

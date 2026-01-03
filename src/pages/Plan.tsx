@@ -2,7 +2,7 @@
  * Plan Page - Astronomy observation planning
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,11 +26,14 @@ import {
   Map,
   Plus,
   Search,
+  Sparkles,
   Telescope,
   Trash2,
 } from "lucide-react";
 import { AladinLite, type TargetInfo } from "@/components/AladinLite";
 import { SkyMapSidePanel } from "@/components/SkyMapSidePanel";
+import { RecommendationsPanel } from "@/components/RecommendationsPanel";
+import type { RecommendedTarget } from "@/lib/recommendations";
 import {
   useSchedules,
   useActiveSchedule,
@@ -57,6 +60,10 @@ export default function PlanPage() {
   const [addItemDialogOpen, setAddItemDialogOpen] = useState(false);
   const [newItemStartTime, setNewItemStartTime] = useState("");
   const [newItemDuration, setNewItemDuration] = useState(30);
+  const [activeTab, setActiveTab] = useState("lookup");
+
+  // Pending target to add after schedule creation
+  const [pendingTargetForSchedule, setPendingTargetForSchedule] = useState<RecommendedTarget | null>(null);
 
   // Sky map target/FOV state for altitude chart
   const [skyMapTarget, setSkyMapTarget] = useState<TargetInfo | null>(null);
@@ -72,6 +79,12 @@ export default function PlanPage() {
 
   // Parse schedule items
   const scheduleItems = activeSchedule ? parseScheduleItems(activeSchedule) : [];
+
+  // Get list of scheduled object names for recommendations
+  const scheduledObjectNames = useMemo(() =>
+    scheduleItems.map(item => item.object_name),
+    [scheduleItems]
+  );
 
   // Search for astronomical object
   const handleSearch = async (e: React.FormEvent) => {
@@ -104,7 +117,7 @@ export default function PlanPage() {
     }
 
     try {
-      await createSchedule.mutateAsync({
+      const newSchedule = await createSchedule.mutateAsync({
         name: newScheduleName,
         description: newScheduleDescription || undefined,
         is_active: true,
@@ -113,6 +126,36 @@ export default function PlanPage() {
       setNewScheduleDialogOpen(false);
       setNewScheduleName("");
       setNewScheduleDescription("");
+
+      // If there's a pending target, add it to the new schedule
+      if (pendingTargetForSchedule && newSchedule) {
+        const now = new Date();
+        const startTime = now.toISOString().slice(0, 16);
+        const endTime = new Date(now.getTime() + 30 * 60 * 1000).toISOString().slice(0, 16);
+
+        const newItem: ScheduleItem = {
+          id: crypto.randomUUID(),
+          todo_id: "",
+          object_name: pendingTargetForSchedule.name,
+          start_time: startTime,
+          end_time: endTime,
+          priority: 1,
+          notes: `${pendingTargetForSchedule.type}${pendingTargetForSchedule.magnitude ? ` - Mag: ${pendingTargetForSchedule.magnitude.toFixed(1)}` : ""}`,
+          completed: false,
+        };
+
+        try {
+          await addScheduleItem.mutateAsync({
+            scheduleId: newSchedule.id,
+            item: newItem,
+          });
+          toast.success(`Added ${pendingTargetForSchedule.name} to schedule`);
+        } catch (itemErr) {
+          toast.error("Schedule created, but failed to add target");
+          console.error(itemErr);
+        }
+        setPendingTargetForSchedule(null);
+      }
     } catch (err) {
       toast.error("Failed to create schedule");
       console.error(err);
@@ -212,11 +255,15 @@ export default function PlanPage() {
         <h1 className="text-2xl font-bold">Observation Planning</h1>
       </div>
 
-      <Tabs defaultValue="lookup" className="w-full">
-        <TabsList className="grid w-full grid-cols-3">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="lookup" className="flex items-center gap-2">
             <Search className="w-4 h-4" />
             Object Lookup
+          </TabsTrigger>
+          <TabsTrigger value="recommendations" className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4" />
+            Recommendations
           </TabsTrigger>
           <TabsTrigger value="schedule" className="flex items-center gap-2">
             <Calendar className="w-4 h-4" />
@@ -358,6 +405,80 @@ export default function PlanPage() {
           </Card>
         </TabsContent>
 
+        {/* Recommendations Tab */}
+        <TabsContent value="recommendations" className="space-y-6">
+          <RecommendationsPanel
+            onTargetSelect={(target: RecommendedTarget) => {
+              // Convert to search result format and show
+              setSearchResult({
+                name: target.name,
+                commonName: target.commonName,
+                objectType: target.type,
+                ra: `${target.ra.toFixed(4)}h`,
+                dec: `${target.dec > 0 ? "+" : ""}${target.dec.toFixed(4)}°`,
+                magnitude: target.magnitude?.toString(),
+                size: target.size ? `${target.size}'` : undefined,
+              });
+              setSearchQuery(target.name);
+            }}
+            onViewInLookup={(target: RecommendedTarget) => {
+              // Set search result and switch to object lookup tab
+              setSearchResult({
+                name: target.name,
+                commonName: target.commonName,
+                objectType: target.type,
+                ra: `${target.ra.toFixed(4)}h`,
+                dec: `${target.dec > 0 ? "+" : ""}${target.dec.toFixed(4)}°`,
+                magnitude: target.magnitude?.toString(),
+                size: target.size ? `${target.size}'` : undefined,
+              });
+              setSearchQuery(target.name);
+              setActiveTab("lookup");
+            }}
+            onAddToSchedule={async (target: RecommendedTarget, startTime: string, duration: number) => {
+              if (!activeSchedule) {
+                // No schedule exists - prompt user to create one
+                setPendingTargetForSchedule(target);
+                setNewScheduleName(`Tonight's Observations`);
+                setNewScheduleDescription(`Observation schedule including ${target.name}`);
+                setNewScheduleDialogOpen(true);
+                return;
+              }
+
+              const endTime = new Date(new Date(startTime).getTime() + duration * 60 * 1000).toISOString().slice(0, 16);
+
+              const newItem: ScheduleItem = {
+                id: crypto.randomUUID(),
+                todo_id: "",
+                object_name: target.name,
+                start_time: startTime,
+                end_time: endTime,
+                priority: 1,
+                notes: `${target.type}${target.magnitude ? ` - Mag: ${target.magnitude.toFixed(1)}` : ""}`,
+                completed: false,
+              };
+
+              try {
+                await addScheduleItem.mutateAsync({
+                  scheduleId: activeSchedule.id,
+                  item: newItem,
+                });
+                toast.success(`Added ${target.name} to schedule`);
+              } catch (err) {
+                toast.error("Failed to add to schedule");
+                console.error(err);
+              }
+            }}
+            scheduledObjectNames={scheduledObjectNames}
+            scheduleItems={scheduleItems.map(item => ({
+              object_name: item.object_name,
+              start_time: item.start_time,
+              end_time: item.end_time,
+            }))}
+            activeScheduleName={activeSchedule?.name}
+          />
+        </TabsContent>
+
         {/* Schedule Tab */}
         <TabsContent value="schedule" className="space-y-6">
           <Card>
@@ -367,7 +488,13 @@ export default function PlanPage() {
                   <Calendar className="w-5 h-5" />
                   Observation Schedules
                 </CardTitle>
-                <Dialog open={newScheduleDialogOpen} onOpenChange={setNewScheduleDialogOpen}>
+                <Dialog open={newScheduleDialogOpen} onOpenChange={(open) => {
+                  setNewScheduleDialogOpen(open);
+                  if (!open) {
+                    // Clear pending target when dialog is cancelled
+                    setPendingTargetForSchedule(null);
+                  }
+                }}>
                   <DialogTrigger asChild>
                     <Button size="sm">
                       <Plus className="w-4 h-4 mr-1" />
@@ -377,6 +504,11 @@ export default function PlanPage() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Create Schedule</DialogTitle>
+                      {pendingTargetForSchedule && (
+                        <DialogDescription>
+                          After creating, "{pendingTargetForSchedule.name}" will be added to this schedule.
+                        </DialogDescription>
+                      )}
                     </DialogHeader>
                     <div className="grid gap-4 py-4">
                       <div>

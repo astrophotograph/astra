@@ -42,6 +42,19 @@ interface WeatherData {
   cloudCover: number;
 }
 
+interface ForecastData {
+  time: Date;
+  temperature: number;
+  cloudCover: number;
+  humidity: number;
+  windSpeed: number;
+  transparency: number;  // Calculated
+  seeing: number;        // Calculated (arcseconds)
+  isNight: boolean;
+}
+
+type TemperatureUnit = 'celsius' | 'fahrenheit';
+
 interface SkyMapSidePanelProps {
   className?: string;
   defaultCollapsed?: boolean;
@@ -143,8 +156,48 @@ export function SkyMapSidePanel({
 }: SkyMapSidePanelProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [forecast, setForecast] = useState<ForecastData[]>([]);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState<string | null>(null);
+  const [lastWeatherFetch, setLastWeatherFetch] = useState<string | null>(null); // "lat,lon,timestamp"
+  const [tempUnit, setTempUnit] = useState<TemperatureUnit>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('weatherTempUnit') as TemperatureUnit) || 'celsius';
+    }
+    return 'celsius';
+  });
+
+  // Weather cache duration (30 minutes)
+  const WEATHER_CACHE_DURATION_MS = 30 * 60 * 1000;
+
+  // Toggle temperature unit
+  const toggleTempUnit = () => {
+    const newUnit = tempUnit === 'celsius' ? 'fahrenheit' : 'celsius';
+    setTempUnit(newUnit);
+    localStorage.setItem('weatherTempUnit', newUnit);
+  };
+
+  // Convert temperature based on unit
+  const formatTemp = (celsius: number): string => {
+    if (tempUnit === 'fahrenheit') {
+      return `${Math.round(celsius * 9/5 + 32)}°F`;
+    }
+    return `${Math.round(celsius)}°C`;
+  };
+
+  // Calculate astronomical conditions from weather data
+  const calculateAstroConditions = (cloudCover: number, humidity: number, windSpeed: number) => {
+    // Transparency (0-100%) - less clouds and humidity = better
+    const cloudScore = (100 - cloudCover) / 100;
+    const humidityScore = Math.max(0, (80 - humidity) / 80);
+    const transparency = Math.round((cloudScore * 0.7 + humidityScore * 0.3) * 100);
+
+    // Seeing (arcseconds) - less wind = better
+    const windScore = Math.max(0, (20 - windSpeed) / 20);
+    const seeing = 1.0 + (1 - windScore) * 3.0;
+
+    return { transparency: Math.max(20, transparency), seeing: Number(seeing.toFixed(1)) };
+  };
 
   // Get location from context - this makes the panel reactive to location changes
   const { activeLocation } = useLocations();
@@ -155,17 +208,52 @@ export function SkyMapSidePanel({
     : null;
   const horizonProfile: HorizonProfile | null = activeLocation?.horizon || null;
 
+  // Check if weather cache is still valid
+  const isWeatherCacheValid = (lat: number, lon: number): boolean => {
+    if (!lastWeatherFetch) return false;
+
+    const [cachedLat, cachedLon, cachedTime] = lastWeatherFetch.split(',');
+    const cachedLatNum = parseFloat(cachedLat);
+    const cachedLonNum = parseFloat(cachedLon);
+    const cachedTimestamp = parseInt(cachedTime, 10);
+
+    // Check if location is the same (within 0.01 degrees) and cache is not expired
+    const sameLocation = Math.abs(cachedLatNum - lat) < 0.01 && Math.abs(cachedLonNum - lon) < 0.01;
+    const cacheNotExpired = Date.now() - cachedTimestamp < WEATHER_CACHE_DURATION_MS;
+
+    return sameLocation && cacheNotExpired && weather !== null;
+  };
+
+  // Get remaining cache time in minutes
+  const getCacheRemainingMinutes = (): number | null => {
+    if (!lastWeatherFetch) return null;
+
+    const [, , cachedTime] = lastWeatherFetch.split(',');
+    const cachedTimestamp = parseInt(cachedTime, 10);
+    const elapsed = Date.now() - cachedTimestamp;
+    const remaining = WEATHER_CACHE_DURATION_MS - elapsed;
+
+    return remaining > 0 ? Math.ceil(remaining / 60000) : null;
+  };
+
   // Fetch weather data
-  const fetchWeather = async () => {
+  const fetchWeather = async (forceRefresh = false) => {
     if (!coordinates) return;
+
+    // Check cache unless force refresh
+    if (!forceRefresh && isWeatherCacheValid(coordinates.latitude, coordinates.longitude)) {
+      console.log('Weather cache still valid, skipping fetch');
+      return;
+    }
 
     setWeatherLoading(true);
     setWeatherError(null);
 
     try {
       // Use Open-Meteo API (no API key required)
+      // Include hourly forecast for 48 hours
       const response = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${coordinates.latitude}&longitude=${coordinates.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,cloud_cover,visibility`
+        `https://api.open-meteo.com/v1/forecast?latitude=${coordinates.latitude}&longitude=${coordinates.longitude}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,cloud_cover,visibility&hourly=temperature_2m,relative_humidity_2m,cloud_cover,wind_speed_10m,is_day&forecast_hours=48&timezone=auto`
       );
 
       if (!response.ok) {
@@ -197,6 +285,38 @@ export function SkyMapSidePanel({
         visibility: (current.visibility || 10000) / 1000, // Convert to km
         cloudCover: current.cloud_cover,
       });
+
+      // Update cache timestamp
+      setLastWeatherFetch(`${coordinates.latitude},${coordinates.longitude},${Date.now()}`);
+
+      // Parse hourly forecast (every 3 hours for 48-hour forecast)
+      if (data.hourly) {
+        const hourlyData: ForecastData[] = [];
+        const times = data.hourly.time;
+        const temps = data.hourly.temperature_2m;
+        const clouds = data.hourly.cloud_cover;
+        const humidities = data.hourly.relative_humidity_2m;
+        const winds = data.hourly.wind_speed_10m;
+        const isDays = data.hourly.is_day;
+
+        // Take every 3rd hour for 16 data points (48 hours)
+        for (let i = 0; i < Math.min(times.length, 48); i += 3) {
+          const windSpeedMs = winds[i] / 3.6; // Convert km/h to m/s
+          const conditions = calculateAstroConditions(clouds[i], humidities[i], windSpeedMs);
+
+          hourlyData.push({
+            time: new Date(times[i]),
+            temperature: temps[i],
+            cloudCover: clouds[i],
+            humidity: humidities[i],
+            windSpeed: windSpeedMs,
+            transparency: conditions.transparency,
+            seeing: conditions.seeing,
+            isNight: isDays[i] === 0,
+          });
+        }
+        setForecast(hourlyData);
+      }
     } catch (error) {
       console.error("Weather fetch error:", error);
       setWeatherError("Unable to fetch weather data");
@@ -434,15 +554,27 @@ export function SkyMapSidePanel({
               <Cloud className="w-4 h-4" />
               Weather Conditions
             </h3>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={fetchWeather}
-              disabled={weatherLoading}
-              className="h-6 w-6 p-0"
-            >
-              <RefreshCw className={cn("w-3 h-3", weatherLoading && "animate-spin")} />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={toggleTempUnit}
+                className="h-6 px-2 text-xs"
+                title={`Switch to ${tempUnit === 'celsius' ? 'Fahrenheit' : 'Celsius'}`}
+              >
+                {tempUnit === 'celsius' ? '°C' : '°F'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => fetchWeather(true)}
+                disabled={weatherLoading}
+                className="h-6 w-6 p-0"
+                title={getCacheRemainingMinutes() ? `Cached (${getCacheRemainingMinutes()}min remaining). Click to refresh.` : 'Refresh weather'}
+              >
+                <RefreshCw className={cn("w-3 h-3", weatherLoading && "animate-spin")} />
+              </Button>
+            </div>
           </div>
 
           {coordinates && (
@@ -463,7 +595,7 @@ export function SkyMapSidePanel({
           {weatherError && (
             <div className="text-center py-4">
               <p className="text-sm text-muted-foreground">{weatherError}</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={fetchWeather}>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => fetchWeather(true)}>
                 <RefreshCw className="w-4 h-4 mr-2" />
                 Retry
               </Button>
@@ -518,7 +650,7 @@ export function SkyMapSidePanel({
                   <Thermometer className="w-4 h-4 text-orange-400" />
                   <div>
                     <div className="text-muted-foreground text-xs">Temperature</div>
-                    <div className="font-medium">{Math.round(weather.temperature)}°C</div>
+                    <div className="font-medium">{formatTemp(weather.temperature)}</div>
                   </div>
                 </div>
                 <div>
@@ -526,6 +658,87 @@ export function SkyMapSidePanel({
                   <div className="font-medium">{weather.visibility.toFixed(1)} km</div>
                 </div>
               </div>
+
+              {/* 48-Hour Forecast */}
+              {forecast.length > 0 && (
+                <div className="pt-3 border-t">
+                  <h4 className="text-xs font-medium mb-2 text-muted-foreground">48-Hour Forecast (3-Hour Intervals)</h4>
+
+                  {/* Time labels */}
+                  <div className="overflow-x-auto">
+                    <div className="flex gap-0.5 mb-1.5 min-w-max">
+                      <div className="w-16 flex-shrink-0"></div>
+                      {forecast.map((data, index) => {
+                        const shouldShowLabel = index === 0 || index === forecast.length - 1 || index % 4 === 0;
+                        const timeStr = format(data.time, "d MMM ha");
+                        return (
+                          <div key={index} className="w-4 flex-shrink-0 text-center">
+                            {shouldShowLabel && (
+                              <span className="text-[9px] text-muted-foreground transform -rotate-45 origin-center block h-6">{timeStr}</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Transparency Row */}
+                    <div className="flex gap-0.5 mb-1 min-w-max">
+                      <div className="w-16 flex-shrink-0 text-[10px] text-muted-foreground flex items-center">Transparency</div>
+                      {forecast.map((data, index) => {
+                        const color = data.transparency >= 80 ? 'bg-green-500' :
+                                     data.transparency >= 60 ? 'bg-yellow-500' :
+                                     data.transparency >= 40 ? 'bg-orange-500' : 'bg-red-500';
+                        return (
+                          <div
+                            key={index}
+                            className={`w-4 h-3.5 flex-shrink-0 rounded-sm cursor-pointer ${color}`}
+                            title={`${format(data.time, "MMM d, HH:mm")}\nTransparency: ${data.transparency}%\nCloud: ${data.cloudCover}%\nHumidity: ${data.humidity}%`}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    {/* Seeing Row */}
+                    <div className="flex gap-0.5 mb-1 min-w-max">
+                      <div className="w-16 flex-shrink-0 text-[10px] text-muted-foreground flex items-center">Seeing</div>
+                      {forecast.map((data, index) => {
+                        const color = data.seeing <= 1.5 ? 'bg-green-500' :
+                                     data.seeing <= 2.5 ? 'bg-yellow-500' :
+                                     data.seeing <= 3.5 ? 'bg-orange-500' : 'bg-red-500';
+                        return (
+                          <div
+                            key={index}
+                            className={`w-4 h-3.5 flex-shrink-0 rounded-sm cursor-pointer ${color}`}
+                            title={`${format(data.time, "MMM d, HH:mm")}\nSeeing: ${data.seeing}" arcsec\nWind: ${data.windSpeed.toFixed(1)} m/s`}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    {/* Day/Night Row */}
+                    <div className="flex gap-0.5 min-w-max">
+                      <div className="w-16 flex-shrink-0 text-[10px] text-muted-foreground flex items-center">Day/Night</div>
+                      {forecast.map((data, index) => (
+                        <div
+                          key={index}
+                          className={`w-4 h-3 flex-shrink-0 rounded-sm cursor-pointer flex items-center justify-center ${data.isNight ? 'bg-slate-800 border border-slate-600' : 'bg-yellow-200'}`}
+                          title={`${format(data.time, "MMM d, HH:mm")}\n${data.isNight ? 'Night' : 'Day'}\nTemp: ${formatTemp(data.temperature)}`}
+                        >
+                          <div className={`w-1 h-1 rounded-full ${data.isNight ? 'bg-slate-400' : 'bg-yellow-600'}`}></div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Legend */}
+                  <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 bg-green-500 rounded-sm"></span>Excellent</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 bg-yellow-500 rounded-sm"></span>Good</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 bg-orange-500 rounded-sm"></span>Fair</span>
+                    <span className="flex items-center gap-1"><span className="w-2 h-2 bg-red-500 rounded-sm"></span>Poor</span>
+                  </div>
+                </div>
+              )}
 
               <div className="pt-2 border-t">
                 <div className="flex items-center justify-between text-sm">

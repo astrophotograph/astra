@@ -17,9 +17,17 @@ export interface HorizonDataPoint {
   altitude: number;
 }
 
+export interface ScheduledBlock {
+  name: string;
+  startTime: Date;
+  endTime: Date;
+  isNew?: boolean;  // If true, shows as "new observation" style (blue)
+}
+
 interface AltitudeChartProps {
   data: AltitudeDataPoint[];
   horizonData?: HorizonDataPoint[];  // Local horizon line data
+  scheduledBlocks?: ScheduledBlock[];  // Existing schedule items to show
   width?: number;
   height?: number;
   showCurrentTime?: boolean;
@@ -29,6 +37,7 @@ interface AltitudeChartProps {
 export function AltitudeChart({
   data,
   horizonData,
+  scheduledBlocks = [],
   width = 400,
   height = 200,
   showCurrentTime = true,
@@ -175,6 +184,58 @@ export function AltitudeChart({
       .attr("font-size", "10px")
       .text(`Ideal (${idealThreshold}°)`);
 
+    // Draw scheduled observation blocks
+    if (scheduledBlocks.length > 0) {
+      const [domainStart, domainEnd] = xScale.domain();
+
+      scheduledBlocks.forEach((block) => {
+        // Only draw if the block overlaps with the chart time range
+        if (block.endTime < domainStart || block.startTime > domainEnd) return;
+
+        // Clamp to chart bounds
+        const blockStart = Math.max(block.startTime.getTime(), domainStart.getTime());
+        const blockEnd = Math.min(block.endTime.getTime(), domainEnd.getTime());
+
+        const x = xScale(new Date(blockStart));
+        const blockWidth = xScale(new Date(blockEnd)) - x;
+
+        // Draw the block rectangle with dashed border
+        const blockColor = block.isNew ? "rgba(99, 102, 241, 0.15)" : "rgba(239, 68, 68, 0.12)";
+        const borderColor = block.isNew ? "rgba(99, 102, 241, 0.6)" : "rgba(239, 68, 68, 0.5)";
+
+        g.append("rect")
+          .attr("x", x)
+          .attr("y", 0)
+          .attr("width", blockWidth)
+          .attr("height", innerHeight)
+          .attr("fill", blockColor)
+          .attr("stroke", borderColor)
+          .attr("stroke-width", 1.5)
+          .attr("stroke-dasharray", "4,2");
+
+        // Add label at top of block
+        const labelColor = block.isNew ? "rgb(99, 102, 241)" : "rgb(239, 68, 68)";
+        const labelX = x + blockWidth / 2;
+
+        // Truncate name if too long
+        const maxChars = Math.floor(blockWidth / 6);
+        const displayName = block.name.length > maxChars && maxChars > 3
+          ? block.name.slice(0, maxChars - 2) + "…"
+          : block.name;
+
+        if (blockWidth > 20) {
+          g.append("text")
+            .attr("x", labelX)
+            .attr("y", 12)
+            .attr("text-anchor", "middle")
+            .attr("fill", labelColor)
+            .attr("font-size", "9px")
+            .attr("font-weight", "500")
+            .text(displayName);
+        }
+      });
+    }
+
     // Draw horizon line if provided
     if (horizonData && horizonData.length > 0) {
       // Create horizon line generator
@@ -297,7 +358,7 @@ export function AltitudeChart({
           .text(`${currentAltitude.altitude.toFixed(1)}°`);
       }
     }
-  }, [data, horizonData, width, height, showCurrentTime, idealThreshold]);
+  }, [data, horizonData, scheduledBlocks, width, height, showCurrentTime, idealThreshold]);
 
   if (!data.length) {
     return (

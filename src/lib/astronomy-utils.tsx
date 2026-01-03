@@ -137,6 +137,7 @@ export interface ObserverLocation {
   latitude: number;
   longitude: number;
   horizon?: HorizonProfile;
+  equipmentIds?: string[];  // References to associated equipment sets
   isActive?: boolean;
 }
 
