@@ -5,33 +5,449 @@ interface Coordinates {
   longitude: number;
 }
 
+// ============================================================================
+// Equipment Management
+// ============================================================================
+
+export interface Telescope {
+  name: string;
+  aperture?: number;       // mm
+  focalLength?: number;    // mm
+  type?: string;           // e.g., "Refractor", "Reflector", "SCT", "Cassegrain"
+}
+
+export interface Mount {
+  name: string;
+  type?: string;           // e.g., "EQ", "Alt-Az", "Dobsonian", "Fork"
+}
+
+export interface Camera {
+  name: string;
+  sensorWidth?: number;    // mm
+  sensorHeight?: number;   // mm
+  pixelSize?: number;      // microns
+  resolution?: string;     // e.g., "4656 x 3520"
+}
+
+export interface Filter {
+  name: string;
+  type?: string;           // e.g., "LRGB", "Narrowband", "UV/IR Cut"
+}
+
+export interface GuideScope {
+  name: string;
+  aperture?: number;       // mm
+  focalLength?: number;    // mm
+}
+
+export interface GuideCamera {
+  name: string;
+  pixelSize?: number;      // microns
+}
+
+export interface EquipmentSet {
+  id: string;
+  name: string;
+  telescope?: Telescope;
+  mount?: Mount;
+  camera?: Camera;
+  filters?: Filter[];
+  guideScope?: GuideScope;
+  guideCamera?: GuideCamera;
+}
+
+export interface EquipmentState {
+  equipmentSets: EquipmentSet[];
+}
+
+const EQUIPMENT_STORAGE_KEY = "equipment_sets";
+
+/**
+ * Generate a unique ID for a new equipment set
+ */
+export function generateEquipmentId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Load all equipment sets from localStorage
+ */
+export function loadEquipment(): EquipmentState {
+  const saved = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+  if (!saved) {
+    return { equipmentSets: [] };
+  }
+
+  try {
+    return JSON.parse(saved) as EquipmentState;
+  } catch {
+    return { equipmentSets: [] };
+  }
+}
+
+/**
+ * Save all equipment sets to localStorage
+ */
+export function saveEquipment(state: EquipmentState): void {
+  localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(state));
+}
+
+/**
+ * Add a new equipment set
+ */
+export function addEquipmentSet(equipment: Omit<EquipmentSet, 'id'>): EquipmentSet {
+  const state = loadEquipment();
+  const newEquipment: EquipmentSet = {
+    ...equipment,
+    id: generateEquipmentId(),
+  };
+  state.equipmentSets.push(newEquipment);
+  saveEquipment(state);
+  return newEquipment;
+}
+
+/**
+ * Update an existing equipment set
+ */
+export function updateEquipmentSet(equipmentId: string, updates: Partial<Omit<EquipmentSet, 'id'>>): void {
+  const state = loadEquipment();
+  const index = state.equipmentSets.findIndex(eq => eq.id === equipmentId);
+  if (index !== -1) {
+    state.equipmentSets[index] = { ...state.equipmentSets[index], ...updates };
+    saveEquipment(state);
+  }
+}
+
+/**
+ * Delete an equipment set
+ */
+export function deleteEquipmentSet(equipmentId: string): void {
+  const state = loadEquipment();
+  state.equipmentSets = state.equipmentSets.filter(eq => eq.id !== equipmentId);
+  saveEquipment(state);
+}
+
+// ============================================================================
+// Location Management
+// ============================================================================
+
+export interface ObserverLocation {
+  id: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  horizon?: HorizonProfile;
+  isActive?: boolean;
+}
+
+export interface LocationsState {
+  locations: ObserverLocation[];
+  activeLocationId: string | null;
+}
+
+const LOCATIONS_STORAGE_KEY = "observer_locations";
+
+/**
+ * Generate a unique ID for a new location
+ */
+export function generateLocationId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * Load all locations from localStorage
+ */
+export function loadLocations(): LocationsState {
+  const saved = localStorage.getItem(LOCATIONS_STORAGE_KEY);
+  if (!saved) {
+    // Migrate from old single-location format if it exists
+    const oldLocation = localStorage.getItem("observer_location");
+    const oldHorizon = loadHorizonProfile();
+
+    if (oldLocation) {
+      try {
+        const parsed = JSON.parse(oldLocation);
+        const migratedLocation: ObserverLocation = {
+          id: generateLocationId(),
+          name: parsed.name || "Default Location",
+          latitude: parsed.latitude,
+          longitude: parsed.longitude,
+          horizon: oldHorizon || undefined,
+          isActive: true,
+        };
+        const state: LocationsState = {
+          locations: [migratedLocation],
+          activeLocationId: migratedLocation.id,
+        };
+        saveLocations(state);
+        // Clean up old storage
+        localStorage.removeItem("observer_location");
+        localStorage.removeItem("horizon_profile");
+        return state;
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    return { locations: [], activeLocationId: null };
+  }
+
+  try {
+    return JSON.parse(saved) as LocationsState;
+  } catch {
+    return { locations: [], activeLocationId: null };
+  }
+}
+
+/**
+ * Save all locations to localStorage
+ */
+export function saveLocations(state: LocationsState): void {
+  localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(state));
+}
+
+/**
+ * Get the currently active location
+ */
+export function getActiveLocation(): ObserverLocation | null {
+  const state = loadLocations();
+  if (!state.activeLocationId) return null;
+  return state.locations.find(loc => loc.id === state.activeLocationId) || null;
+}
+
+/**
+ * Set the active location by ID
+ */
+export function setActiveLocation(locationId: string): void {
+  const state = loadLocations();
+  if (state.locations.some(loc => loc.id === locationId)) {
+    state.activeLocationId = locationId;
+    saveLocations(state);
+  }
+}
+
+/**
+ * Add a new location
+ */
+export function addLocation(location: Omit<ObserverLocation, 'id'>): ObserverLocation {
+  const state = loadLocations();
+  const newLocation: ObserverLocation = {
+    ...location,
+    id: generateLocationId(),
+  };
+  state.locations.push(newLocation);
+
+  // If this is the first location, make it active
+  if (state.locations.length === 1) {
+    state.activeLocationId = newLocation.id;
+  }
+
+  saveLocations(state);
+  return newLocation;
+}
+
+/**
+ * Update an existing location
+ */
+export function updateLocation(locationId: string, updates: Partial<Omit<ObserverLocation, 'id'>>): void {
+  const state = loadLocations();
+  const index = state.locations.findIndex(loc => loc.id === locationId);
+  if (index !== -1) {
+    state.locations[index] = { ...state.locations[index], ...updates };
+    saveLocations(state);
+  }
+}
+
+/**
+ * Delete a location
+ */
+export function deleteLocation(locationId: string): void {
+  const state = loadLocations();
+  state.locations = state.locations.filter(loc => loc.id !== locationId);
+
+  // If we deleted the active location, set a new active one
+  if (state.activeLocationId === locationId) {
+    state.activeLocationId = state.locations.length > 0 ? state.locations[0].id : null;
+  }
+
+  saveLocations(state);
+}
+
+/**
+ * Get the horizon profile for the active location
+ */
+export function getActiveHorizonProfile(): HorizonProfile | null {
+  const activeLocation = getActiveLocation();
+  return activeLocation?.horizon || null;
+}
+
 export interface AltitudePoint {
   time: Date;
   altitude: number;
+  azimuth: number;
   isIdeal: boolean;
+}
+
+// Horizon profile types
+export interface HorizonPoint {
+  azimuth: number;  // 0-360 degrees
+  altitude: number; // degrees above mathematical horizon
+}
+
+export interface HorizonProfile {
+  name?: string;
+  points: HorizonPoint[];
+}
+
+/**
+ * Parse a horizon file text into a HorizonProfile
+ * Format: each line contains "azimuth altitude" (space-separated degrees)
+ */
+export function parseHorizonFile(text: string): HorizonProfile {
+  const lines = text.trim().split('\n');
+  const points: HorizonPoint[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue; // Skip empty lines and comments
+
+    const parts = trimmed.split(/\s+/);
+    if (parts.length >= 2) {
+      const azimuth = parseFloat(parts[0]);
+      const altitude = parseFloat(parts[1]);
+
+      if (!isNaN(azimuth) && !isNaN(altitude)) {
+        // Normalize azimuth to 0-360
+        const normalizedAz = ((azimuth % 360) + 360) % 360;
+        points.push({ azimuth: normalizedAz, altitude });
+      }
+    }
+  }
+
+  // Sort by azimuth for interpolation
+  points.sort((a, b) => a.azimuth - b.azimuth);
+
+  return { points };
+}
+
+/**
+ * Get the horizon altitude at a specific azimuth by interpolating between points
+ */
+export function getHorizonAltitude(profile: HorizonProfile, azimuth: number): number {
+  if (profile.points.length === 0) return 0;
+  if (profile.points.length === 1) return profile.points[0].altitude;
+
+  // Normalize azimuth to 0-360
+  const az = ((azimuth % 360) + 360) % 360;
+
+  // Find the two points that bracket this azimuth
+  let lowPoint: HorizonPoint | null = null;
+  let highPoint: HorizonPoint | null = null;
+
+  for (let i = 0; i < profile.points.length; i++) {
+    if (profile.points[i].azimuth <= az) {
+      lowPoint = profile.points[i];
+    }
+    if (profile.points[i].azimuth >= az && !highPoint) {
+      highPoint = profile.points[i];
+    }
+  }
+
+  // Handle wrap-around (e.g., azimuth between last point and first point)
+  if (!lowPoint) {
+    // Azimuth is before the first point, wrap from last point
+    lowPoint = profile.points[profile.points.length - 1];
+  }
+  if (!highPoint) {
+    // Azimuth is after the last point, wrap to first point
+    highPoint = profile.points[0];
+  }
+
+  // If same point or very close azimuths, return the altitude
+  if (lowPoint === highPoint || Math.abs(lowPoint.azimuth - highPoint.azimuth) < 0.01) {
+    return lowPoint.altitude;
+  }
+
+  // Linear interpolation
+  let azRange: number;
+  let azOffset: number;
+
+  if (highPoint.azimuth < lowPoint.azimuth) {
+    // Wrap-around case
+    azRange = (360 - lowPoint.azimuth) + highPoint.azimuth;
+    azOffset = az >= lowPoint.azimuth ? (az - lowPoint.azimuth) : (360 - lowPoint.azimuth + az);
+  } else {
+    azRange = highPoint.azimuth - lowPoint.azimuth;
+    azOffset = az - lowPoint.azimuth;
+  }
+
+  const t = azOffset / azRange;
+  return lowPoint.altitude + t * (highPoint.altitude - lowPoint.altitude);
+}
+
+/**
+ * Check if an object at given altitude/azimuth is above the local horizon
+ */
+export function isAboveLocalHorizon(
+  altitude: number,
+  azimuth: number,
+  horizonProfile: HorizonProfile | null
+): boolean {
+  if (!horizonProfile || horizonProfile.points.length === 0) {
+    // No horizon profile, use default 0° horizon
+    return altitude > 0;
+  }
+  const horizonAlt = getHorizonAltitude(horizonProfile, azimuth);
+  return altitude > horizonAlt;
+}
+
+/**
+ * Load horizon profile from localStorage
+ */
+export function loadHorizonProfile(): HorizonProfile | null {
+  const saved = localStorage.getItem("horizon_profile");
+  if (!saved) return null;
+  try {
+    return JSON.parse(saved) as HorizonProfile;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save horizon profile to localStorage
+ */
+export function saveHorizonProfile(profile: HorizonProfile | null): void {
+  if (profile) {
+    localStorage.setItem("horizon_profile", JSON.stringify(profile));
+  } else {
+    localStorage.removeItem("horizon_profile");
+  }
 }
 
 // Convert RA (HH:MM:SS) and Dec (DD:MM:SS) to decimal degrees
 export function parseCoordinates(ra: string, dec: string): { raDeg: number; decDeg: number } | null {
   try {
-    // Parse RA (right ascension)
-    const raMatch = ra.match(/(\d+)h\s*(\d+)m\s*(\d+)s/);
+    // Parse RA (right ascension) - handles both integer and decimal seconds
+    // Matches formats like "05h 35m 17s" or "05h 35m 17.30s"
+    const raMatch = ra.match(/(\d+)h\s*(\d+)m\s*([\d.]+)s/);
     if (!raMatch) return null;
 
     const raHours = parseInt(raMatch[1]);
     const raMinutes = parseInt(raMatch[2]);
-    const raSeconds = parseInt(raMatch[3]);
+    const raSeconds = parseFloat(raMatch[3]);
 
     const raDeg = (raHours + raMinutes/60 + raSeconds/3600) * 15; // 15 degrees per hour
 
-    // Parse Dec (declination)
-    const decMatch = dec.match(/([+-])(\d+)°\s*(\d+)'\s*(\d+)"/);
+    // Parse Dec (declination) - handles both integer and decimal arcseconds
+    // Matches formats like "+22° 00' 52"" or "+22° 00' 52.10""
+    const decMatch = dec.match(/([+-])(\d+)°\s*(\d+)'\s*([\d.]+)"/);
     if (!decMatch) return null;
 
     const decSign = decMatch[1] === "-" ? -1 : 1;
     const decDegrees = parseInt(decMatch[2]);
     const decMinutes = parseInt(decMatch[3]);
-    const decSeconds = parseInt(decMatch[4]);
+    const decSeconds = parseFloat(decMatch[4]);
 
     const decDeg = decSign * (decDegrees + decMinutes/60 + decSeconds/3600);
 
@@ -87,6 +503,49 @@ export function calculateAltitudeAtTime(
   return altDeg;
 }
 
+// Calculate azimuth at a specific time
+export function calculateAzimuthAtTime(
+  raDeg: number,
+  decDeg: number,
+  coordinates: Coordinates,
+  time: Date
+): number {
+  // Convert RA and Dec to radians
+  const raRad = raDeg * Math.PI / 180;
+  const decRad = decDeg * Math.PI / 180;
+
+  // Get the observer's location in radians
+  const latRad = coordinates.latitude * Math.PI / 180;
+
+  // Calculate Local Sidereal Time (LST)
+  const jd = time.getTime() / 86400000 + 2440587.5; // Julian date
+  const jdRef = Math.floor(jd - 0.5) + 0.5;
+  const T = (jdRef - 2451545.0) / 36525;
+  const theta0 = 280.46061837 + 360.98564736629 * (jd - 2451545.0) + 0.000387933 * T * T - T * T * T / 38710000;
+
+  // Adjust for observer's longitude
+  const lst = (theta0 + coordinates.longitude) % 360;
+  const lstRad = lst * Math.PI / 180;
+
+  // Calculate hour angle
+  const ha = lstRad - raRad;
+
+  // Calculate azimuth
+  const sinHa = Math.sin(ha);
+  const cosHa = Math.cos(ha);
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const tanDec = Math.tan(decRad);
+
+  let azimuth = Math.atan2(sinHa, cosHa * sinLat - tanDec * cosLat);
+
+  // Convert to degrees and normalize to 0-360
+  azimuth = azimuth * 180 / Math.PI;
+  azimuth = (azimuth + 180) % 360;
+
+  return azimuth;
+}
+
 // Generate altitude data for an entire night
 export function generateNightAltitudeData(
   raDeg: number,
@@ -116,9 +575,11 @@ export function generateNightAltitudeData(
 
   while (current <= sunrise) {
     const altitude = calculateAltitudeAtTime(raDeg, decDeg, coordinates, current);
+    const azimuth = calculateAzimuthAtTime(raDeg, decDeg, coordinates, current);
     dataPoints.push({
       time: new Date(current),
       altitude,
+      azimuth,
       isIdeal: altitude > 20 // Ideal if altitude > 20 degrees
     });
     current.setMinutes(current.getMinutes() + interval);
@@ -330,6 +791,45 @@ export function getSiderealTime(utcHours: number, dayOfYear: number, longitude: 
   if (lst < 0) lst += 24;
 
   return lst;
+}
+
+/**
+ * Calculate the angular distance between two celestial objects given their Alt/Az coordinates
+ * Uses the spherical law of cosines
+ * @returns Angular distance in degrees
+ */
+export function calculateAngularDistance(
+  alt1: number,
+  az1: number,
+  alt2: number,
+  az2: number
+): number {
+  const alt1Rad = toRadians(alt1);
+  const alt2Rad = toRadians(alt2);
+  const azDiffRad = toRadians(az2 - az1);
+
+  const cosD = Math.sin(alt1Rad) * Math.sin(alt2Rad) +
+               Math.cos(alt1Rad) * Math.cos(alt2Rad) * Math.cos(azDiffRad);
+
+  // Clamp to valid range for acos due to floating point errors
+  const clampedCosD = Math.max(-1, Math.min(1, cosD));
+  const dRad = Math.acos(clampedCosD);
+
+  return toDegrees(dRad);
+}
+
+/**
+ * Get the current position of the moon (altitude and azimuth)
+ * @returns Moon position in degrees
+ */
+export function getMoonPosition(coordinates: Coordinates): { altitude: number; azimuth: number } {
+  const now = new Date();
+  const moonPos = SunCalc.getMoonPosition(now, coordinates.latitude, coordinates.longitude);
+
+  return {
+    altitude: toDegrees(moonPos.altitude),
+    azimuth: toDegrees(moonPos.azimuth) + 180 // SunCalc azimuth is measured from south, convert to north-based
+  };
 }
 
 export type CelestialObjectType = "galaxy" | "nebula" | "cluster" | "planet" | "moon" | "double-star"

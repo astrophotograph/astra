@@ -28,10 +28,10 @@ export default function Home() {
       gradient: "from-teal-500 to-green-600",
     },
     {
-      title: "Admin",
+      title: "Settings",
       description:
-        "Manage system backups, restore database, and configure administrative settings for your observatory.",
-      href: "/admin",
+        "Configure observer locations, manage backups, and customize your observatory settings.",
+      href: "/settings",
       icon: Settings,
       gradient: "from-orange-500 to-red-500",
     },

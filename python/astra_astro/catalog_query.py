@@ -65,6 +65,51 @@ def _safe_float(val, default=None) -> Optional[float]:
         return default
 
 
+def _parse_sexagesimal_ra(ra_str: str) -> Optional[float]:
+    """Parse RA in sexagesimal format (HH MM.m or HH MM SS) to decimal degrees."""
+    if ra_str is None:
+        return None
+    try:
+        ra_str = str(ra_str).strip()
+        parts = ra_str.split()
+        if len(parts) >= 2:
+            hours = float(parts[0])
+            minutes = float(parts[1])
+            seconds = float(parts[2]) if len(parts) > 2 else 0.0
+            # Convert to decimal degrees: hours * 15 + minutes * 15/60 + seconds * 15/3600
+            return hours * 15 + minutes * 0.25 + seconds * (15/3600)
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_sexagesimal_dec(dec_str: str) -> Optional[float]:
+    """Parse Dec in sexagesimal format (+DD MM or +DD MM SS) to decimal degrees."""
+    if dec_str is None:
+        return None
+    try:
+        dec_str = str(dec_str).strip()
+        # Handle sign
+        sign = 1
+        if dec_str.startswith('-'):
+            sign = -1
+            dec_str = dec_str[1:]
+        elif dec_str.startswith('+'):
+            dec_str = dec_str[1:]
+
+        parts = dec_str.split()
+        if len(parts) >= 2:
+            degrees = float(parts[0])
+            arcmin = float(parts[1])
+            arcsec = float(parts[2]) if len(parts) > 2 else 0.0
+            return sign * (degrees + arcmin/60 + arcsec/3600)
+        elif len(parts) == 1:
+            return sign * float(parts[0])
+        return None
+    except (ValueError, TypeError):
+        return None
+
+
 def _format_size(size_arcmin: Optional[float]) -> Optional[str]:
     """Format size in arcminutes to a readable string."""
     if size_arcmin is None:
@@ -121,17 +166,38 @@ def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list
                     catalog = "NGC"
                     display_name = f"NGC {name}" if not name.startswith("NGC") else name
 
-                # Get coordinates
+                # Get coordinates - try decimal first, then sexagesimal
                 ra = None
                 dec = None
-                for ra_col in ["RAJ2000", "_RAJ2000", "RA_ICRS", "RAB1950"]:
+
+                # Try decimal degree columns first
+                for ra_col in ["RAJ2000", "_RAJ2000", "RA_ICRS"]:
                     if ra_col in col_names:
                         ra = _safe_float(row[ra_col])
-                        break
-                for dec_col in ["DEJ2000", "_DEJ2000", "DE_ICRS", "DEB1950"]:
+                        if ra is not None:
+                            break
+
+                # Try sexagesimal format (RAB2000 is in "HH MM.m" format)
+                if ra is None:
+                    for ra_col in ["RAB2000", "RA"]:
+                        if ra_col in col_names:
+                            ra = _parse_sexagesimal_ra(str(row[ra_col]))
+                            if ra is not None:
+                                break
+
+                for dec_col in ["DEJ2000", "_DEJ2000", "DE_ICRS"]:
                     if dec_col in col_names:
                         dec = _safe_float(row[dec_col])
-                        break
+                        if dec is not None:
+                            break
+
+                # Try sexagesimal format (DEB2000 is in "+DD MM" format)
+                if dec is None:
+                    for dec_col in ["DEB2000", "DE"]:
+                        if dec_col in col_names:
+                            dec = _parse_sexagesimal_dec(str(row[dec_col]))
+                            if dec is not None:
+                                break
 
                 if ra is None or dec is None:
                     continue
@@ -325,19 +391,37 @@ def query_ldn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
 
                 display_name = f"LDN {ldn_num}"
 
-                # Get coordinates
+                # Get coordinates - try decimal first, then sexagesimal
                 ra = None
                 dec = None
-                for ra_col in ["_RAJ2000", "RAJ2000", "RA_ICRS", "GLON"]:
+
+                # Try decimal columns first
+                for ra_col in ["_RAJ2000", "RAJ2000", "RA_ICRS"]:
                     if ra_col in col_names:
                         ra = _safe_float(row[ra_col])
                         if ra is not None:
                             break
-                for dec_col in ["_DEJ2000", "DEJ2000", "DE_ICRS", "GLAT"]:
+
+                # Try sexagesimal format
+                if ra is None:
+                    for ra_col in ["_RA.icrs", "RA1950"]:
+                        if ra_col in col_names:
+                            ra = _parse_sexagesimal_ra(str(row[ra_col]))
+                            if ra is not None:
+                                break
+
+                for dec_col in ["_DEJ2000", "DEJ2000", "DE_ICRS"]:
                     if dec_col in col_names:
                         dec = _safe_float(row[dec_col])
                         if dec is not None:
                             break
+
+                if dec is None:
+                    for dec_col in ["_DE.icrs", "DE1950"]:
+                        if dec_col in col_names:
+                            dec = _parse_sexagesimal_dec(str(row[dec_col]))
+                            if dec is not None:
+                                break
 
                 if ra is None or dec is None:
                     continue
@@ -391,21 +475,44 @@ def query_lbn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                 if lbn_num is None:
                     continue
 
-                display_name = f"LBN {lbn_num}"
+                # Get the Seq number for unique identification
+                seq_num = None
+                if "Seq" in col_names:
+                    seq_num = _safe_float(row["Seq"])
 
-                # Get coordinates
+                display_name = f"LBN {lbn_num}" if lbn_num else f"LBN {int(seq_num)}" if seq_num else None
+                if not display_name:
+                    continue
+
+                # Get coordinates - try decimal first, then sexagesimal
                 ra = None
                 dec = None
+
                 for ra_col in ["_RAJ2000", "RAJ2000", "RA_ICRS"]:
                     if ra_col in col_names:
                         ra = _safe_float(row[ra_col])
                         if ra is not None:
                             break
+
+                if ra is None:
+                    for ra_col in ["_RA.icrs", "RA1950"]:
+                        if ra_col in col_names:
+                            ra = _parse_sexagesimal_ra(str(row[ra_col]))
+                            if ra is not None:
+                                break
+
                 for dec_col in ["_DEJ2000", "DEJ2000", "DE_ICRS"]:
                     if dec_col in col_names:
                         dec = _safe_float(row[dec_col])
                         if dec is not None:
                             break
+
+                if dec is None:
+                    for dec_col in ["_DE.icrs", "DE1950"]:
+                        if dec_col in col_names:
+                            dec = _parse_sexagesimal_dec(str(row[dec_col]))
+                            if dec is not None:
+                                break
 
                 if ra is None or dec is None:
                     continue
@@ -738,6 +845,37 @@ def query_bright_stars(center_ra: float, center_dec: float, radius_deg: float,
     return objects
 
 
+def _is_in_fov(obj_ra: float, obj_dec: float, center_ra: float, center_dec: float,
+               width_deg: float, height_deg: float) -> bool:
+    """Check if an object is within the rectangular field of view."""
+    # Calculate RA difference
+    ra_diff = obj_ra - center_ra
+
+    # Handle RA wrap-around at 0/360
+    if ra_diff > 180:
+        ra_diff -= 360
+    elif ra_diff < -180:
+        ra_diff += 360
+
+    # RA offset in degrees (not corrected for cos(dec) since width_deg is in sky degrees)
+    # The width_deg from plate solving is actual sky width, and catalog RA differences
+    # at this declination need the same cos(dec) factor applied
+    cos_dec = math.cos(math.radians(center_dec))
+    ra_offset_sky = abs(ra_diff) * cos_dec
+    dec_offset = abs(obj_dec - center_dec)
+
+    # Check if within rectangular bounds
+    # Use generous margin (50%) to account for coordinate precision differences
+    # and objects that may be partially in the FOV
+    margin = 0.5
+    half_width = width_deg / 2 * (1 + margin)
+    half_height = height_deg / 2 * (1 + margin)
+
+    in_fov = ra_offset_sky <= half_width and dec_offset <= half_height
+
+    return in_fov
+
+
 def query_objects_in_fov(
     center_ra: float,
     center_dec: float,
@@ -823,6 +961,12 @@ def query_objects_in_fov(
         if not is_duplicate:
             unique_objects.append(obj)
 
+    # Filter to only objects actually within the rectangular FOV
+    fov_objects = [
+        obj for obj in unique_objects
+        if _is_in_fov(obj.ra, obj.dec, center_ra, center_dec, width_deg, height_deg)
+    ]
+
     # Sort by magnitude (brightest first), then by catalog priority
     def sort_key(obj):
         mag = obj.magnitude if obj.magnitude is not None else 99
@@ -831,6 +975,6 @@ def query_objects_in_fov(
                    "PGC": 8, "Bright Stars": 9}
         return (priority.get(obj.catalog, 99), mag)
 
-    unique_objects.sort(key=sort_key)
+    fov_objects.sort(key=sort_key)
 
-    return [obj.to_dict() for obj in unique_objects]
+    return [obj.to_dict() for obj in fov_objects]

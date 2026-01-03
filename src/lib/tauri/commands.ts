@@ -631,3 +631,47 @@ export const plateSolveApi = {
       starMagLimit,
     }),
 };
+
+// =============================================================================
+// Skymap Types
+// =============================================================================
+
+export interface SkymapInput {
+  /** Center Right Ascension in degrees */
+  centerRa: number;
+  /** Center Declination in degrees */
+  centerDec: number;
+  /** Field of view width in degrees for the map */
+  fovWidth?: number;
+  /** Field of view height in degrees for the map */
+  fovHeight?: number;
+  /** Image FOV width in degrees (for rectangle overlay) */
+  imageWidth?: number;
+  /** Image FOV height in degrees (for rectangle overlay) */
+  imageHeight?: number;
+}
+
+export interface SkymapResponse {
+  success: boolean;
+  /** Base64-encoded PNG image */
+  image?: string;
+  error?: string;
+}
+
+// =============================================================================
+// Skymap Commands
+// =============================================================================
+
+export const skymapApi = {
+  /**
+   * Generate a skymap showing the location of an image on the sky
+   */
+  generate: (input: SkymapInput) =>
+    invoke<SkymapResponse>("generate_skymap", { input }),
+
+  /**
+   * Generate a wide-field skymap showing position on the entire sky
+   */
+  generateWide: (centerRa: number, centerDec: number) =>
+    invoke<SkymapResponse>("generate_wide_skymap", { centerRa, centerDec }),
+};

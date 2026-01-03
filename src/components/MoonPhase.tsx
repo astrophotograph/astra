@@ -1,5 +1,7 @@
 /**
- * Moon Phase Component - Displays current moon phase with visual representation
+ * Moon Phase Component - Displays moon phase with visual representation
+ *
+ * Uses the moon image and drawPlanetPhase algorithm from the legacy app
  */
 
 import { useMemo } from "react";
@@ -8,6 +10,7 @@ import { format } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Moon as MoonIcon } from "lucide-react";
+import { MoonImage } from "@/components/MoonImage";
 
 interface MoonPhaseProps {
   date?: Date;
@@ -50,15 +53,19 @@ export function MoonPhase({
       phase: getPhaseName(moonIllumination.phase),
       phaseValue: moonIllumination.phase,
       illumination: illuminationPercent,
+      fraction: moonIllumination.fraction,
       age: moonIllumination.phase * 29.53, // Synodic month
       rise: moonTimes.rise ? format(moonTimes.rise, "HH:mm") : "N/A",
       set: moonTimes.set ? format(moonTimes.set, "HH:mm") : "N/A",
       altitude: (moonPosition.altitude * 180) / Math.PI, // Convert to degrees
       isVisible: moonPosition.altitude > 0,
-      isWaxing: moonIllumination.phase < 0.5,
+      isWaxing: moonIllumination.phase <= 0.5,
       pollutionLevel,
     };
   }, [date, latitude, longitude]);
+
+  // Format the date for display
+  const dateDisplay = format(date, "eee MMM dd yyyy");
 
   return (
     <Card>
@@ -69,11 +76,12 @@ export function MoonPhase({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Moon visualization */}
+        {/* Moon visualization using legacy algorithm */}
         <div className="flex justify-center">
-          <MoonVisualization
-            illumination={moonData.illumination / 100}
-            isWaxing={moonData.isWaxing}
+          <MoonImage
+            illumination={moonData.fraction}
+            waxing={moonData.isWaxing}
+            diameter={100}
           />
         </div>
 
@@ -82,6 +90,9 @@ export function MoonPhase({
           <div className="text-lg font-medium">{moonData.phase}</div>
           <div className="text-sm text-muted-foreground">
             {moonData.illumination.toFixed(0)}% illuminated
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Phase on {dateDisplay}
           </div>
         </div>
 
@@ -128,115 +139,6 @@ export function MoonPhase({
 }
 
 /**
- * Visual representation of the moon phase using CSS
- */
-function MoonVisualization({
-  illumination,
-  isWaxing,
-  size = 80,
-}: {
-  illumination: number;
-  isWaxing: boolean;
-  size?: number;
-}) {
-  // Calculate the shadow position based on illumination and phase
-  // illumination: 0 = new moon, 1 = full moon
-  // isWaxing: true = growing (shadow on left), false = shrinking (shadow on right)
-
-  const getShadowStyle = () => {
-    if (illumination < 0.01) {
-      // New moon - completely dark
-      return {
-        background: "#1a1a2e",
-      };
-    }
-
-    if (illumination > 0.99) {
-      // Full moon - completely lit
-      return {
-        background: "radial-gradient(circle at 30% 30%, #f5f5f0, #c9c9c0)",
-      };
-    }
-
-    // Calculate the terminator position
-    // We use an ellipse overlay to create the shadow effect
-    const shadowColor = "#1a1a2e";
-    const lightColor = "#e8e8e0";
-
-    if (illumination < 0.5) {
-      // Less than half lit
-      const coverPercent = (0.5 - illumination) * 2 * 100;
-      if (isWaxing) {
-        // Waxing crescent - light on right
-        return {
-          background: `linear-gradient(90deg, ${shadowColor} ${coverPercent}%, ${lightColor} ${coverPercent}%)`,
-        };
-      } else {
-        // Waning crescent - light on left
-        return {
-          background: `linear-gradient(90deg, ${lightColor} ${100 - coverPercent}%, ${shadowColor} ${100 - coverPercent}%)`,
-        };
-      }
-    } else {
-      // More than half lit
-      const coverPercent = (illumination - 0.5) * 2 * 100;
-      if (isWaxing) {
-        // Waxing gibbous - shadow on left
-        return {
-          background: `linear-gradient(90deg, ${shadowColor} ${100 - coverPercent}%, ${lightColor} ${100 - coverPercent}%)`,
-        };
-      } else {
-        // Waning gibbous - shadow on right
-        return {
-          background: `linear-gradient(90deg, ${lightColor} ${coverPercent}%, ${shadowColor} ${coverPercent}%)`,
-        };
-      }
-    }
-  };
-
-  return (
-    <div
-      className="relative rounded-full overflow-hidden"
-      style={{
-        width: size,
-        height: size,
-        boxShadow: "inset 0 0 20px rgba(0,0,0,0.3), 0 0 10px rgba(255,255,255,0.1)",
-      }}
-    >
-      {/* Base moon surface */}
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          background: "radial-gradient(circle at 35% 35%, #f5f5f0 0%, #d4d4cc 50%, #a8a8a0 100%)",
-        }}
-      />
-
-      {/* Shadow overlay */}
-      <div
-        className="absolute inset-0 rounded-full"
-        style={{
-          ...getShadowStyle(),
-          mixBlendMode: "multiply",
-        }}
-      />
-
-      {/* Crater details (subtle) */}
-      <div
-        className="absolute inset-0 rounded-full opacity-20"
-        style={{
-          background: `
-            radial-gradient(circle at 25% 30%, rgba(0,0,0,0.3) 0%, transparent 8%),
-            radial-gradient(circle at 60% 40%, rgba(0,0,0,0.2) 0%, transparent 12%),
-            radial-gradient(circle at 45% 65%, rgba(0,0,0,0.25) 0%, transparent 10%),
-            radial-gradient(circle at 70% 25%, rgba(0,0,0,0.15) 0%, transparent 6%)
-          `,
-        }}
-      />
-    </div>
-  );
-}
-
-/**
  * Compact moon phase indicator for use in lists or headers
  */
 export function MoonPhaseIndicator({
@@ -250,15 +152,16 @@ export function MoonPhaseIndicator({
     const moonIllumination = SunCalc.getMoonIllumination(date);
     return {
       illumination: moonIllumination.fraction,
-      isWaxing: moonIllumination.phase < 0.5,
+      isWaxing: moonIllumination.phase <= 0.5,
     };
   }, [date]);
 
   return (
-    <MoonVisualization
+    <MoonImage
       illumination={moonData.illumination}
-      isWaxing={moonData.isWaxing}
-      size={size}
+      waxing={moonData.isWaxing}
+      diameter={size}
+      showImage={size >= 50} // Only show texture for larger sizes
     />
   );
 }

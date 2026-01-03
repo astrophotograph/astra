@@ -12,8 +12,14 @@ export interface AltitudeDataPoint {
   isIdeal?: boolean;
 }
 
+export interface HorizonDataPoint {
+  time: Date;
+  altitude: number;
+}
+
 interface AltitudeChartProps {
   data: AltitudeDataPoint[];
+  horizonData?: HorizonDataPoint[];  // Local horizon line data
   width?: number;
   height?: number;
   showCurrentTime?: boolean;
@@ -22,6 +28,7 @@ interface AltitudeChartProps {
 
 export function AltitudeChart({
   data,
+  horizonData,
   width = 400,
   height = 200,
   showCurrentTime = true,
@@ -168,6 +175,48 @@ export function AltitudeChart({
       .attr("font-size", "10px")
       .text(`Ideal (${idealThreshold}°)`);
 
+    // Draw horizon line if provided
+    if (horizonData && horizonData.length > 0) {
+      // Create horizon line generator
+      const horizonLine = d3
+        .line<HorizonDataPoint>()
+        .x((d) => xScale(d.time))
+        .y((d) => yScale(d.altitude))
+        .curve(d3.curveMonotoneX);
+
+      // Draw filled area under horizon (obstructed region)
+      const horizonArea = d3
+        .area<HorizonDataPoint>()
+        .x((d) => xScale(d.time))
+        .y0(innerHeight)
+        .y1((d) => yScale(d.altitude))
+        .curve(d3.curveMonotoneX);
+
+      g.append("path")
+        .datum(horizonData)
+        .attr("fill", "rgba(239, 68, 68, 0.1)")
+        .attr("d", horizonArea);
+
+      // Draw horizon line
+      g.append("path")
+        .datum(horizonData)
+        .attr("fill", "none")
+        .attr("stroke", "rgba(239, 68, 68, 0.6)")
+        .attr("stroke-width", 2)
+        .attr("stroke-dasharray", "6,3")
+        .attr("d", horizonLine);
+
+      // Add horizon label
+      const lastHorizonPoint = horizonData[horizonData.length - 1];
+      g.append("text")
+        .attr("x", innerWidth - 5)
+        .attr("y", yScale(lastHorizonPoint.altitude) - 5)
+        .attr("text-anchor", "end")
+        .attr("fill", "rgba(239, 68, 68, 0.8)")
+        .attr("font-size", "10px")
+        .text("Horizon");
+    }
+
     // Create gradient for the area under the curve
     const gradient = svg
       .append("defs")
@@ -248,7 +297,7 @@ export function AltitudeChart({
           .text(`${currentAltitude.altitude.toFixed(1)}°`);
       }
     }
-  }, [data, width, height, showCurrentTime, idealThreshold]);
+  }, [data, horizonData, width, height, showCurrentTime, idealThreshold]);
 
   if (!data.length) {
     return (

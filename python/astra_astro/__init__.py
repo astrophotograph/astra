@@ -20,6 +20,10 @@ from astra_astro.catalog_query import (
     query_objects_in_fov,
     CatalogObject,
 )
+from astra_astro.skymap import (
+    generate_skymap,
+    generate_wide_skymap,
+)
 
 __all__ = [
     # SIMBAD
@@ -37,6 +41,9 @@ __all__ = [
     # Catalog queries
     "query_objects_in_fov",
     "CatalogObject",
+    # Skymap
+    "generate_skymap",
+    "generate_wide_skymap",
 ]
 
 __version__ = "0.1.0"

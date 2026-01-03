@@ -2,12 +2,13 @@
 name = "astra-astro"
 version = "0.1.0"
 description = "Astronomy utilities for Astra observation log"
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "astropy>=7.0",
     "astroquery>=0.4",
     "skyfield>=1.52",
     "numpy>=1.26",
+    "starplot",
 ]
 
 [project.optional-dependencies]

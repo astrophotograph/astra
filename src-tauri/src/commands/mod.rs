@@ -7,6 +7,7 @@ pub mod images;
 pub mod plate_solve;
 pub mod scan;
 pub mod schedules;
+pub mod skymap;
 pub mod todos;
 
 // Re-export all commands
@@ -17,4 +18,5 @@ pub use images::*;
 pub use plate_solve::*;
 pub use scan::*;
 pub use schedules::*;
+pub use skymap::*;
 pub use todos::*;

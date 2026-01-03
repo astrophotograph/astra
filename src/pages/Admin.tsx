@@ -1,5 +1,5 @@
 /**
- * Admin/Settings Page
+ * Settings Page - Location management, backups, and app configuration
  */
 
 import { useState, useEffect } from "react";
@@ -35,9 +35,21 @@ import {
   RefreshCw,
   HardDrive,
   Compass,
+  Mountain,
+  FileUp,
+  Plus,
+  Check,
+  Edit2,
 } from "lucide-react";
 import { appApi, backupApi, type BackupInfo } from "@/lib/tauri/commands";
+import {
+  parseHorizonFile,
+  type HorizonProfile,
+  type ObserverLocation,
+} from "@/lib/astronomy-utils";
+import { useLocations } from "@/contexts/LocationContext";
 import { MoonPhase } from "@/components/MoonPhase";
+import { getCurrentPosition } from "@tauri-apps/plugin-geolocation";
 
 interface AppInfo {
   name: string;
@@ -47,14 +59,32 @@ interface AppInfo {
 
 export default function AdminPage() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
-  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [locationName, setLocationName] = useState("");
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [isLoadingBackups, setIsLoadingBackups] = useState(false);
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<BackupInfo | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+
+  // Location management
+  const {
+    locations,
+    activeLocation,
+    setActiveLocationId,
+    addLocation,
+    updateLocation,
+    deleteLocation,
+  } = useLocations();
+
+  // New/Edit location dialog
+  const [locationDialogOpen, setLocationDialogOpen] = useState(false);
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [locationForm, setLocationForm] = useState({
+    name: "",
+    latitude: "",
+    longitude: "",
+    horizonText: "",
+  });
 
   // Plate solving settings
   const [plateSolveSolver, setPlateSolveSolver] = useState(() =>
@@ -68,18 +98,6 @@ export default function AdminPage() {
   useEffect(() => {
     appApi.getInfo().then(setAppInfo).catch(console.error);
     loadBackups();
-
-    // Try to load saved location from localStorage
-    const saved = localStorage.getItem("observer_location");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setLocation(parsed);
-        setLocationName(parsed.name || "");
-      } catch {
-        // Ignore parse errors
-      }
-    }
   }, []);
 
   // Load backups list
@@ -151,41 +169,128 @@ export default function AdminPage() {
     }
   };
 
-  // Get current location
-  const getCurrentLocation = () => {
-    if (!navigator.geolocation) {
-      toast.error("Geolocation is not supported");
+  // Open dialog to add new location
+  const openAddLocationDialog = () => {
+    setEditingLocationId(null);
+    setLocationForm({
+      name: "",
+      latitude: "",
+      longitude: "",
+      horizonText: "",
+    });
+    setLocationDialogOpen(true);
+  };
+
+  // Open dialog to edit existing location
+  const openEditLocationDialog = (location: ObserverLocation) => {
+    setEditingLocationId(location.id);
+    setLocationForm({
+      name: location.name,
+      latitude: location.latitude.toString(),
+      longitude: location.longitude.toString(),
+      horizonText: location.horizon?.points
+        .map((p) => `${p.azimuth} ${p.altitude}`)
+        .join("\n") || "",
+    });
+    setLocationDialogOpen(true);
+  };
+
+  // Get current location using Tauri geolocation plugin
+  const autoDetectLocation = async () => {
+    try {
+      const position = await getCurrentPosition();
+      setLocationForm((prev) => ({
+        ...prev,
+        latitude: position.coords.latitude.toString(),
+        longitude: position.coords.longitude.toString(),
+      }));
+      toast.success("Location detected");
+    } catch (error) {
+      console.error("Geolocation error:", error);
+      toast.error(`Location error: ${String(error)}`);
+    }
+  };
+
+  // Handle horizon file upload in dialog
+  const handleHorizonFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      setLocationForm((prev) => ({ ...prev, horizonText: text }));
+      const profile = parseHorizonFile(text);
+      toast.success(`Loaded ${profile.points.length} horizon points`);
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  // Save location (add or update)
+  const handleSaveLocation = () => {
+    const lat = parseFloat(locationForm.latitude);
+    const lng = parseFloat(locationForm.longitude);
+
+    if (!locationForm.name.trim()) {
+      toast.error("Please enter a location name");
+      return;
+    }
+    if (isNaN(lat) || lat < -90 || lat > 90) {
+      toast.error("Please enter a valid latitude (-90 to 90)");
+      return;
+    }
+    if (isNaN(lng) || lng < -180 || lng > 180) {
+      toast.error("Please enter a valid longitude (-180 to 180)");
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const loc = {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        };
-        setLocation(loc);
-        localStorage.setItem(
-          "observer_location",
-          JSON.stringify({ ...loc, name: locationName })
-        );
-        toast.success("Location updated");
-      },
-      (error) => {
-        toast.error(`Location error: ${error.message}`);
-      }
-    );
+    const horizon: HorizonProfile | undefined = locationForm.horizonText.trim()
+      ? parseHorizonFile(locationForm.horizonText)
+      : undefined;
+
+    if (editingLocationId) {
+      updateLocation(editingLocationId, {
+        name: locationForm.name,
+        latitude: lat,
+        longitude: lng,
+        horizon,
+      });
+      toast.success("Location updated");
+    } else {
+      addLocation({
+        name: locationForm.name,
+        latitude: lat,
+        longitude: lng,
+        horizon,
+      });
+      toast.success("Location added");
+    }
+
+    setLocationDialogOpen(false);
   };
 
-  // Save location name
-  const saveLocationName = () => {
-    if (location) {
-      localStorage.setItem(
-        "observer_location",
-        JSON.stringify({ ...location, name: locationName })
-      );
-      toast.success("Location name saved");
+  // Delete location with confirmation
+  const handleDeleteLocation = (id: string) => {
+    if (locations.length === 1) {
+      toast.error("Cannot delete the only location");
+      return;
     }
+    deleteLocation(id);
+    toast.success("Location deleted");
+  };
+
+  // Get horizon stats for a location
+  const getHorizonStats = (horizon?: HorizonProfile) => {
+    if (!horizon?.points.length) return null;
+    return {
+      count: horizon.points.length,
+      minAlt: Math.min(...horizon.points.map((p) => p.altitude)),
+      maxAlt: Math.max(...horizon.points.map((p) => p.altitude)),
+      avgAlt:
+        horizon.points.reduce((sum, p) => sum + p.altitude, 0) /
+        horizon.points.length,
+    };
   };
 
   // Save plate solve solver preference
@@ -224,6 +329,110 @@ export default function AdminPage() {
         <h1 className="text-2xl font-bold">Settings</h1>
       </div>
 
+      {/* Observer Locations - Full width */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <MapPin className="w-5 h-5" />
+                Observer Locations
+              </CardTitle>
+              <CardDescription>
+                Manage your observing locations with custom horizons
+              </CardDescription>
+            </div>
+            <Button onClick={openAddLocationDialog}>
+              <Plus className="w-4 h-4 mr-2" />
+              Add Location
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {locations.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <MapPin className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>No locations configured. Add your first observing location to get started.</p>
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {locations.map((loc) => {
+                const horizonStats = getHorizonStats(loc.horizon);
+                const isActive = loc.id === activeLocation?.id;
+                return (
+                  <div
+                    key={loc.id}
+                    className={`p-4 border rounded-lg ${isActive ? "border-primary bg-primary/5" : "border-border"}`}
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div>
+                        <h3 className="font-medium flex items-center gap-2">
+                          {loc.name}
+                          {isActive && (
+                            <Badge variant="default" className="text-xs">Active</Badge>
+                          )}
+                        </h3>
+                        <p className="text-xs text-muted-foreground font-mono">
+                          {loc.latitude.toFixed(4)}°, {loc.longitude.toFixed(4)}°
+                        </p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => openEditLocationDialog(loc)}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
+                        {!isActive && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-8 p-0"
+                            onClick={() => handleDeleteLocation(loc.id)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Horizon info */}
+                    <div className="mb-3">
+                      {horizonStats ? (
+                        <div className="text-xs text-muted-foreground flex items-center gap-2">
+                          <Mountain className="w-3 h-3" />
+                          <span>{horizonStats.count} points, avg {horizonStats.avgAlt.toFixed(1)}°</span>
+                        </div>
+                      ) : (
+                        <div className="text-xs text-muted-foreground flex items-center gap-2">
+                          <Mountain className="w-3 h-3 opacity-50" />
+                          <span>No horizon profile</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Set active button */}
+                    {!isActive && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={() => setActiveLocationId(loc.id)}
+                      >
+                        <Check className="w-4 h-4 mr-2" />
+                        Set Active
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         {/* App Info */}
         <Card>
@@ -254,54 +463,6 @@ export default function AdminPage() {
             ) : (
               <p className="text-muted-foreground">Loading...</p>
             )}
-          </CardContent>
-        </Card>
-
-        {/* Observer Location */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MapPin className="w-5 h-5" />
-              Observer Location
-            </CardTitle>
-            <CardDescription>
-              Set your observing location for accurate altitude calculations
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label>Location Name</Label>
-              <div className="flex gap-2 mt-1">
-                <Input
-                  value={locationName}
-                  onChange={(e) => setLocationName(e.target.value)}
-                  placeholder="e.g., Backyard Observatory"
-                />
-                <Button variant="outline" onClick={saveLocationName} disabled={!location}>
-                  Save
-                </Button>
-              </div>
-            </div>
-
-            {location ? (
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-muted-foreground">Latitude</Label>
-                  <p className="font-mono">{location.latitude.toFixed(4)}°</p>
-                </div>
-                <div>
-                  <Label className="text-muted-foreground">Longitude</Label>
-                  <p className="font-mono">{location.longitude.toFixed(4)}°</p>
-                </div>
-              </div>
-            ) : (
-              <p className="text-muted-foreground text-sm">No location set</p>
-            )}
-
-            <Button onClick={getCurrentLocation} className="w-full">
-              <MapPin className="w-4 h-4 mr-2" />
-              Get Current Location
-            </Button>
           </CardContent>
         </Card>
 
@@ -369,8 +530,8 @@ export default function AdminPage() {
 
         {/* Moon Phase */}
         <MoonPhase
-          latitude={location?.latitude}
-          longitude={location?.longitude}
+          latitude={activeLocation?.latitude}
+          longitude={activeLocation?.longitude}
         />
 
         {/* Database Info */}
@@ -468,6 +629,108 @@ export default function AdminPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Add/Edit Location Dialog */}
+      <Dialog open={locationDialogOpen} onOpenChange={setLocationDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {editingLocationId ? "Edit Location" : "Add Location"}
+            </DialogTitle>
+            <DialogDescription>
+              Configure your observing location with optional horizon profile
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div>
+              <Label htmlFor="loc-name">Location Name</Label>
+              <Input
+                id="loc-name"
+                value={locationForm.name}
+                onChange={(e) => setLocationForm((prev) => ({ ...prev, name: e.target.value }))}
+                placeholder="e.g., Backyard Observatory"
+                className="mt-1"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="loc-lat">Latitude</Label>
+                <Input
+                  id="loc-lat"
+                  type="number"
+                  step="0.0001"
+                  min="-90"
+                  max="90"
+                  value={locationForm.latitude}
+                  onChange={(e) => setLocationForm((prev) => ({ ...prev, latitude: e.target.value }))}
+                  placeholder="e.g., 40.7128"
+                  className="mt-1 font-mono"
+                />
+              </div>
+              <div>
+                <Label htmlFor="loc-lng">Longitude</Label>
+                <Input
+                  id="loc-lng"
+                  type="number"
+                  step="0.0001"
+                  min="-180"
+                  max="180"
+                  value={locationForm.longitude}
+                  onChange={(e) => setLocationForm((prev) => ({ ...prev, longitude: e.target.value }))}
+                  placeholder="e.g., -74.0060"
+                  className="mt-1 font-mono"
+                />
+              </div>
+            </div>
+
+            <Button variant="outline" onClick={autoDetectLocation} className="w-full">
+              <MapPin className="w-4 h-4 mr-2" />
+              Auto-detect Location
+            </Button>
+
+            <div className="pt-2 border-t">
+              <div className="flex items-center justify-between mb-2">
+                <Label className="flex items-center gap-2">
+                  <Mountain className="w-4 h-4" />
+                  Horizon Profile
+                </Label>
+                <label>
+                  <input
+                    type="file"
+                    accept=".txt,.csv"
+                    onChange={handleHorizonFileUpload}
+                    className="hidden"
+                  />
+                  <Button variant="ghost" size="sm" asChild>
+                    <span>
+                      <FileUp className="w-4 h-4 mr-1" />
+                      Upload
+                    </span>
+                  </Button>
+                </label>
+              </div>
+              <textarea
+                value={locationForm.horizonText}
+                onChange={(e) => setLocationForm((prev) => ({ ...prev, horizonText: e.target.value }))}
+                placeholder="azimuth altitude (one per line)&#10;0 5&#10;45 10&#10;90 3&#10;..."
+                className="w-full h-24 p-2 text-sm font-mono bg-background border rounded-md resize-none"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Format: each line contains "azimuth altitude" in degrees (0-360, elevation above horizon)
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLocationDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveLocation}>
+              {editingLocationId ? "Save Changes" : "Add Location"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Restore Confirmation Dialog */}
       <Dialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>

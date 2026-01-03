@@ -29,7 +29,8 @@ import {
   Telescope,
   Trash2,
 } from "lucide-react";
-import { AladinLite } from "@/components/AladinLite";
+import { AladinLite, type TargetInfo } from "@/components/AladinLite";
+import { SkyMapSidePanel } from "@/components/SkyMapSidePanel";
 import {
   useSchedules,
   useActiveSchedule,
@@ -56,6 +57,10 @@ export default function PlanPage() {
   const [addItemDialogOpen, setAddItemDialogOpen] = useState(false);
   const [newItemStartTime, setNewItemStartTime] = useState("");
   const [newItemDuration, setNewItemDuration] = useState(30);
+
+  // Sky map target/FOV state for altitude chart
+  const [skyMapTarget, setSkyMapTarget] = useState<TargetInfo | null>(null);
+  const [skyMapFov, setSkyMapFov] = useState<{ enabled: boolean; ra?: number; dec?: number }>({ enabled: false });
 
   // Queries and mutations
   const { data: schedules = [] } = useSchedules();
@@ -483,8 +488,23 @@ export default function PlanPage() {
         </TabsContent>
 
         {/* Sky Map Tab */}
-        <TabsContent value="skymap" className="h-[calc(100vh-16rem)]">
-          <AladinLite height={0} className="h-full" initialTarget="M31" />
+        <TabsContent value="skymap" className="min-h-[calc(100vh-16rem)]">
+          <div className="flex min-h-[calc(100vh-16rem)] gap-0">
+            <div className="flex-1 min-w-0">
+              <AladinLite
+                height={500}
+                className="min-h-full"
+                initialTarget="M31"
+                onTargetChange={setSkyMapTarget}
+                onFovChange={setSkyMapFov}
+              />
+            </div>
+            <SkyMapSidePanel
+              defaultCollapsed={false}
+              target={skyMapTarget}
+              fovState={skyMapFov}
+            />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

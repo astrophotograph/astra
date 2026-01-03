@@ -39,6 +39,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_geolocation::init())
         .setup(|app| {
             // Initialize database
             let db_path = db::get_database_path(app.handle());
@@ -127,6 +128,9 @@ pub fn run() {
             // Plate solving commands
             commands::plate_solve_image,
             commands::query_sky_region,
+            // Skymap commands
+            commands::generate_skymap,
+            commands::generate_wide_skymap,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

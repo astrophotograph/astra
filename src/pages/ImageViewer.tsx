@@ -2,11 +2,11 @@
  * Image Viewer Page - View and manage individual images
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { marked } from "marked";
-import { imageApi, plateSolveApi, type CatalogObject } from "@/lib/tauri/commands";
+import { imageApi, plateSolveApi, skymapApi, type CatalogObject } from "@/lib/tauri/commands";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,16 +27,43 @@ import {
   ChevronDown,
   Compass,
   Edit,
+  Eye,
+  EyeOff,
   ImageIcon,
   Loader2,
+  Map,
   MapPin,
+  RefreshCw,
   Save,
   Sparkles,
   Star,
   Tag,
   Trash2,
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { useImage, useUpdateImage, useDeleteImage } from "@/hooks/use-images";
+
+// Convert decimal degrees RA to HMS (hours, minutes, seconds) string
+function raToHMS(raDeg: number): string {
+  // RA: 360 degrees = 24 hours
+  const totalHours = raDeg / 15;
+  const hours = Math.floor(totalHours);
+  const minutesDecimal = (totalHours - hours) * 60;
+  const minutes = Math.floor(minutesDecimal);
+  const seconds = (minutesDecimal - minutes) * 60;
+  return `${hours}h ${minutes}m ${seconds.toFixed(1)}s`;
+}
+
+// Convert decimal degrees Dec to DMS (degrees, arcminutes, arcseconds) string
+function decToDMS(decDeg: number): string {
+  const sign = decDeg >= 0 ? "+" : "-";
+  const absDec = Math.abs(decDeg);
+  const degrees = Math.floor(absDec);
+  const arcminutesDecimal = (absDec - degrees) * 60;
+  const arcminutes = Math.floor(arcminutesDecimal);
+  const arcseconds = (arcminutesDecimal - arcminutes) * 60;
+  return `${sign}${degrees}° ${arcminutes}′ ${arcseconds.toFixed(1)}″`;
+}
 
 export default function ImageViewerPage() {
   const { id } = useParams<{ id: string }>();
@@ -56,8 +83,14 @@ export default function ImageViewerPage() {
   });
   const [catalogObjects, setCatalogObjects] = useState<CatalogObject[]>([]);
   const [objectsExpanded, setObjectsExpanded] = useState(false);
+  const [showObjectOverlay, setShowObjectOverlay] = useState(false);
+  const [imageContainerSize, setImageContainerSize] = useState({ width: 0, height: 0 });
+  const imageContainerRef = useRef<HTMLDivElement>(null);
+  const [skymapImage, setSkymapImage] = useState<string | null>(null);
+  const [isLoadingSkymap, setIsLoadingSkymap] = useState(false);
+  const [skymapExpanded, setSkymapExpanded] = useState(false);
 
-  const { data: image, isLoading, error } = useImage(id || "");
+  const { data: image, isLoading, error, refetch } = useImage(id || "");
   const updateImage = useUpdateImage();
   const deleteImage = useDeleteImage();
 
@@ -113,6 +146,106 @@ export default function ImageViewerPage() {
     }
   }, [image?.metadata]);
 
+  // Track image container size for overlay calculations
+  useEffect(() => {
+    const updateSize = () => {
+      if (imageContainerRef.current) {
+        const img = imageContainerRef.current.querySelector("img");
+        if (img) {
+          setImageContainerSize({ width: img.clientWidth, height: img.clientHeight });
+        }
+      }
+    };
+
+    // Update size when image loads
+    updateSize();
+    window.addEventListener("resize", updateSize);
+
+    // Also observe the image for size changes
+    const observer = new ResizeObserver(updateSize);
+    if (imageContainerRef.current) {
+      observer.observe(imageContainerRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateSize);
+      observer.disconnect();
+    };
+  }, [imageDataUrl]);
+
+  // Calculate pixel position for a celestial object based on plate solve WCS
+  const calculateObjectPosition = useCallback(
+    (objRa: number, objDec: number) => {
+      if (!plateSolveInfo || !imageContainerSize.width || !imageContainerSize.height) {
+        return null;
+      }
+
+      const { center_ra, center_dec, width_deg, height_deg, rotation } = plateSolveInfo;
+
+      // Calculate angular offset from center (in degrees)
+      // Note: RA increases to the left in standard orientation
+      let deltaRa = center_ra - objRa;
+      const deltaDec = objDec - center_dec;
+
+      // Handle RA wrap-around at 0/360
+      if (deltaRa > 180) deltaRa -= 360;
+      if (deltaRa < -180) deltaRa += 360;
+
+      // Correct for cos(dec) factor in RA (RA is compressed at higher declinations)
+      const cosDec = Math.cos((center_dec * Math.PI) / 180);
+      const correctedDeltaRa = deltaRa * cosDec;
+
+      // Apply rotation if present (convert to radians)
+      const rotRad = ((rotation || 0) * Math.PI) / 180;
+      const rotatedDeltaX = correctedDeltaRa * Math.cos(rotRad) - deltaDec * Math.sin(rotRad);
+      const rotatedDeltaY = correctedDeltaRa * Math.sin(rotRad) + deltaDec * Math.cos(rotRad);
+
+      // Convert to fractional position (0.5 = center)
+      const fracX = 0.5 + rotatedDeltaX / width_deg;
+      const fracY = 0.5 - rotatedDeltaY / height_deg;
+
+      // Check if within image bounds (with some margin)
+      if (fracX < -0.1 || fracX > 1.1 || fracY < -0.1 || fracY > 1.1) {
+        return null;
+      }
+
+      // Convert to pixel coordinates
+      return {
+        x: fracX * imageContainerSize.width,
+        y: fracY * imageContainerSize.height,
+      };
+    },
+    [plateSolveInfo, imageContainerSize]
+  );
+
+  // Load skymap when plate solve info is available and expanded
+  const loadSkymap = useCallback(async () => {
+    if (!plateSolveInfo || isLoadingSkymap) return;
+
+    setIsLoadingSkymap(true);
+    try {
+      // Generate a skymap centered on the image
+      // Let Python auto-calculate FOV based on image dimensions (~2.5x)
+      const result = await skymapApi.generate({
+        centerRa: plateSolveInfo.center_ra,
+        centerDec: plateSolveInfo.center_dec,
+        imageWidth: plateSolveInfo.width_deg,
+        imageHeight: plateSolveInfo.height_deg,
+      });
+
+      if (result.success && result.image) {
+        setSkymapImage(result.image);
+      } else {
+        toast.error(result.error || "Failed to generate skymap");
+      }
+    } catch (err) {
+      toast.error("Failed to generate skymap: " + (err as Error).message);
+      console.error(err);
+    } finally {
+      setIsLoadingSkymap(false);
+    }
+  }, [plateSolveInfo, isLoadingSkymap]);
+
   // Handle plate solve
   const handlePlateSolve = async () => {
     if (!image) return;
@@ -141,7 +274,9 @@ export default function ImageViewerPage() {
         toast.success(`Plate solved in ${result.solveTime.toFixed(1)}s - found ${result.objects.length} objects`);
         setCatalogObjects(result.objects);
         // Refresh the image data to get updated metadata
-        updateImage.mutate({ id: image.id });
+        await refetch();
+        // Clear any cached skymap so it regenerates with new data
+        setSkymapImage(null);
       } else {
         toast.error(result.errorMessage || "Plate solve failed");
       }
@@ -304,18 +439,115 @@ export default function ImageViewerPage() {
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Image Display */}
-        <div className="lg:col-span-2">
-          <div className="rounded-lg overflow-hidden bg-muted">
+        <div className="lg:col-span-2 space-y-2">
+          {/* Overlay toggle - only show if plate solved */}
+          {plateSolveInfo && catalogObjects.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Switch
+                id="object-overlay"
+                checked={showObjectOverlay}
+                onCheckedChange={setShowObjectOverlay}
+              />
+              <Label htmlFor="object-overlay" className="flex items-center gap-2 cursor-pointer">
+                {showObjectOverlay ? (
+                  <Eye className="w-4 h-4" />
+                ) : (
+                  <EyeOff className="w-4 h-4" />
+                )}
+                Show object markers
+              </Label>
+            </div>
+          )}
+
+          <div ref={imageContainerRef} className="rounded-lg overflow-hidden bg-muted relative">
             {isLoadingImage ? (
               <div className="aspect-video flex items-center justify-center">
                 <p className="text-muted-foreground">Loading image...</p>
               </div>
             ) : imageDataUrl ? (
-              <img
-                src={imageDataUrl}
-                alt={image.filename}
-                className="w-full h-auto"
-              />
+              <>
+                <img
+                  src={imageDataUrl}
+                  alt={image.filename}
+                  className="w-full h-auto"
+                  onLoad={() => {
+                    // Trigger size update when image loads
+                    if (imageContainerRef.current) {
+                      const img = imageContainerRef.current.querySelector("img");
+                      if (img) {
+                        setImageContainerSize({ width: img.clientWidth, height: img.clientHeight });
+                      }
+                    }
+                  }}
+                />
+                {/* Object overlay */}
+                {showObjectOverlay && plateSolveInfo && imageContainerSize.width > 0 && (
+                  <svg
+                    className="absolute top-0 left-0 pointer-events-none"
+                    width={imageContainerSize.width}
+                    height={imageContainerSize.height}
+                    viewBox={`0 0 ${imageContainerSize.width} ${imageContainerSize.height}`}
+                  >
+                    {catalogObjects.map((obj, idx) => {
+                      const pos = calculateObjectPosition(obj.ra, obj.dec);
+                      if (!pos) return null;
+
+                      // Calculate circle radius based on object size if available
+                      let radius = 40; // Default radius
+                      if (obj.sizeArcmin && plateSolveInfo.width_deg && imageContainerSize.width > 0) {
+                        // Convert object size from arcmin to pixels
+                        const pixelsPerDegree = imageContainerSize.width / plateSolveInfo.width_deg;
+                        const pixelsPerArcmin = pixelsPerDegree / 60;
+                        // Use full object size as diameter, so radius is half
+                        radius = Math.max(20, Math.min(imageContainerSize.width / 2, (obj.sizeArcmin * pixelsPerArcmin) / 2));
+                      }
+
+                      return (
+                        <g key={`${obj.name}-${idx}`}>
+                          {/* Circle marker */}
+                          <circle
+                            cx={pos.x}
+                            cy={pos.y}
+                            r={radius}
+                            fill="none"
+                            stroke="#6366f1"
+                            strokeWidth="1.5"
+                            opacity="0.85"
+                          />
+                          {/* Small dots at cardinal points on circle */}
+                          {[0, 90, 180, 270].map((angle) => {
+                            const rad = (angle * Math.PI) / 180;
+                            return (
+                              <circle
+                                key={angle}
+                                cx={pos.x + radius * Math.cos(rad)}
+                                cy={pos.y + radius * Math.sin(rad)}
+                                r={2}
+                                fill="#6366f1"
+                                opacity="0.85"
+                              />
+                            );
+                          })}
+                          {/* Object name label - positioned below the circle */}
+                          <text
+                            x={pos.x}
+                            y={pos.y + radius + 16}
+                            textAnchor="middle"
+                            fill="#6366f1"
+                            fontSize="14"
+                            fontWeight="500"
+                            style={{
+                              textShadow: "0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.9)",
+                            }}
+                          >
+                            {obj.commonName || obj.name}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                )}
+              </>
             ) : (
               <div className="aspect-video flex items-center justify-center">
                 <ImageIcon className="w-24 h-24 text-muted-foreground/30" />
@@ -461,15 +693,25 @@ export default function ImageViewerPage() {
                         <Sparkles className="w-4 h-4 text-teal-500" />
                         <Label className="text-teal-500">Plate Solve Results</Label>
                       </div>
-                      <div className="space-y-2 text-sm">
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <span className="text-muted-foreground">RA:</span>
-                            <span className="ml-2">{plateSolveInfo.center_ra?.toFixed(4)}°</span>
+                      <div className="space-y-3 text-sm">
+                        {/* RA in HMS and decimal */}
+                        <div>
+                          <span className="text-muted-foreground">RA:</span>
+                          <div className="ml-4">
+                            <div className="font-mono">{raToHMS(plateSolveInfo.center_ra)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              ({plateSolveInfo.center_ra?.toFixed(4)}°)
+                            </div>
                           </div>
-                          <div>
-                            <span className="text-muted-foreground">Dec:</span>
-                            <span className="ml-2">{plateSolveInfo.center_dec?.toFixed(4)}°</span>
+                        </div>
+                        {/* Dec in DMS and decimal */}
+                        <div>
+                          <span className="text-muted-foreground">Dec:</span>
+                          <div className="ml-4">
+                            <div className="font-mono">{decToDMS(plateSolveInfo.center_dec)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              ({plateSolveInfo.center_dec?.toFixed(4)}°)
+                            </div>
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
@@ -528,6 +770,76 @@ export default function ImageViewerPage() {
                               )}
                             </div>
                           ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Sky Map */}
+                  {plateSolveInfo && (
+                    <div className="pt-4 border-t">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
+                        onClick={() => {
+                          setSkymapExpanded(!skymapExpanded);
+                          if (!skymapExpanded && !skymapImage && !isLoadingSkymap) {
+                            loadSkymap();
+                          }
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Map className="w-4 h-4 text-muted-foreground" />
+                          <Label className="text-muted-foreground cursor-pointer">
+                            Sky Map
+                          </Label>
+                        </div>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${skymapExpanded ? "rotate-180" : ""}`} />
+                      </Button>
+                      {skymapExpanded && (
+                        <div className="mt-2">
+                          {isLoadingSkymap ? (
+                            <div className="flex items-center justify-center py-8">
+                              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                              <span className="ml-2 text-sm text-muted-foreground">Generating skymap...</span>
+                            </div>
+                          ) : skymapImage ? (
+                            <div className="rounded-lg overflow-hidden border border-border">
+                              <img
+                                src={skymapImage}
+                                alt="Sky map showing image location"
+                                className="w-full h-auto"
+                              />
+                              <div className="p-2 bg-muted/30 text-xs text-muted-foreground flex items-center justify-between">
+                                <span>Teal marker shows image center • Rectangle shows FOV</span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => {
+                                    setSkymapImage(null);
+                                    loadSkymap();
+                                  }}
+                                  className="h-6 px-2"
+                                >
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Regenerate
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2 py-4">
+                              <p className="text-sm text-muted-foreground">Click to generate sky map</p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={loadSkymap}
+                                disabled={isLoadingSkymap}
+                              >
+                                <Map className="w-4 h-4 mr-2" />
+                                Generate
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>

@@ -2,13 +2,16 @@
  * Collection Detail Page - View and manage a collection
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
+import SunCalc from "suncalc";
+import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { MoonImage } from "@/components/MoonImage";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -33,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Compass,
   FolderOpen,
   ImageIcon,
   Plus,
@@ -43,6 +47,20 @@ import { useCollection, useUpdateCollection, useDeleteCollection } from "@/hooks
 import { useCollectionImages, useImages, imageKeys } from "@/hooks/use-images";
 import { imageApi, type Image } from "@/lib/tauri/commands";
 import { useQueryClient } from "@tanstack/react-query";
+
+// Get session date from collection metadata
+function getSessionDate(collection: { metadata?: string | null }): Date | null {
+  if (!collection.metadata) return null;
+  try {
+    const meta = JSON.parse(collection.metadata);
+    if (meta.session_date) {
+      return new Date(meta.session_date);
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null;
+}
 
 export default function CollectionDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -63,6 +81,22 @@ export default function CollectionDetailPage() {
   const updateCollection = useUpdateCollection();
   const deleteCollection = useDeleteCollection();
   const [isAddingImages, setIsAddingImages] = useState(false);
+
+  // Calculate moon phase for the session date
+  const moonData = useMemo(() => {
+    if (!collection) return null;
+    const sessionDate = getSessionDate(collection);
+    if (!sessionDate) return null;
+
+    const moonIllumination = SunCalc.getMoonIllumination(sessionDate);
+    return {
+      date: sessionDate,
+      dateFormatted: format(sessionDate, "eee MMM dd yyyy"),
+      fraction: moonIllumination.fraction,
+      illuminationPercent: Math.round(moonIllumination.fraction * 100),
+      isWaxing: moonIllumination.phase <= 0.5,
+    };
+  }, [collection]);
 
   // Debug logging
   console.log("CollectionDetail debug:", {
@@ -243,10 +277,34 @@ export default function CollectionDetailPage() {
         </div>
       </div>
 
-      {/* Description */}
-      {collection.description && (
-        <p className="text-gray-300 mb-8">{collection.description}</p>
-      )}
+      {/* Main content area with moon phase on right */}
+      <div className="flex gap-6 mb-8">
+        {/* Left side - Description */}
+        <div className="flex-1">
+          {collection.description && (
+            <p className="text-gray-300">{collection.description}</p>
+          )}
+        </div>
+
+        {/* Right side - Moon Phase Widget */}
+        {moonData && (
+          <div className="flex-shrink-0">
+            <div className="bg-black rounded-lg p-4 flex flex-col items-center border border-slate-700">
+              <MoonImage
+                illumination={moonData.fraction}
+                waxing={moonData.isWaxing}
+                diameter={100}
+              />
+              <div className="text-white mt-3">
+                Phase: {moonData.illuminationPercent}%
+              </div>
+              <div className="text-sm text-gray-400 mt-1">
+                Phase of moon on {moonData.dateFormatted}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Edit Dialog */}
       <Dialog open={isEditing} onOpenChange={setIsEditing}>
@@ -331,21 +389,12 @@ export default function CollectionDetailPage() {
 
       {/* Images Grid */}
       {collectionImages.length === 0 ? (
-        <div className="flex justify-end">
-          {/* Moon Phase Widget Placeholder */}
-          <div className="bg-slate-800 rounded-lg p-6 w-72">
-            <div className="flex flex-col items-center">
-              <div className="w-24 h-24 rounded-full bg-gray-700 mb-4 flex items-center justify-center">
-                <span className="text-4xl text-gray-500">
-                  <ImageIcon className="w-12 h-12" />
-                </span>
-              </div>
-              <p className="text-white text-center">No images yet</p>
-              <p className="text-gray-400 text-sm text-center mt-1">
-                Add images to this collection
-              </p>
-            </div>
-          </div>
+        <div className="text-center py-12 bg-slate-800 rounded-lg">
+          <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-500" />
+          <p className="text-white">No images yet</p>
+          <p className="text-gray-400 text-sm mt-1">
+            Add images to this collection
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
@@ -461,11 +510,24 @@ export default function CollectionDetailPage() {
   );
 }
 
+// Check if an image has been plate-solved
+function isPlateSolved(image: Image): boolean {
+  if (!image.metadata) return false;
+  try {
+    const metadata = JSON.parse(image.metadata);
+    return !!metadata.plate_solve;
+  } catch {
+    return false;
+  }
+}
+
 function ImageCard({ image, onRemove }: { image: Image; onRemove: () => void }) {
+  const plateSolved = isPlateSolved(image);
+
   return (
     <div className="group relative rounded-lg overflow-hidden bg-slate-800 border border-slate-700">
       <Link to={`/i/${image.id}`}>
-        <div className="aspect-video bg-slate-700">
+        <div className="aspect-video bg-slate-700 relative">
           {image.thumbnail ? (
             <img
               src={image.thumbnail}
@@ -475,6 +537,15 @@ function ImageCard({ image, onRemove }: { image: Image; onRemove: () => void }) 
           ) : (
             <div className="w-full h-full flex items-center justify-center">
               <ImageIcon className="w-10 h-10 text-gray-500" />
+            </div>
+          )}
+          {/* Plate-solved indicator */}
+          {plateSolved && (
+            <div
+              className="absolute bottom-2 left-2 w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
+              title="Plate solved"
+            >
+              <Compass className="w-3.5 h-3.5 text-white" />
             </div>
           )}
         </div>
