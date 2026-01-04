@@ -36,20 +36,30 @@ import {
   ChevronUp,
   Clock,
   Edit,
+  Eye,
   Filter,
   Flag,
+  Loader2,
   Moon,
   Plus,
+  Tag,
   Trash2,
   LineChart,
+  X,
 } from "lucide-react";
+import { format } from "date-fns";
 import {
   useTodos,
   useCreateTodo,
   useUpdateTodo,
   useDeleteTodo,
 } from "@/hooks/use-todos";
-import { astronomyApi } from "@/lib/tauri/commands";
+import {
+  useActiveSchedule,
+  useAddScheduleItem,
+  useCreateSchedule,
+} from "@/hooks/use-schedules";
+import { astronomyApi, type ScheduleItem } from "@/lib/tauri/commands";
 import type { AstronomyTodo } from "@/lib/tauri/commands";
 import { getObjectTypeInfo } from "@/lib/objectTypeMap";
 import {
@@ -94,6 +104,8 @@ export default function TodoPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   const [editingTodo, setEditingTodo] = useState<AstronomyTodo | null>(null);
+  const [editTags, setEditTags] = useState<string[]>([]);
+  const [editTagInput, setEditTagInput] = useState("");
   const [goalTodo, setGoalTodo] = useState<AstronomyTodo | null>(null);
   const [goalTimeValue, setGoalTimeValue] = useState("");
   const [altitudeDialogOpen, setAltitudeDialogOpen] = useState(false);
@@ -105,7 +117,15 @@ export default function TodoPage() {
   // Form state for adding new todo
   const [objectName, setObjectName] = useState("");
   const [notes, setNotes] = useState("");
+  const [newTags, setNewTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const [isLookupLoading, setIsLookupLoading] = useState(false);
+
+  // Tag filters
+  const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
+
+  // Visibility filter
+  const [hideNotVisible, setHideNotVisible] = useState(false);
 
   // Computed altitude data cache
   const [computedDataMap, setComputedDataMap] = useState<Map<string, ComputedData>>(new Map());
@@ -142,6 +162,11 @@ export default function TodoPage() {
   const updateTodo = useUpdateTodo();
   const deleteTodo = useDeleteTodo();
 
+  // Schedule hooks
+  const { data: activeSchedule } = useActiveSchedule();
+  const addScheduleItem = useAddScheduleItem();
+  const createSchedule = useCreateSchedule();
+
   // Get unique object types for filter
   const uniqueTypes = useMemo(() => {
     const types = new Set<string>();
@@ -151,6 +176,26 @@ export default function TodoPage() {
       }
     });
     return Array.from(types).sort();
+  }, [todos]);
+
+  // Helper to parse tags from JSON string
+  const parseTags = (tagsJson: string | null): string[] => {
+    if (!tagsJson) return [];
+    try {
+      return JSON.parse(tagsJson);
+    } catch {
+      return [];
+    }
+  };
+
+  // Get unique tags across all todos
+  const uniqueTags = useMemo(() => {
+    const tags = new Set<string>();
+    todos.forEach((todo) => {
+      const todoTags = parseTags(todo.tags);
+      todoTags.forEach((tag) => tags.add(tag));
+    });
+    return Array.from(tags).sort();
   }, [todos]);
 
   // Compute altitude and direction for all todos
@@ -253,7 +298,7 @@ export default function TodoPage() {
     return () => clearInterval(interval);
   }, [todos, observerLocation, horizonProfile]);
 
-  // Filter todos based on active tab and type filters
+  // Filter todos based on active tab, type filters, and tag filters
   const filteredTodos = useMemo(() => {
     let filtered = todos.filter((todo) => {
       if (activeTab === "all") return true;
@@ -270,8 +315,24 @@ export default function TodoPage() {
       );
     }
 
+    // Apply tag filters
+    if (tagFilters.size > 0) {
+      filtered = filtered.filter((todo) => {
+        const todoTags = parseTags(todo.tags);
+        return Array.from(tagFilters).some((tag) => todoTags.includes(tag));
+      });
+    }
+
+    // Apply visibility filter
+    if (hideNotVisible) {
+      filtered = filtered.filter((todo) => {
+        const computedData = computedDataMap.get(todo.id);
+        return computedData ? !computedData.neverVisible : true;
+      });
+    }
+
     return filtered;
-  }, [todos, activeTab, typeFilters]);
+  }, [todos, activeTab, typeFilters, tagFilters, hideNotVisible, computedDataMap]);
 
   // Sort filtered todos
   const sortedTodos = useMemo(() => {
@@ -447,12 +508,15 @@ export default function TodoPage() {
         size: result.size || "N/A",
         object_type: result.objectType || undefined,
         notes: notes.trim() || undefined,
+        tags: newTags.length > 0 ? newTags : undefined,
       });
 
       toast.success(`Added ${displayName} to your todo list`);
       setDialogOpen(false);
       setObjectName("");
       setNotes("");
+      setNewTags([]);
+      setTagInput("");
     } catch (err) {
       toast.error("Failed to look up object. Please check the name and try again.");
       console.error(err);
@@ -511,7 +575,24 @@ export default function TodoPage() {
 
   const handleEditTodo = (todo: AstronomyTodo) => {
     setEditingTodo(todo);
+    setEditTags(parseTags(todo.tags));
+    setEditTagInput("");
     setEditDialogOpen(true);
+  };
+
+  const handleAddEditTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && editTagInput.trim()) {
+      e.preventDefault();
+      const tag = editTagInput.trim().toLowerCase();
+      if (!editTags.includes(tag)) {
+        setEditTags([...editTags, tag]);
+      }
+      setEditTagInput("");
+    }
+  };
+
+  const handleRemoveEditTag = (tag: string) => {
+    setEditTags(editTags.filter((t) => t !== tag));
   };
 
   const handleSaveEdit = async () => {
@@ -522,10 +603,13 @@ export default function TodoPage() {
         id: editingTodo.id,
         name: editingTodo.name,
         notes: editingTodo.notes || undefined,
+        tags: editTags.length > 0 ? editTags : undefined,
       });
       toast.success(`Updated ${editingTodo.name}`);
       setEditDialogOpen(false);
       setEditingTodo(null);
+      setEditTags([]);
+      setEditTagInput("");
     } catch (err) {
       toast.error("Failed to update todo");
       console.error(err);
@@ -557,6 +641,110 @@ export default function TodoPage() {
     }
   };
 
+  // Handler for adding to schedule from the altitude dialog
+  const handleAddToScheduleFromAltitude = async (startTime: string, duration: number) => {
+    if (!altitudeTodo) return;
+
+    // Convert HH:mm to full datetime-local format for today
+    const now = new Date();
+    const [hours, minutes] = startTime.split(":").map(Number);
+    const startDate = new Date(now);
+    startDate.setHours(hours, minutes, 0, 0);
+    // If time has passed, assume tomorrow
+    if (startDate < now) {
+      startDate.setDate(startDate.getDate() + 1);
+    }
+    const fullStartTime = format(startDate, "yyyy-MM-dd'T'HH:mm");
+
+    if (!activeSchedule) {
+      // Create a new schedule first
+      try {
+        const newSchedule = await createSchedule.mutateAsync({
+          name: "Tonight's Observations",
+          description: `Created from todo list`,
+          is_active: true,
+        });
+
+        const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+        const endTime = format(endDate, "yyyy-MM-dd'T'HH:mm");
+
+        const newItem: ScheduleItem = {
+          id: crypto.randomUUID(),
+          todo_id: altitudeTodo.id,
+          object_name: altitudeTodo.name,
+          start_time: fullStartTime,
+          end_time: endTime,
+          priority: 1,
+          notes: `${altitudeTodo.object_type || ""} - Mag: ${altitudeTodo.magnitude}`,
+          completed: false,
+        };
+
+        await addScheduleItem.mutateAsync({
+          scheduleId: newSchedule.id,
+          item: newItem,
+        });
+
+        toast.success(`Created schedule and added ${altitudeTodo.name}`);
+      } catch (err) {
+        toast.error("Failed to create schedule");
+        console.error(err);
+      }
+    } else {
+      // Add to existing active schedule
+      try {
+        const endDate = new Date(startDate.getTime() + duration * 60 * 1000);
+        const endTime = format(endDate, "yyyy-MM-dd'T'HH:mm");
+
+        const newItem: ScheduleItem = {
+          id: crypto.randomUUID(),
+          todo_id: altitudeTodo.id,
+          object_name: altitudeTodo.name,
+          start_time: fullStartTime,
+          end_time: endTime,
+          priority: 1,
+          notes: `${altitudeTodo.object_type || ""} - Mag: ${altitudeTodo.magnitude}`,
+          completed: false,
+        };
+
+        await addScheduleItem.mutateAsync({
+          scheduleId: activeSchedule.id,
+          item: newItem,
+        });
+
+        toast.success(`Added ${altitudeTodo.name} to ${activeSchedule.name}`);
+      } catch (err) {
+        toast.error("Failed to add to schedule");
+        console.error(err);
+      }
+    }
+  };
+
+  // Check if current altitude todo is already scheduled
+  const isAltitudeTodoScheduled = useMemo(() => {
+    if (!altitudeTodo || !activeSchedule) return false;
+    try {
+      const items: ScheduleItem[] = JSON.parse(activeSchedule.items || "[]");
+      return items.some(item => item.object_name === altitudeTodo.name);
+    } catch {
+      return false;
+    }
+  }, [altitudeTodo, activeSchedule]);
+
+  // Get schedule items for altitude chart display
+  const scheduleItemsForChart = useMemo(() => {
+    if (!activeSchedule) return [];
+    try {
+      const items: ScheduleItem[] = JSON.parse(activeSchedule.items || "[]");
+      return items.map(item => ({
+        object_name: item.object_name,
+        start_time: item.start_time,
+        end_time: item.end_time,
+      }));
+    } catch {
+      return [];
+    }
+  }, [activeSchedule]);
+
   const handleSaveGoal = async () => {
     if (!goalTodo) return;
 
@@ -585,6 +773,33 @@ export default function TodoPage() {
       }
       return next;
     });
+  };
+
+  const toggleTagFilter = (tag: string) => {
+    setTagFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(tag)) {
+        next.delete(tag);
+      } else {
+        next.add(tag);
+      }
+      return next;
+    });
+  };
+
+  const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter" && tagInput.trim()) {
+      e.preventDefault();
+      const tag = tagInput.trim().toLowerCase();
+      if (!newTags.includes(tag)) {
+        setNewTags([...newTags, tag]);
+      }
+      setTagInput("");
+    }
+  };
+
+  const handleRemoveTag = (tag: string) => {
+    setNewTags(newTags.filter((t) => t !== tag));
   };
 
   // Get altitude color based on value
@@ -656,13 +871,46 @@ export default function TodoPage() {
                     className="min-h-[100px]"
                   />
                 </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="tags">Tags (optional)</Label>
+                  <div className="flex flex-wrap gap-1 mb-2">
+                    {newTags.map((tag) => (
+                      <Badge
+                        key={tag}
+                        variant="secondary"
+                        className="text-xs cursor-pointer"
+                        onClick={() => handleRemoveTag(tag)}
+                      >
+                        {tag}
+                        <X className="w-3 h-3 ml-1" />
+                      </Badge>
+                    ))}
+                  </div>
+                  <Input
+                    id="tags"
+                    placeholder="Type a tag and press Enter (e.g., backyard, seestar, dark-sky)"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={handleAddTag}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    Add tags like location, equipment, or conditions.
+                  </p>
+                </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>
                   Cancel
                 </Button>
                 <Button onClick={handleAddTodo} disabled={isLookupLoading}>
-                  {isLookupLoading ? "Looking up..." : "Add to List"}
+                  {isLookupLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Looking up...
+                    </>
+                  ) : (
+                    "Add to List"
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -718,6 +966,59 @@ export default function TodoPage() {
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* Tag Filter */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm">
+              <Tag className="w-4 h-4 mr-2" />
+              Filter Tags
+              {tagFilters.size > 0 && (
+                <Badge variant="secondary" className="ml-2">
+                  {tagFilters.size}
+                </Badge>
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel>Tags</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {uniqueTags.length === 0 ? (
+              <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                No tags yet
+              </div>
+            ) : (
+              uniqueTags.map((tag) => (
+                <DropdownMenuCheckboxItem
+                  key={tag}
+                  checked={tagFilters.has(tag)}
+                  onCheckedChange={() => toggleTagFilter(tag)}
+                >
+                  {tag}
+                </DropdownMenuCheckboxItem>
+              ))
+            )}
+            {tagFilters.size > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setTagFilters(new Set())}>
+                  Clear filters
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* Visibility Filter Toggle */}
+        <Button
+          variant={hideNotVisible ? "default" : "outline"}
+          size="sm"
+          onClick={() => setHideNotVisible(!hideNotVisible)}
+          title="Hide objects not visible tonight"
+        >
+          <Eye className="w-4 h-4 mr-2" />
+          Visible Tonight
+        </Button>
       </div>
 
       {/* Todo List */}
@@ -795,6 +1096,20 @@ export default function TodoPage() {
                         {todo.notes}
                       </div>
                     ) : null}
+                    {parseTags(todo.tags).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {parseTags(todo.tags).sort().map((tag) => (
+                          <Badge
+                            key={tag}
+                            variant="outline"
+                            className="text-xs px-1.5 py-0 h-4 cursor-pointer hover:bg-accent"
+                            onClick={() => toggleTagFilter(tag)}
+                          >
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Type */}
@@ -867,7 +1182,7 @@ export default function TodoPage() {
                       size="icon"
                       className="h-7 w-7"
                       onClick={() => handleOpenAltitudeDialog(todo)}
-                      title="View altitude chart"
+                      title="View altitude and add to schedule"
                     >
                       <LineChart className="w-4 h-4" />
                     </Button>
@@ -933,6 +1248,29 @@ export default function TodoPage() {
                   }
                 />
               </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit_tags">Tags</Label>
+                <div className="flex flex-wrap gap-1 mb-2">
+                  {editTags.map((tag) => (
+                    <Badge
+                      key={tag}
+                      variant="secondary"
+                      className="text-xs cursor-pointer"
+                      onClick={() => handleRemoveEditTag(tag)}
+                    >
+                      {tag}
+                      <X className="w-3 h-3 ml-1" />
+                    </Badge>
+                  ))}
+                </div>
+                <Input
+                  id="edit_tags"
+                  placeholder="Type a tag and press Enter"
+                  value={editTagInput}
+                  onChange={(e) => setEditTagInput(e.target.value)}
+                  onKeyDown={handleAddEditTag}
+                />
+              </div>
             </div>
           )}
           <DialogFooter>
@@ -989,8 +1327,13 @@ export default function TodoPage() {
           ra={altitudeTodo.ra}
           dec={altitudeTodo.dec}
           onSetGoalTime={handleSetGoalTimeFromAltitude}
+          onAddToSchedule={handleAddToScheduleFromAltitude}
+          isScheduled={isAltitudeTodoScheduled}
+          activeScheduleName={activeSchedule?.name}
+          scheduleItems={scheduleItemsForChart}
         />
       )}
+
     </div>
   );
 }

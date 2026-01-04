@@ -44,6 +44,30 @@ export default function Layout() {
             >
               Home
             </Link>
+            <Link
+              to="/observations"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Observations
+            </Link>
+            <Link
+              to="/todo"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Todo
+            </Link>
+            <Link
+              to="/plan"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Planning
+            </Link>
+            <Link
+              to="/settings"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Settings
+            </Link>
 
             {/* Location Switcher - only show if multiple locations */}
             {locations.length > 1 && (

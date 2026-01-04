@@ -17,6 +17,7 @@ pub struct CreateTodoInput {
     pub object_type: Option<String>,
     pub goal_time: Option<String>,
     pub notes: Option<String>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +34,7 @@ pub struct UpdateTodoInput {
     pub goal_time: Option<String>,
     pub notes: Option<String>,
     pub flagged: Option<bool>,
+    pub tags: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -72,6 +74,7 @@ pub fn create_todo(
         notes: input.notes,
         flagged: false,
         last_updated: Some(chrono::Utc::now().to_rfc3339()),
+        tags: input.tags.map(|t| serde_json::to_string(&t).unwrap_or_default()),
     };
 
     repository::create_todo(&mut conn, &new_todo)
@@ -98,6 +101,7 @@ pub fn update_todo(
         notes: input.notes,
         flagged: input.flagged,
         last_updated: Some(chrono::Utc::now().to_rfc3339()),
+        tags: input.tags.map(|t| serde_json::to_string(&t).unwrap_or_default()),
     };
 
     repository::update_todo(&mut conn, &input.id, &update)
@@ -137,6 +141,7 @@ pub fn sync_todos(
             notes: input.notes,
             flagged: false,
             last_updated: Some(chrono::Utc::now().to_rfc3339()),
+            tags: input.tags.map(|t| serde_json::to_string(&t).unwrap_or_default()),
         })
         .collect();
 

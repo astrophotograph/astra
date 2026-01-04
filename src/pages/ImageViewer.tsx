@@ -42,6 +42,13 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useImage, useUpdateImage, useDeleteImage } from "@/hooks/use-images";
+import { useEquipment } from "@/contexts/EquipmentContext";
+
+// Calculate focal length from pixel size and pixel scale
+// Formula: focal_length_mm = 206.265 * pixel_size_microns / pixel_scale_arcsec
+function calculateFocalLength(pixelSizeMicrons: number, pixelScaleArcsec: number): number {
+  return (206.265 * pixelSizeMicrons) / pixelScaleArcsec;
+}
 
 // Convert decimal degrees RA to HMS (hours, minutes, seconds) string
 function raToHMS(raDeg: number): string {
@@ -93,6 +100,7 @@ export default function ImageViewerPage() {
   const { data: image, isLoading, error, refetch } = useImage(id || "");
   const updateImage = useUpdateImage();
   const deleteImage = useDeleteImage();
+  const { equipmentSets } = useEquipment();
 
   // Fetch full image data from backend
   useEffect(() => {
@@ -145,6 +153,19 @@ export default function ImageViewerPage() {
       return null;
     }
   }, [image?.metadata]);
+
+  // Calculate focal length from plate solve pixel scale and camera pixel size
+  const calculatedFocalLength = useMemo(() => {
+    if (!plateSolveInfo?.pixel_scale) return null;
+
+    // Try to find a camera with pixel size from equipment sets
+    for (const eqSet of equipmentSets) {
+      if (eqSet.camera?.pixelSize) {
+        return calculateFocalLength(eqSet.camera.pixelSize, plateSolveInfo.pixel_scale);
+      }
+    }
+    return null;
+  }, [plateSolveInfo, equipmentSets]);
 
   // Track image container size for overlay calculations
   useEffect(() => {
@@ -730,6 +751,13 @@ export default function ImageViewerPage() {
                             {(plateSolveInfo.width_deg * 60)?.toFixed(1)}′ × {(plateSolveInfo.height_deg * 60)?.toFixed(1)}′
                           </span>
                         </div>
+                        {calculatedFocalLength && (
+                          <div>
+                            <span className="text-muted-foreground">Est. Focal Length:</span>
+                            <span className="ml-2">{calculatedFocalLength.toFixed(0)}mm</span>
+                            <span className="text-xs text-muted-foreground ml-1">(from pixel scale)</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

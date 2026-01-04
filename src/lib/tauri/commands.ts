@@ -35,6 +35,7 @@ export interface AstronomyTodo {
   last_updated: string | null;
   created_at: string;
   updated_at: string;
+  tags: string | null;  // JSON array of tag strings
 }
 
 export interface CreateTodoInput {
@@ -46,6 +47,7 @@ export interface CreateTodoInput {
   object_type?: string;
   goal_time?: string;
   notes?: string;
+  tags?: string[];
 }
 
 export interface UpdateTodoInput {
@@ -61,6 +63,7 @@ export interface UpdateTodoInput {
   goal_time?: string;
   notes?: string;
   flagged?: boolean;
+  tags?: string[];
 }
 
 export interface Collection {

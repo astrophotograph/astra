@@ -3,11 +3,13 @@
  * Shows detailed altitude/visibility information for an astronomical object
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
+import { format } from "date-fns";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -15,7 +17,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AltitudeChart, AltitudeDataPoint, HorizonDataPoint } from "@/components/AltitudeChart";
+import { CalendarCheck, Camera, Clock, ImageIcon, Plus, Timer } from "lucide-react";
+import { AltitudeChart, AltitudeDataPoint, HorizonDataPoint, ScheduledBlock } from "@/components/AltitudeChart";
 import {
   parseCoordinates,
   calculateCurrentAltitude,
@@ -23,10 +26,40 @@ import {
   generateNightAltitudeData,
   formatTime,
   defaultCoordinates,
-  loadHorizonProfile,
   getHorizonAltitude,
   type HorizonProfile,
 } from "@/lib/astronomy-utils";
+import { useLocations } from "@/contexts/LocationContext";
+import { useTargetObservations } from "@/hooks/use-target-observations";
+
+interface ScheduleItemInfo {
+  object_name: string;
+  start_time: string;
+  end_time: string;
+}
+
+// Format seconds into human-readable duration (e.g., "2h 30m" or "45m 30s")
+function formatDuration(totalSeconds: number): string {
+  if (totalSeconds === 0) return "0s";
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.round(totalSeconds % 60);
+
+  if (hours > 0) {
+    if (minutes > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${hours}h`;
+  }
+  if (minutes > 0) {
+    if (seconds > 0 && minutes < 10) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${minutes}m`;
+  }
+  return `${seconds}s`;
+}
 
 interface ObjectAltitudeDialogProps {
   open: boolean;
@@ -35,6 +68,11 @@ interface ObjectAltitudeDialogProps {
   ra: string;
   dec: string;
   onSetGoalTime?: (time: string) => void;
+  // Schedule props
+  onAddToSchedule?: (startTime: string, duration: number) => void;
+  isScheduled?: boolean;
+  activeScheduleName?: string;
+  scheduleItems?: ScheduleItemInfo[];
 }
 
 export function ObjectAltitudeDialog({
@@ -44,10 +82,15 @@ export function ObjectAltitudeDialog({
   ra,
   dec,
   onSetGoalTime,
+  onAddToSchedule,
+  isScheduled,
+  activeScheduleName,
+  scheduleItems = [],
 }: ObjectAltitudeDialogProps) {
+  const { activeLocation } = useLocations();
+  const observations = useTargetObservations(objectName);
   const [altitudeData, setAltitudeData] = useState<AltitudeDataPoint[]>([]);
   const [horizonData, setHorizonData] = useState<HorizonDataPoint[]>([]);
-  const [horizonProfile, setHorizonProfile] = useState<HorizonProfile | null>(null);
   const [currentAltitude, setCurrentAltitude] = useState<number | null>(null);
   const [currentHorizonAlt, setCurrentHorizonAlt] = useState<number | null>(null);
   const [idealTimeRange, setIdealTimeRange] = useState<{ start: Date | null; end: Date | null }>({
@@ -60,31 +103,25 @@ export function ObjectAltitudeDialog({
   const [longitude, setLongitude] = useState(defaultCoordinates.longitude.toString());
   const [bestObservationTime, setBestObservationTime] = useState<Date | null>(null);
   const [maxAltitude, setMaxAltitude] = useState<number | null>(null);
+  const [scheduleStartTime, setScheduleStartTime] = useState("");
+  const [scheduleDuration, setScheduleDuration] = useState(60);
 
-  // Load coordinates and horizon profile from localStorage when dialog opens
+  // Get horizon profile from active location
+  const horizonProfile: HorizonProfile | null = activeLocation?.horizon || null;
+
+  // Load coordinates from active location when dialog opens
   useEffect(() => {
     if (!open) return;
 
-    const savedLocation = localStorage.getItem("observer_location");
-    if (savedLocation) {
-      try {
-        const parsed = JSON.parse(savedLocation);
-        if (parsed.latitude && parsed.longitude) {
-          setCoordinates({
-            latitude: parsed.latitude,
-            longitude: parsed.longitude,
-          });
-          setLatitude(parsed.latitude.toString());
-          setLongitude(parsed.longitude.toString());
-        }
-      } catch {
-        // Use default
-      }
+    if (activeLocation) {
+      setCoordinates({
+        latitude: activeLocation.latitude,
+        longitude: activeLocation.longitude,
+      });
+      setLatitude(activeLocation.latitude.toString());
+      setLongitude(activeLocation.longitude.toString());
     }
-
-    // Load horizon profile
-    setHorizonProfile(loadHorizonProfile());
-  }, [open]);
+  }, [open, activeLocation]);
 
   // Calculate altitude data when dialog opens or coordinates change
   useEffect(() => {
@@ -240,6 +277,32 @@ export function ObjectAltitudeDialog({
 
   const status = getAltitudeStatus(currentAltitude, currentHorizonAlt);
 
+  // Convert schedule items to blocks for chart display
+  const scheduledBlocks: ScheduledBlock[] = useMemo(() => {
+    return scheduleItems.map((item) => ({
+      name: item.object_name,
+      startTime: new Date(item.start_time),
+      endTime: new Date(item.end_time),
+      isNew: item.object_name.toLowerCase() === objectName.toLowerCase(),
+    }));
+  }, [scheduleItems, objectName]);
+
+  // Handle adding to schedule
+  const handleAddToSchedule = () => {
+    if (onAddToSchedule && scheduleStartTime) {
+      onAddToSchedule(scheduleStartTime, scheduleDuration);
+      setScheduleStartTime("");
+      setScheduleDuration(60);
+    }
+  };
+
+  // Set default schedule time when best observation time is calculated
+  useEffect(() => {
+    if (bestObservationTime && !scheduleStartTime) {
+      setScheduleStartTime(format(bestObservationTime, "HH:mm"));
+    }
+  }, [bestObservationTime, scheduleStartTime]);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px]">
@@ -313,6 +376,7 @@ export function ObjectAltitudeDialog({
                 <AltitudeChart
                   data={altitudeData}
                   horizonData={horizonData.length > 0 ? horizonData : undefined}
+                  scheduledBlocks={scheduledBlocks.length > 0 ? scheduledBlocks : undefined}
                   width={520}
                   height={220}
                 />
@@ -380,6 +444,117 @@ export function ObjectAltitudeDialog({
                   >
                     End: {formatTime(idealTimeRange.end)}
                   </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Schedule Section */}
+          {onAddToSchedule && (
+            <div className="pt-4 border-t">
+              <h4 className="text-lg font-medium mb-3 flex items-center gap-2">
+                <CalendarCheck className="w-5 h-5" />
+                Add to Schedule
+                {activeScheduleName && (
+                  <Badge variant="outline" className="ml-2">
+                    {activeScheduleName}
+                  </Badge>
+                )}
+              </h4>
+              {isScheduled ? (
+                <div className="flex items-center gap-2 text-green-400">
+                  <CalendarCheck className="w-4 h-4" />
+                  <span>Already scheduled</span>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="schedule-start" className="flex items-center gap-1">
+                        <Clock className="w-3 h-3" />
+                        Start Time
+                      </Label>
+                      <Input
+                        id="schedule-start"
+                        type="time"
+                        value={scheduleStartTime}
+                        onChange={(e) => setScheduleStartTime(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="schedule-duration">Duration (min)</Label>
+                      <Input
+                        id="schedule-duration"
+                        type="number"
+                        min={5}
+                        max={480}
+                        step={5}
+                        value={scheduleDuration}
+                        onChange={(e) => setScheduleDuration(parseInt(e.target.value) || 60)}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                  <Button
+                    onClick={handleAddToSchedule}
+                    disabled={!scheduleStartTime}
+                    className="w-full"
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add to Schedule
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Previous Observations */}
+          {observations && observations.totalImages > 0 && (
+            <div className="pt-4 border-t">
+              <h4 className="text-lg font-medium mb-3 flex items-center gap-2">
+                <ImageIcon className="w-5 h-5" />
+                Previous Observations
+              </h4>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    {observations.totalImages} image{observations.totalImages !== 1 ? "s" : ""} of this target
+                  </span>
+                  {observations.totalExposureSeconds > 0 && (
+                    <div className="flex items-center gap-1 text-green-400">
+                      <Timer className="w-4 h-4" />
+                      <span className="font-medium">{formatDuration(observations.totalExposureSeconds)}</span>
+                      <span className="text-muted-foreground">total</span>
+                    </div>
+                  )}
+                </div>
+                {observations.groups.length > 0 && (
+                  <div className="space-y-1">
+                    {observations.groups.map((group, idx) => (
+                      <div key={idx} className="flex items-center justify-between text-sm py-1.5 px-2 bg-muted/30 rounded">
+                        <div className="flex items-center gap-2">
+                          <Camera className="w-4 h-4 text-muted-foreground" />
+                          <span>{group.camera}</span>
+                          {group.focalLength && (
+                            <Badge variant="outline" className="text-xs">
+                              {group.focalLength}mm
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-muted-foreground">
+                            {group.imageCount} image{group.imageCount !== 1 ? "s" : ""}
+                          </span>
+                          {group.totalExposureSeconds > 0 && (
+                            <span className="text-green-400 font-medium">
+                              {formatDuration(group.totalExposureSeconds)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>

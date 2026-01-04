@@ -94,5 +94,13 @@
     "hook_event_name": "Notification",
     "message": "Claude is waiting for your input",
     "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "90534d80-823a-4e5e-9893-37e602cd901d",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/90534d80-823a-4e5e-9893-37e602cd901d.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
   }
 ]

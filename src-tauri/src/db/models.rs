@@ -220,6 +220,7 @@ pub struct AstronomyTodo {
     pub last_updated: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub tags: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -240,6 +241,7 @@ pub struct NewAstronomyTodo {
     pub notes: Option<String>,
     pub flagged: bool,
     pub last_updated: Option<String>,
+    pub tags: Option<String>,
 }
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize, Default)]
@@ -257,6 +259,7 @@ pub struct UpdateAstronomyTodo {
     pub notes: Option<String>,
     pub flagged: Option<bool>,
     pub last_updated: Option<String>,
+    pub tags: Option<String>,
 }
 
 // ============================================================================

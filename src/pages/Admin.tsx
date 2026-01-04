@@ -2,13 +2,14 @@
  * Settings Page - Location management, backups, and app configuration
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import equipmentCatalog from "@/data/equipment-catalog.json";
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,7 @@ import {
   Camera as CameraIcon,
   Crosshair,
   Circle,
+  Search,
 } from "lucide-react";
 import { appApi, backupApi, type BackupInfo } from "@/lib/tauri/commands";
 import {
@@ -156,6 +158,48 @@ export default function AdminPage() {
     guideScope: { name: "", aperture: "", focalLength: "" },
     guideCamera: { name: "", pixelSize: "" },
   });
+
+  // Equipment catalog search
+  const [telescopeSearch, setTelescopeSearch] = useState("");
+  const [cameraSearch, setCameraSearch] = useState("");
+  const [mountSearch, setMountSearch] = useState("");
+
+  // Filtered catalog results
+  const filteredTelescopes = useMemo(() => {
+    if (!telescopeSearch.trim()) return [];
+    const search = telescopeSearch.toLowerCase();
+    return equipmentCatalog.telescopes
+      .filter(t =>
+        t.name.toLowerCase().includes(search) ||
+        t.brand.toLowerCase().includes(search) ||
+        t.model.toLowerCase().includes(search)
+      )
+      .slice(0, 8);
+  }, [telescopeSearch]);
+
+  const filteredCameras = useMemo(() => {
+    if (!cameraSearch.trim()) return [];
+    const search = cameraSearch.toLowerCase();
+    return equipmentCatalog.cameras
+      .filter(c =>
+        c.name.toLowerCase().includes(search) ||
+        c.brand.toLowerCase().includes(search) ||
+        c.model.toLowerCase().includes(search)
+      )
+      .slice(0, 8);
+  }, [cameraSearch]);
+
+  const filteredMounts = useMemo(() => {
+    if (!mountSearch.trim()) return [];
+    const search = mountSearch.toLowerCase();
+    return equipmentCatalog.mounts
+      .filter(m =>
+        m.name.toLowerCase().includes(search) ||
+        m.brand.toLowerCase().includes(search) ||
+        m.model.toLowerCase().includes(search)
+      )
+      .slice(0, 8);
+  }, [mountSearch]);
 
   // Plate solving settings
   const [plateSolveSolver, setPlateSolveSolver] = useState(() =>
@@ -529,6 +573,50 @@ export default function AdminPage() {
       guideCamera: { name: "", pixelSize: "" },
     });
     toast.success(`Applied "${preset.name}" preset`);
+  };
+
+  // Select telescope from catalog
+  const selectCatalogTelescope = (telescope: typeof equipmentCatalog.telescopes[0]) => {
+    setEquipmentForm((prev) => ({
+      ...prev,
+      telescope: {
+        name: telescope.name,
+        aperture: telescope.aperture.toString(),
+        focalLength: telescope.focalLength.toString(),
+        type: telescope.type,
+      },
+    }));
+    setTelescopeSearch("");
+    toast.success(`Selected ${telescope.name}`);
+  };
+
+  // Select camera from catalog
+  const selectCatalogCamera = (camera: typeof equipmentCatalog.cameras[0]) => {
+    setEquipmentForm((prev) => ({
+      ...prev,
+      camera: {
+        name: camera.name,
+        sensorWidth: camera.sensorWidth.toString(),
+        sensorHeight: camera.sensorHeight.toString(),
+        pixelSize: camera.pixelSize.toString(),
+        resolution: camera.resolution,
+      },
+    }));
+    setCameraSearch("");
+    toast.success(`Selected ${camera.name}`);
+  };
+
+  // Select mount from catalog
+  const selectCatalogMount = (mount: typeof equipmentCatalog.mounts[0]) => {
+    setEquipmentForm((prev) => ({
+      ...prev,
+      mount: {
+        name: mount.name,
+        type: mount.type,
+      },
+    }));
+    setMountSearch("");
+    toast.success(`Selected ${mount.name}`);
   };
 
   // Delete location with confirmation
@@ -1241,6 +1329,33 @@ export default function AdminPage() {
                 <Telescope className="w-4 h-4" />
                 Telescope
               </Label>
+              {/* Telescope Search */}
+              <div className="mb-3 relative">
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={telescopeSearch}
+                    onChange={(e) => setTelescopeSearch(e.target.value)}
+                    placeholder="Search catalog (e.g., RedCat, Esprit, Seestar...)"
+                    className="flex-1"
+                  />
+                </div>
+                {filteredTelescopes.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                    {filteredTelescopes.map((t, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex justify-between items-center"
+                        onClick={() => selectCatalogTelescope(t)}
+                      >
+                        <span className="font-medium">{t.name}</span>
+                        <span className="text-xs text-muted-foreground">{t.aperture}mm f/{(t.focalLength / t.aperture).toFixed(1)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <Label htmlFor="eq-telescope-name" className="text-xs">Name</Label>
@@ -1305,6 +1420,33 @@ export default function AdminPage() {
                 <Crosshair className="w-4 h-4" />
                 Mount
               </Label>
+              {/* Mount Search */}
+              <div className="mb-3 relative">
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={mountSearch}
+                    onChange={(e) => setMountSearch(e.target.value)}
+                    placeholder="Search catalog (e.g., AM5, EQ6, RST...)"
+                    className="flex-1"
+                  />
+                </div>
+                {filteredMounts.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                    {filteredMounts.map((m, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex justify-between items-center"
+                        onClick={() => selectCatalogMount(m)}
+                      >
+                        <span className="font-medium">{m.name}</span>
+                        <span className="text-xs text-muted-foreground">{m.type} ({m.payload}kg)</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="eq-mount-name" className="text-xs">Name</Label>
@@ -1341,6 +1483,33 @@ export default function AdminPage() {
                 <CameraIcon className="w-4 h-4" />
                 Camera
               </Label>
+              {/* Camera Search */}
+              <div className="mb-3 relative">
+                <div className="flex items-center gap-2">
+                  <Search className="w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={cameraSearch}
+                    onChange={(e) => setCameraSearch(e.target.value)}
+                    placeholder="Search catalog (e.g., ASI2600, Poseidon, 533...)"
+                    className="flex-1"
+                  />
+                </div>
+                {filteredCameras.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-background border rounded-md shadow-lg max-h-48 overflow-y-auto">
+                    {filteredCameras.map((c, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="w-full px-3 py-2 text-left text-sm hover:bg-muted flex justify-between items-center"
+                        onClick={() => selectCatalogCamera(c)}
+                      >
+                        <span className="font-medium">{c.name}</span>
+                        <span className="text-xs text-muted-foreground">{c.pixelSize}µm {c.resolution}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="col-span-2">
                   <Label htmlFor="eq-camera-name" className="text-xs">Name</Label>

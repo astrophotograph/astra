@@ -26,8 +26,10 @@ import {
 import { Label } from "@/components/ui/label";
 import {
   CalendarCheck,
+  Camera,
   Clock,
   Eye,
+  ImageIcon,
   MapPin,
   Moon,
   Plus,
@@ -40,6 +42,7 @@ import { Input } from "@/components/ui/input";
 import { getHorizonAltitude } from "@/lib/astronomy-utils";
 import { cn } from "@/lib/utils";
 import { useLocations } from "@/contexts/LocationContext";
+import { useTargetObservations } from "@/hooks/use-target-observations";
 import { getObjectTypeInfo } from "@/lib/objectTypeMap";
 import {
   type CatalogTarget,
@@ -90,6 +93,9 @@ export function RecommendationsPanel({
   const [catalogsLoaded, setCatalogsLoaded] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState<RecommendedTarget | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+
+  // Get observation stats for selected target
+  const observations = useTargetObservations(selectedTarget?.name || null);
 
   // Schedule time state (used in detail dialog)
   const [scheduleStartTime, setScheduleStartTime] = useState("");
@@ -721,6 +727,37 @@ export function RecommendationsPanel({
                   <span className="mx-2">|</span>
                   <span>Dec: {selectedTarget.dec.toFixed(4)}°</span>
                 </div>
+
+                {/* Previous Observations */}
+                {observations && observations.totalImages > 0 && (
+                  <div className="pt-3 border-t mt-3">
+                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <ImageIcon className="w-4 h-4" />
+                      Previous Observations
+                    </h4>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        {observations.totalImages} image{observations.totalImages !== 1 ? "s" : ""} of this target
+                      </p>
+                      {observations.groups.map((group, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs py-1 px-2 bg-muted/30 rounded">
+                          <div className="flex items-center gap-2">
+                            <Camera className="w-3 h-3 text-muted-foreground" />
+                            <span>{group.camera}</span>
+                            {group.focalLength && (
+                              <Badge variant="outline" className="text-xs h-4">
+                                {group.focalLength}mm
+                              </Badge>
+                            )}
+                          </div>
+                          <span className="text-muted-foreground">
+                            {group.imageCount} image{group.imageCount !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <DialogFooter>

@@ -75,6 +75,7 @@ diesel::table! {
         last_updated -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        tags -> Nullable<Text>,
     }
 }
 
