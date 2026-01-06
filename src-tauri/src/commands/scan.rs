@@ -60,6 +60,8 @@ pub struct BulkScanInput {
     pub tags: Option<String>,
     /// Only import stacked images (not raw subframes)
     pub stacked_only: bool,
+    /// Maximum number of files to import (None = unlimited)
+    pub max_files: Option<usize>,
 }
 
 /// Result of a bulk scan operation
@@ -315,7 +317,7 @@ fn generate_collection_name(session_date: &NaiveDate, object_name: Option<&str>)
 }
 
 /// Scan a directory for image files
-fn scan_directory(directory: &Path, stacked_only: bool) -> Vec<DiscoveredImage> {
+fn scan_directory(directory: &Path, stacked_only: bool, max_files: Option<usize>) -> Vec<DiscoveredImage> {
     let mut images: HashMap<String, DiscoveredImage> = HashMap::new();
 
     for entry in WalkDir::new(directory)
@@ -327,6 +329,17 @@ fn scan_directory(directory: &Path, stacked_only: bool) -> Vec<DiscoveredImage> 
 
         // Skip directories
         if path.is_dir() {
+            continue;
+        }
+
+        // Get the filename
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        // Skip macOS resource fork files (start with "._")
+        if filename.starts_with("._") {
             continue;
         }
 
@@ -387,9 +400,21 @@ fn scan_directory(directory: &Path, stacked_only: bool) -> Vec<DiscoveredImage> 
         } else if is_jpeg {
             discovered.jpeg_path = Some(path.to_path_buf());
         }
+
+        // Check if we've reached the max files limit
+        if let Some(max) = max_files {
+            if images.len() >= max {
+                break;
+            }
+        }
     }
 
-    images.into_values().collect()
+    // Apply max_files limit to the result
+    let mut result: Vec<DiscoveredImage> = images.into_values().collect();
+    if let Some(max) = max_files {
+        result.truncate(max);
+    }
+    result
 }
 
 /// Bulk scan a directory and import images
@@ -419,7 +444,7 @@ pub async fn bulk_scan_directory(
     };
 
     // Scan directory for images
-    let discovered_images = scan_directory(&directory, input.stacked_only);
+    let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
     let total_images = discovered_images.len();
 
     // Track collections by session date to avoid duplicates
@@ -765,7 +790,7 @@ pub fn preview_bulk_scan(
         return Err(format!("Directory does not exist: {}", input.directory));
     }
 
-    let discovered_images = scan_directory(&directory, input.stacked_only);
+    let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
 
     let mut preview = BulkScanPreview {
         total_images: discovered_images.len(),

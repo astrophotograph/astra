@@ -33,7 +33,7 @@ export default function Layout() {
   return (
     <div className="flex min-h-screen flex-col">
       <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-slate-900/95 backdrop-blur">
-        <div className="container flex h-14 max-w-screen-2xl items-center justify-between px-4">
+        <div className="flex h-14 w-full items-center justify-between px-4 md:px-6 lg:px-8">
           <Link to="/" className="flex items-center">
             <span className="text-lg font-bold text-white">Astra</span>
           </Link>
@@ -119,7 +119,7 @@ export default function Layout() {
           </div>
         </div>
       </header>
-      <main className={`flex-1 ${isHomePage ? "" : "container max-w-screen-2xl py-6 px-4 md:px-6 lg:px-8"}`}>
+      <main className={`flex-1 ${isHomePage ? "" : "container max-w-screen-2xl mx-auto py-6 px-4 md:px-6 lg:px-8"}`}>
         <Outlet />
       </main>
 

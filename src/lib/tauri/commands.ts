@@ -503,6 +503,7 @@ export interface BulkScanInput {
   directory: string;
   tags?: string;
   stacked_only: boolean;
+  max_files?: number;
 }
 
 export interface BulkScanResult {

@@ -91,6 +91,7 @@ interface ComputedData {
   peakTime: string | null;
   maxAltitude: number | null;  // Maximum altitude during the night
   neverVisible: boolean;       // True if never rises above local horizon during night
+  notVisibleRestOfNight: boolean; // True if was visible but won't be again tonight
   horizonAltitude: number | null;  // Local horizon altitude at current azimuth
   belowHorizon: boolean;       // True if currently below local horizon
   moonDistance: number | null; // Angular distance from the moon in degrees
@@ -242,6 +243,11 @@ export default function TodoPage() {
           // Object is "never visible" if it never rises above visibility threshold during the night
           // Check each altitude point against the local horizon at that time's azimuth
           let neverVisible = true;
+          const now = new Date();
+          let notVisibleRestOfNight = false;
+          let wasVisibleEarlier = false;
+          let willBeVisibleLater = false;
+
           if (altitudeData.length > 0) {
             for (const point of altitudeData) {
               // For night altitude data, we'd need azimuth at each time - use a simplified check
@@ -249,11 +255,21 @@ export default function TodoPage() {
               const pointHorizon = horizonProfile
                 ? getHorizonAltitude(horizonProfile, azimuth) // approximation - uses current azimuth
                 : 0;
-              if (point.altitude > Math.max(20, pointHorizon)) {
+              const isPointVisible = point.altitude > Math.max(20, pointHorizon);
+
+              if (isPointVisible) {
                 neverVisible = false;
-                break;
+                // Check if this visible point is before or after now
+                if (point.time < now) {
+                  wasVisibleEarlier = true;
+                } else {
+                  willBeVisibleLater = true;
+                }
               }
             }
+
+            // Target is "not visible rest of night" if it was visible earlier but won't be again
+            notVisibleRestOfNight = !neverVisible && wasVisibleEarlier && !willBeVisibleLater;
           }
 
           newMap.set(todo.id, {
@@ -263,6 +279,7 @@ export default function TodoPage() {
             peakTime: neverVisible ? null : peakTime,  // Don't show peak time if never visible
             maxAltitude,
             neverVisible,
+            notVisibleRestOfNight,
             horizonAltitude,
             belowHorizon,
             moonDistance,
@@ -277,6 +294,7 @@ export default function TodoPage() {
             peakTime: null,
             maxAltitude: null,
             neverVisible: false,
+            notVisibleRestOfNight: false,
             horizonAltitude: null,
             belowHorizon: false,
             moonDistance: null,
@@ -323,11 +341,12 @@ export default function TodoPage() {
       });
     }
 
-    // Apply visibility filter
+    // Apply visibility filter (hide both "never visible" and "not visible rest of night")
     if (hideNotVisible) {
       filtered = filtered.filter((todo) => {
         const computedData = computedDataMap.get(todo.id);
-        return computedData ? !computedData.neverVisible : true;
+        if (!computedData) return true;
+        return !computedData.neverVisible && !computedData.notVisibleRestOfNight;
       });
     }
 
@@ -1090,6 +1109,10 @@ export default function TodoPage() {
                     {computedData?.neverVisible ? (
                       <div className="text-xs text-orange-400 truncate" title={`Max altitude: ${computedData.maxAltitude?.toFixed(1)}°`}>
                         Not visible tonight (max {computedData.maxAltitude?.toFixed(0)}°)
+                      </div>
+                    ) : computedData?.notVisibleRestOfNight ? (
+                      <div className="text-xs text-yellow-500 truncate" title="Already set - won't rise above threshold again tonight">
+                        Not visible rest of evening
                       </div>
                     ) : todo.notes ? (
                       <div className="text-xs text-muted-foreground truncate">

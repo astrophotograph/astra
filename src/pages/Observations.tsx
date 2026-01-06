@@ -60,6 +60,7 @@ export default function ObservationsPage() {
   const [scanDirectory, setScanDirectory] = useState("");
   const [scanTags, setScanTags] = useState("");
   const [scanStackedOnly, setScanStackedOnly] = useState(true);
+  const [scanMaxFiles, setScanMaxFiles] = useState<number | undefined>(undefined);
   const [scanPreview, setScanPreview] = useState<BulkScanPreview | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -180,6 +181,7 @@ export default function ObservationsPage() {
         directory: scanDirectory,
         tags: scanTags || undefined,
         stacked_only: scanStackedOnly,
+        max_files: scanMaxFiles,
       });
       setScanPreview(preview);
     } catch (error) {
@@ -225,6 +227,7 @@ export default function ObservationsPage() {
         directory: scanDirectory,
         tags: scanTags || undefined,
         stacked_only: scanStackedOnly,
+        max_files: scanMaxFiles,
       });
 
       // Refresh collections and images
@@ -258,6 +261,7 @@ export default function ObservationsPage() {
     setScanDirectory("");
     setScanTags("");
     setScanStackedOnly(true);
+    setScanMaxFiles(undefined);
     setScanPreview(null);
     setScanResult(null);
   };
@@ -398,6 +402,28 @@ export default function ObservationsPage() {
                   <Label htmlFor="stacked-only" className="text-sm font-normal cursor-pointer">
                     Only import stacked images (skip raw subframes)
                   </Label>
+                </div>
+
+                {/* Max Files Limit */}
+                <div className="space-y-2">
+                  <Label htmlFor="max-files" className="text-sm text-gray-300">
+                    Maximum Files (optional)
+                  </Label>
+                  <Input
+                    id="max-files"
+                    type="number"
+                    min="1"
+                    value={scanMaxFiles || ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setScanMaxFiles(val ? parseInt(val, 10) : undefined);
+                    }}
+                    placeholder="No limit"
+                    className="bg-slate-700 border-slate-600 w-32"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Limit imports for large directories (e.g., 100 images at a time)
+                  </p>
                 </div>
 
                 {/* Scanning Progress */}
