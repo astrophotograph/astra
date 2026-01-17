@@ -143,6 +143,40 @@ pub fn get_image_by_url(
         .optional()
 }
 
+/// Get all image URLs for a user (for efficient duplicate checking during bulk import)
+pub fn get_all_image_urls(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> QueryResult<Vec<String>> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::url.is_not_null())
+        .select(images::url)
+        .load::<Option<String>>(conn)
+        .map(|urls| urls.into_iter().flatten().collect())
+}
+
+/// Get all collection-image mappings for efficient duplicate checking
+pub fn get_all_collection_image_pairs(
+    conn: &mut SqliteConnection,
+) -> QueryResult<Vec<(String, String)>> {
+    collection_images::table
+        .select((collection_images::collection_id, collection_images::image_id))
+        .load(conn)
+}
+
+/// Get image ID by URL (returns just the ID for efficiency)
+pub fn get_image_id_by_url(
+    conn: &mut SqliteConnection,
+    url: &str,
+) -> QueryResult<Option<String>> {
+    images::table
+        .filter(images::url.eq(url))
+        .select(images::id)
+        .first(conn)
+        .optional()
+}
+
 pub fn create_image(conn: &mut SqliteConnection, new_image: &NewImage) -> QueryResult<Image> {
     diesel::insert_into(images::table)
         .values(new_image)

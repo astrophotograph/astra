@@ -34,11 +34,13 @@ import {
 } from "@/hooks/use-collections";
 import type { Collection, CreateCollectionInput } from "@/lib/tauri/commands";
 import { cn } from "@/lib/utils";
+import { MoreHorizontal } from "lucide-react";
 
 export default function CollectionsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   // Form state for adding new collection
   const [newCollection, setNewCollection] = useState<CreateCollectionInput>({
@@ -93,6 +95,23 @@ export default function CollectionsPage() {
     }
   };
 
+  const handleToggleArchived = async (collection: Collection) => {
+    try {
+      await updateCollection.mutateAsync({
+        id: collection.id,
+        archived: !collection.archived,
+      });
+      toast.success(
+        collection.archived
+          ? `Unarchived ${collection.name}`
+          : `Archived ${collection.name}`
+      );
+    } catch (err) {
+      toast.error("Failed to update collection");
+      console.error(err);
+    }
+  };
+
   const handleDelete = async (collection: Collection) => {
     try {
       await deleteCollection.mutateAsync(collection.id);
@@ -136,21 +155,36 @@ export default function CollectionsPage() {
     );
   }
 
-  // Separate favorites and regular collections
-  const favoriteCollections = collections.filter((c) => c.favorite);
-  const regularCollections = collections.filter((c) => !c.favorite);
+  // Filter and separate collections
+  const visibleCollections = showArchived
+    ? collections.filter((c) => c.archived)
+    : collections.filter((c) => !c.archived);
+  const favoriteCollections = visibleCollections.filter((c) => c.favorite);
+  const regularCollections = visibleCollections.filter((c) => !c.favorite);
+  const archivedCount = collections.filter((c) => c.archived).length;
 
   return (
     <div className="container py-8 space-y-8">
       {/* Header */}
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold">Collections</h1>
+          <h1 className="text-2xl font-bold">
+            {showArchived ? "Archived Collections" : "Collections"}
+          </h1>
           <p className="text-muted-foreground">
             Organize your astronomical observations
           </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <div className="flex gap-2">
+          {archivedCount > 0 && (
+            <Button
+              variant={showArchived ? "default" : "outline"}
+              onClick={() => setShowArchived(!showArchived)}
+            >
+              {showArchived ? "Show Active" : `Archived (${archivedCount})`}
+            </Button>
+          )}
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button>New Collection</Button>
           </DialogTrigger>
@@ -212,6 +246,7 @@ export default function CollectionsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       {isLoading ? (
@@ -239,6 +274,7 @@ export default function CollectionsPage() {
                     onEdit={handleEditCollection}
                     onDelete={handleDelete}
                     onToggleFavorite={handleToggleFavorite}
+                    onToggleArchived={handleToggleArchived}
                   />
                 ))}
               </div>
@@ -258,6 +294,7 @@ export default function CollectionsPage() {
                   onEdit={handleEditCollection}
                   onDelete={handleDelete}
                   onToggleFavorite={handleToggleFavorite}
+                  onToggleArchived={handleToggleArchived}
                 />
               ))}
             </div>
@@ -334,6 +371,7 @@ interface CollectionCardProps {
   onEdit: (collection: Collection) => void;
   onDelete: (collection: Collection) => void;
   onToggleFavorite: (collection: Collection) => void;
+  onToggleArchived: (collection: Collection) => void;
 }
 
 function CollectionCard({
@@ -341,6 +379,7 @@ function CollectionCard({
   onEdit,
   onDelete,
   onToggleFavorite,
+  onToggleArchived,
 }: CollectionCardProps) {
   const tags = collection.tags
     ? collection.tags.split(",").map((t) => t.trim()).filter(Boolean)
@@ -364,13 +403,16 @@ function CollectionCard({
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm">
-                ...
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MoreHorizontal className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => onToggleFavorite(collection)}>
                 {collection.favorite ? "Remove from Favorites" : "Add to Favorites"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onToggleArchived(collection)}>
+                {collection.archived ? "Unarchive" : "Archive"}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onEdit(collection)}>
                 Edit
@@ -387,6 +429,11 @@ function CollectionCard({
       </CardHeader>
       <CardContent>
         <div className="flex flex-wrap gap-1">
+          {collection.archived && (
+            <Badge variant="secondary" className="text-xs">
+              Archived
+            </Badge>
+          )}
           {collection.favorite && (
             <Badge variant="secondary" className="text-xs">
               Favorite

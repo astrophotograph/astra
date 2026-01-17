@@ -3,17 +3,21 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use image::imageops::FilterType;
-use image::ImageFormat;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tauri::{Emitter, State};
+use tokio::sync::Semaphore;
 use walkdir::WalkDir;
 
 use crate::db::models::{NewCollection, NewCollectionImage, NewImage};
 use crate::db::repository;
 use crate::state::AppState;
+
+/// Maximum number of concurrent CPU-intensive tasks (FITS parsing + thumbnail generation)
+const MAX_PARALLEL_PROCESSING: usize = 4;
 
 /// Maximum thumbnail dimension (width or height)
 const THUMBNAIL_SIZE: u32 = 300;
@@ -114,7 +118,7 @@ pub struct FitsMetadata {
 }
 
 /// Represents a discovered image (potentially with both .fit and .jpg)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DiscoveredImage {
     /// Base name without extension
     base_name: String,
@@ -126,6 +130,19 @@ struct DiscoveredImage {
     jpeg_path: Option<PathBuf>,
     /// Whether this is a stacked image
     is_stacked: bool,
+}
+
+/// Result of preprocessing a single image (FITS parsing + thumbnail generation)
+#[derive(Debug)]
+struct ProcessedImage {
+    /// Original discovered image info
+    discovered: DiscoveredImage,
+    /// Parsed FITS metadata (if successful)
+    metadata: Option<FitsMetadata>,
+    /// Generated thumbnail (if successful)
+    thumbnail: Option<String>,
+    /// Error message if processing failed
+    error: Option<String>,
 }
 
 /// Parse FITS header to extract metadata
@@ -306,14 +323,9 @@ fn get_session_date(date_obs: &str) -> Option<NaiveDate> {
     })
 }
 
-/// Generate collection name from session date and object
-fn generate_collection_name(session_date: &NaiveDate, object_name: Option<&str>) -> String {
-    let date_str = session_date.format("%Y-%m-%d").to_string();
-    if let Some(obj) = object_name {
-        format!("{} - {}", date_str, obj)
-    } else {
-        format!("{} Session", date_str)
-    }
+/// Generate collection name from session date (one collection per night)
+fn generate_collection_name(session_date: &NaiveDate, _object_name: Option<&str>) -> String {
+    session_date.format("%Y-%m-%d").to_string()
 }
 
 /// Scan a directory for image files
@@ -417,7 +429,57 @@ fn scan_directory(directory: &Path, stacked_only: bool, max_files: Option<usize>
     result
 }
 
-/// Bulk scan a directory and import images
+/// Process a single image: parse FITS metadata and generate thumbnail
+/// This runs in a blocking task for CPU-intensive operations
+async fn process_single_image(discovered: DiscoveredImage) -> ProcessedImage {
+    let discovered_clone = discovered.clone();
+
+    // Run CPU-intensive work in a blocking task
+    tokio::task::spawn_blocking(move || {
+        let mut processed = ProcessedImage {
+            discovered: discovered_clone,
+            metadata: None,
+            thumbnail: None,
+            error: None,
+        };
+
+        // Parse FITS metadata if we have a FITS file
+        if let Some(fits_path) = &processed.discovered.fits_path {
+            match parse_fits_metadata(fits_path) {
+                Ok(m) => processed.metadata = Some(m),
+                Err(e) => {
+                    processed.error = Some(format!(
+                        "Failed to parse {}: {}",
+                        fits_path.display(),
+                        e
+                    ));
+                    return processed;
+                }
+            }
+        }
+
+        // Generate thumbnail from JPEG if available
+        if let Some(jpeg_path) = &processed.discovered.jpeg_path {
+            match generate_thumbnail(jpeg_path) {
+                Ok(thumb) => processed.thumbnail = Some(thumb),
+                Err(e) => {
+                    log::warn!("Failed to generate thumbnail for {}: {}", jpeg_path.display(), e);
+                }
+            }
+        }
+
+        processed
+    })
+    .await
+    .unwrap_or_else(|e| ProcessedImage {
+        discovered,
+        metadata: None,
+        thumbnail: None,
+        error: Some(format!("Task panicked: {}", e)),
+    })
+}
+
+/// Bulk scan a directory and import images (parallelized version)
 #[tauri::command]
 pub async fn bulk_scan_directory(
     window: tauri::Window,
@@ -427,9 +489,6 @@ pub async fn bulk_scan_directory(
     // Clone what we need for the async block
     let db_pool = state.db.clone();
     let user_id = state.user_id.clone();
-
-    // Get a database connection
-    let mut conn = db_pool.get().map_err(|e| e.to_string())?;
 
     let directory = PathBuf::from(&input.directory);
     if !directory.exists() {
@@ -447,73 +506,138 @@ pub async fn bulk_scan_directory(
     let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
     let total_images = discovered_images.len();
 
+    if total_images == 0 {
+        return Ok(result);
+    }
+
+    // === PHASE 1: Pre-load existing data for efficient duplicate checking ===
+    let existing_urls: HashSet<String> = {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+        repository::get_all_image_urls(&mut conn, &user_id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .collect()
+    };
+
+    // Pre-load URL to image ID mapping for images we need to add to collections
+    let url_to_image_id: HashMap<String, String> = {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+        let images = repository::get_images_by_user(&mut conn, &user_id)
+            .map_err(|e| e.to_string())?;
+        images
+            .into_iter()
+            .filter_map(|img| img.url.map(|url| (url, img.id)))
+            .collect()
+    };
+
+    // Pre-load collection-image pairs
+    let existing_collection_images: HashSet<(String, String)> = {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+        repository::get_all_collection_image_pairs(&mut conn)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .collect()
+    };
+
+    // Emit initial progress
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_images,
+        current_file: "Starting parallel processing...".to_string(),
+        percent: 0,
+    });
+
+    // === PHASE 2: Parallel processing of FITS metadata and thumbnails ===
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_PROCESSING));
+    let mut processing_tasks = Vec::with_capacity(total_images);
+
+    for discovered in discovered_images {
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let task = tokio::spawn(async move {
+            let result = process_single_image(discovered).await;
+            drop(permit); // Release semaphore
+            result
+        });
+        processing_tasks.push(task);
+    }
+
+    // Collect all processed results
+    let mut processed_images = Vec::with_capacity(total_images);
+    for (index, task) in processing_tasks.into_iter().enumerate() {
+        match task.await {
+            Ok(processed) => {
+                // Emit progress
+                let _ = window.emit("scan-progress", &ScanProgress {
+                    current: index + 1,
+                    total: total_images,
+                    current_file: processed.discovered.base_name.clone(),
+                    percent: ((index + 1) * 50 / total_images) as u8, // 0-50% for processing
+                });
+                processed_images.push(processed);
+            }
+            Err(e) => {
+                result.errors.push(format!("Task failed: {}", e));
+                result.images_skipped += 1;
+            }
+        }
+    }
+
+    // === PHASE 3: Sequential database operations ===
+    let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+
     // Track collections by session date to avoid duplicates
     let mut session_collections: HashMap<String, String> = HashMap::new();
 
-    for (index, discovered) in discovered_images.into_iter().enumerate() {
-        // Emit progress event
-        let progress = ScanProgress {
+    for (index, processed) in processed_images.into_iter().enumerate() {
+        // Emit progress (50-100% for DB operations)
+        let _ = window.emit("scan-progress", &ScanProgress {
             current: index + 1,
             total: total_images,
-            current_file: discovered.base_name.clone(),
-            percent: if total_images > 0 {
-                ((index + 1) * 100 / total_images) as u8
-            } else {
-                100
-            },
-        };
-        let _ = window.emit("scan-progress", &progress);
+            current_file: processed.discovered.base_name.clone(),
+            percent: (50 + (index + 1) * 50 / total_images) as u8,
+        });
 
-        // Yield to allow event processing
-        tokio::task::yield_now().await;
+        // Skip if processing failed
+        if let Some(error) = processed.error {
+            result.errors.push(error);
+            result.images_skipped += 1;
+            continue;
+        }
 
-        // We need at least a FITS file to extract metadata
-        let Some(fits_path) = &discovered.fits_path else {
-            // If we only have a JPEG, skip for now (could add later with limited metadata)
+        // We need metadata to proceed
+        let Some(metadata) = processed.metadata else {
             result.images_skipped += 1;
             continue;
         };
 
-        // Parse FITS metadata
-        let metadata = match parse_fits_metadata(fits_path) {
-            Ok(m) => m,
-            Err(e) => {
-                result.errors.push(format!(
-                    "Failed to parse {}: {}",
-                    fits_path.display(),
-                    e
-                ));
-                result.images_skipped += 1;
-                continue;
-            }
-        };
+        // Build URL for duplicate checking
+        let url = processed.discovered
+            .jpeg_path
+            .as_ref()
+            .or(processed.discovered.fits_path.as_ref())
+            .map(|p| p.to_string_lossy().to_string());
 
-        // Determine session date
+        // Determine session date and get/create collection
         let session_date = metadata
             .date_obs
             .as_ref()
             .and_then(|d| get_session_date(d));
 
-        // Get or create collection for this session
         let collection_id = if let Some(date) = session_date {
             let collection_key = format!("{}", date);
 
             if let Some(id) = session_collections.get(&collection_key) {
                 id.clone()
             } else {
-                // Generate collection name
                 let collection_name =
                     generate_collection_name(&date, metadata.object_name.as_deref());
 
-                // Check if collection already exists by name
                 match repository::get_collection_by_name(&mut conn, &user_id, &collection_name) {
                     Ok(Some(existing)) => {
-                        // Collection exists, use it
                         session_collections.insert(collection_key, existing.id.clone());
                         existing.id
                     }
                     Ok(None) => {
-                        // Create new collection
                         let new_collection = NewCollection {
                             id: uuid::Uuid::new_v4().to_string(),
                             user_id: user_id.clone(),
@@ -534,6 +658,7 @@ pub async fn bulk_scan_directory(
                                 })
                                 .to_string(),
                             ),
+                            archived: false,
                         };
 
                         match repository::create_collection(&mut conn, &new_collection) {
@@ -562,7 +687,6 @@ pub async fn bulk_scan_directory(
             } else {
                 let collection_name = "Unknown Session".to_string();
 
-                // Check if collection already exists by name
                 match repository::get_collection_by_name(&mut conn, &user_id, &collection_name) {
                     Ok(Some(existing)) => {
                         session_collections.insert(unknown_key, existing.id.clone());
@@ -588,6 +712,7 @@ pub async fn bulk_scan_directory(
                                 })
                                 .to_string(),
                             ),
+                            archived: false,
                         };
 
                         match repository::create_collection(&mut conn, &new_collection) {
@@ -610,49 +735,29 @@ pub async fn bulk_scan_directory(
             }
         };
 
-        // Build image filename and URL
-        let filename = discovered.base_name.clone();
-
-        // Use JPEG path as the display URL if available, otherwise FITS
-        let url = discovered
-            .jpeg_path
-            .as_ref()
-            .or(discovered.fits_path.as_ref())
-            .map(|p| p.to_string_lossy().to_string());
-
-        // Check if image already exists by URL
+        // Check if image already exists using pre-loaded data (O(1) lookup)
         if let Some(ref url_str) = url {
-            match repository::get_image_by_url(&mut conn, url_str) {
-                Ok(Some(existing_image)) => {
-                    // Image already exists, just make sure it's in the collection
-                    if !repository::is_image_in_collection(&mut conn, &collection_id, &existing_image.id)
-                        .unwrap_or(false)
-                    {
+            if existing_urls.contains(url_str) {
+                // Image exists, check if it needs to be added to collection
+                if let Some(image_id) = url_to_image_id.get(url_str) {
+                    let pair = (collection_id.clone(), image_id.clone());
+                    if !existing_collection_images.contains(&pair) {
                         let collection_image = NewCollectionImage {
                             id: uuid::Uuid::new_v4().to_string(),
                             collection_id: collection_id.clone(),
-                            image_id: existing_image.id.clone(),
+                            image_id: image_id.clone(),
                         };
                         let _ = repository::add_image_to_collection(&mut conn, &collection_image);
                     }
-                    result.images_skipped += 1;
-                    continue;
                 }
-                Ok(None) => {
-                    // Image doesn't exist, continue to create it
-                }
-                Err(e) => {
-                    result.errors.push(format!("Failed to check for existing image: {}", e));
-                    result.images_skipped += 1;
-                    continue;
-                }
+                result.images_skipped += 1;
+                continue;
             }
         }
 
-        // Build summary from object name
+        // Build image record
+        let filename = processed.discovered.base_name.clone();
         let summary = metadata.object_name.clone();
-
-        // Build description from metadata
         let description = build_description(&metadata);
 
         // Combine user tags with auto-detected tags
@@ -660,7 +765,7 @@ pub async fn bulk_scan_directory(
         if let Some(user_tags) = &input.tags {
             all_tags.push(user_tags.clone());
         }
-        if discovered.is_stacked {
+        if processed.discovered.is_stacked {
             all_tags.push("stacked".to_string());
         }
         if metadata.telescope.as_ref().map(|t| t.to_lowercase().contains("seestar")).unwrap_or(false) {
@@ -672,28 +777,12 @@ pub async fn bulk_scan_directory(
             Some(all_tags.join(", "))
         };
 
-        // Store metadata as JSON
         let metadata_json = serde_json::to_string(&metadata).ok();
 
-        // Generate thumbnail from JPEG (preferred) or FITS
-        let thumbnail = discovered
-            .jpeg_path
-            .as_ref()
-            .and_then(|path| {
-                match generate_thumbnail(path) {
-                    Ok(thumb) => Some(thumb),
-                    Err(e) => {
-                        log::warn!("Failed to generate thumbnail for {}: {}", path.display(), e);
-                        None
-                    }
-                }
-            });
-
-        // Create image record
         let new_image = NewImage {
             id: uuid::Uuid::new_v4().to_string(),
             user_id: user_id.clone(),
-            collection_id: None, // We'll use the join table
+            collection_id: None,
             filename,
             url,
             summary,
@@ -705,7 +794,7 @@ pub async fn bulk_scan_directory(
             location: metadata.ra.as_ref().zip(metadata.dec.as_ref()).map(|(ra, dec)| format!("{}, {}", ra, dec)),
             annotations: None,
             metadata: metadata_json,
-            thumbnail,
+            thumbnail: processed.thumbnail,
         };
 
         // Insert image
@@ -714,7 +803,7 @@ pub async fn bulk_scan_directory(
             Err(e) => {
                 result.errors.push(format!(
                     "Failed to create image {}: {}",
-                    discovered.base_name, e
+                    processed.discovered.base_name, e
                 ));
                 result.images_skipped += 1;
                 continue;

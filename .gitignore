@@ -3,6 +3,7 @@
 
 legacy/ui/backups
 legacy/ui/logs
+src-tauri/logs
 logs
 scratch
 

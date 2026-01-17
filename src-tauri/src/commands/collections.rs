@@ -26,6 +26,7 @@ pub struct UpdateCollectionInput {
     pub favorite: Option<bool>,
     pub tags: Option<String>,
     pub metadata: Option<String>,
+    pub archived: Option<bool>,
 }
 
 #[tauri::command]
@@ -62,6 +63,7 @@ pub fn create_collection(
         favorite: false,
         tags: input.tags,
         metadata: None,
+        archived: false,
     };
 
     repository::create_collection(&mut conn, &new_collection)
@@ -83,6 +85,7 @@ pub fn update_collection(
         favorite: input.favorite,
         tags: input.tags,
         metadata: input.metadata,
+        archived: input.archived,
     };
 
     repository::update_collection(&mut conn, &input.id, &update)

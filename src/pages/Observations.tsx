@@ -35,7 +35,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, FolderOpen, FolderSearch, Loader2 } from "lucide-react";
+import { Plus, FolderOpen, FolderSearch, Loader2, MoreHorizontal } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
+import { toast } from "sonner";
 import { useCollections, useCreateCollection } from "@/hooks/use-collections";
 import { useImages } from "@/hooks/use-images";
 import type { Collection, BulkScanPreview, Image } from "@/lib/tauri/commands";
@@ -82,6 +90,7 @@ export default function ObservationsPage() {
   // Image counts and preview thumbnails for collections
   const [imageCounts, setImageCounts] = useState<Record<string, number>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, Image | null>>({});
+  const [showArchived, setShowArchived] = useState(false);
 
   // Fetch image counts and preview images for all collections
   useEffect(() => {
@@ -130,8 +139,12 @@ export default function ObservationsPage() {
     return previewImages[collectionId] || null;
   };
 
-  // Group collections by month
-  const groupedCollections = groupCollectionsByMonth(collections);
+  // Filter and group collections by month
+  const filteredCollections = showArchived
+    ? collections.filter((c) => c.archived)
+    : collections.filter((c) => !c.archived);
+  const archivedCount = collections.filter((c) => c.archived).length;
+  const groupedCollections = groupCollectionsByMonth(filteredCollections);
 
   const handleCreateCollection = async () => {
     if (!newCollectionName.trim()) return;
@@ -331,8 +344,20 @@ export default function ObservationsPage() {
 
       {/* Header */}
       <div className="flex justify-between items-start mb-4">
-        <h1 className="text-3xl font-bold text-white">Observation Log</h1>
+        <h1 className="text-3xl font-bold text-white">
+          {showArchived ? "Archived Observations" : "Observation Log"}
+        </h1>
         <div className="flex gap-2">
+          {/* Archive Toggle */}
+          {archivedCount > 0 && (
+            <Button
+              variant={showArchived ? "default" : "outline"}
+              onClick={() => setShowArchived(!showArchived)}
+              className={showArchived ? "" : "bg-transparent border-gray-600 text-white hover:bg-gray-800"}
+            >
+              {showArchived ? "Show Active" : `Archived (${archivedCount})`}
+            </Button>
+          )}
           {/* Bulk Scan Dialog */}
           <Dialog
             open={isScanDialogOpen}
@@ -690,6 +715,7 @@ export default function ObservationsPage() {
                     collection={collection}
                     imageCount={getImageCount(collection.id)}
                     previewImage={getPreviewImage(collection.id)}
+                    onRefresh={refetch}
                   />
                 ))}
               </div>
@@ -705,12 +731,65 @@ function CollectionCard({
   collection,
   imageCount,
   previewImage,
+  onRefresh,
 }: {
   collection: Collection;
   imageCount: number;
   previewImage: Image | null;
+  onRefresh: () => void;
 }) {
   const tags = parseTags(collection.tags);
+  const updateCollection = useUpdateCollection();
+  const deleteCollection = useDeleteCollection();
+
+  const handleToggleFavorite = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await updateCollection.mutateAsync({
+        id: collection.id,
+        favorite: !collection.favorite,
+      });
+      toast.success(
+        collection.favorite
+          ? `Removed ${collection.name} from favorites`
+          : `Added ${collection.name} to favorites`
+      );
+    } catch (err) {
+      toast.error("Failed to update collection");
+    }
+  };
+
+  const handleToggleArchived = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await updateCollection.mutateAsync({
+        id: collection.id,
+        archived: !collection.archived,
+      });
+      toast.success(
+        collection.archived
+          ? `Unarchived ${collection.name}`
+          : `Archived ${collection.name}`
+      );
+      onRefresh();
+    } catch (err) {
+      toast.error("Failed to update collection");
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm(`Delete "${collection.name}"? This cannot be undone.`)) return;
+    try {
+      await deleteCollection.mutateAsync(collection.id);
+      toast.success(`Deleted ${collection.name}`);
+    } catch (err) {
+      toast.error("Failed to delete collection");
+    }
+  };
 
   // Try to get session date from metadata, fall back to created_at
   const getSessionDate = (): Date => {
@@ -737,8 +816,9 @@ function CollectionCard({
 
   return (
     <div>
-      <Link to={`/collections/${collection.id}`}>
-        <div className="overflow-hidden rounded-lg transition-transform hover:scale-[1.02] cursor-pointer">
+      <div className="overflow-hidden rounded-lg transition-transform hover:scale-[1.02] cursor-pointer relative">
+        {/* Clickable area - the entire card except the menu */}
+        <Link to={`/collections/${collection.id}`} className="block">
           {/* Image area */}
           <div className="relative aspect-[4/3] bg-slate-700">
             {/* Preview thumbnail */}
@@ -751,8 +831,8 @@ function CollectionCard({
             )}
 
             {/* Favorite indicator */}
-            {previewImage?.favorite && (
-              <div className="absolute top-2 right-2 text-yellow-400">
+            {collection.favorite && (
+              <div className="absolute top-2 right-12 text-yellow-400">
                 <svg className="w-5 h-5 fill-current" viewBox="0 0 20 20">
                   <path d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z" />
                 </svg>
@@ -761,7 +841,7 @@ function CollectionCard({
 
             {/* Collection title overlay */}
             <div className="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/60 to-transparent">
-              <h3 className="font-semibold text-white">{collection.name}</h3>
+              <h3 className="font-semibold text-white pr-8">{collection.name}</h3>
             </div>
 
             {/* Empty collection placeholder */}
@@ -793,8 +873,30 @@ function CollectionCard({
               )}
             </div>
           </div>
+        </Link>
+
+        {/* Menu - positioned outside the Link to prevent navigation */}
+        <div className="absolute top-2 right-2 z-10">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="p-1 rounded hover:bg-white/20 transition-colors bg-black/30">
+                <MoreHorizontal className="h-5 w-5 text-white" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700">
+              <DropdownMenuItem onClick={handleToggleFavorite} className="text-white hover:bg-slate-700">
+                {collection.favorite ? "Remove from Favorites" : "Add to Favorites"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleToggleArchived} className="text-white hover:bg-slate-700">
+                {collection.archived ? "Unarchive" : "Archive"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDelete} className="text-red-400 hover:bg-slate-700">
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </Link>
+      </div>
       {/* Date below the card */}
       <p className="text-center text-gray-400 text-sm mt-2">{formattedDate}</p>
     </div>

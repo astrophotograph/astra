@@ -77,6 +77,7 @@ pub struct Collection {
     pub metadata: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -91,6 +92,7 @@ pub struct NewCollection {
     pub favorite: bool,
     pub tags: Option<String>,
     pub metadata: Option<String>,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize, Default)]
@@ -103,6 +105,7 @@ pub struct UpdateCollection {
     pub favorite: Option<bool>,
     pub tags: Option<String>,
     pub metadata: Option<String>,
+    pub archived: Option<bool>,
 }
 
 // ============================================================================

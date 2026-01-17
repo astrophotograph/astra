@@ -79,6 +79,7 @@ export interface Collection {
   is_synced: boolean;
   created_at: string;
   updated_at: string;
+  archived: boolean;
 }
 
 export interface CreateCollectionInput {
@@ -98,6 +99,7 @@ export interface UpdateCollectionInput {
   favorite?: boolean;
   tags?: string;
   metadata?: string;
+  archived?: boolean;
 }
 
 export interface Image {
