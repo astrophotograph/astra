@@ -85,12 +85,16 @@ export default function ObservationsPage() {
     total: number;
     currentFile: string;
     percent: number;
+    skipped?: number;
+    cancelled?: boolean;
   } | null>(null);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   // Image counts and preview thumbnails for collections
   const [imageCounts, setImageCounts] = useState<Record<string, number>>({});
   const [previewImages, setPreviewImages] = useState<Record<string, Image | null>>({});
   const [showArchived, setShowArchived] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   // Fetch image counts and preview images for all collections
   useEffect(() => {
@@ -139,12 +143,43 @@ export default function ObservationsPage() {
     return previewImages[collectionId] || null;
   };
 
-  // Filter and group collections by month
-  const filteredCollections = showArchived
-    ? collections.filter((c) => c.archived)
-    : collections.filter((c) => !c.archived);
+  // Extract all unique tags from collections
+  const allTags = Array.from(
+    new Set(
+      collections.flatMap((c) => parseTags(c.tags))
+    )
+  ).sort();
+
+  // Filter collections by archived status and selected tags
+  const filteredCollections = collections.filter((c) => {
+    // Filter by archived status
+    if (showArchived && !c.archived) return false;
+    if (!showArchived && c.archived) return false;
+
+    // Filter by selected tags (if any)
+    if (selectedTags.length > 0) {
+      const collectionTags = parseTags(c.tags);
+      // Collection must have at least one of the selected tags
+      if (!selectedTags.some((tag) => collectionTags.includes(tag))) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
   const archivedCount = collections.filter((c) => c.archived).length;
   const groupedCollections = groupCollectionsByMonth(filteredCollections);
+
+  const toggleTag = (tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
+    );
+  };
+
+  const clearTagFilters = () => {
+    setSelectedTags([]);
+  };
 
   const handleCreateCollection = async () => {
     if (!newCollectionName.trim()) return;
@@ -220,12 +255,16 @@ export default function ObservationsPage() {
         total: number;
         current_file: string;
         percent: number;
+        skipped?: number;
+        cancelled?: boolean;
       }>("scan-progress", (event) => {
         setScanProgress({
           current: event.payload.current,
           total: event.payload.total,
           currentFile: event.payload.current_file,
           percent: event.payload.percent,
+          skipped: event.payload.skipped,
+          cancelled: event.payload.cancelled,
         });
       });
     } catch (err) {
@@ -266,7 +305,17 @@ export default function ObservationsPage() {
         unlisten();
       }
       setIsScanning(false);
+      setIsCancelling(false);
       setScanProgress(null);
+    }
+  };
+
+  const handleCancelScan = async () => {
+    setIsCancelling(true);
+    try {
+      await scanApi.cancel();
+    } catch (error) {
+      console.error("Failed to cancel scan:", error);
     }
   };
 
@@ -285,38 +334,74 @@ export default function ObservationsPage() {
       {isScanning && (
         <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center">
           <div className="bg-slate-800 rounded-lg p-8 max-w-md w-full mx-4 shadow-2xl border border-slate-700">
-            <h2 className="text-xl font-semibold text-white mb-4 text-center">Importing Images...</h2>
+            <h2 className="text-xl font-semibold text-white mb-4 text-center">
+              {isCancelling ? "Cancelling..." : "Importing Images..."}
+            </h2>
 
             {/* Progress bar */}
             <div className="mb-4">
               <div className="flex justify-between text-sm text-gray-400 mb-2">
                 <span>
                   {scanProgress
-                    ? `${scanProgress.current} of ${scanProgress.total}`
-                    : "Preparing..."}
+                    ? scanProgress.total > 0
+                      ? `${scanProgress.current} of ${scanProgress.total}`
+                      : "Preparing..."
+                    : "Starting..."}
                 </span>
-                <span>{scanProgress ? `${scanProgress.percent}%` : "0%"}</span>
+                <span>
+                  {scanProgress
+                    ? scanProgress.total > 0
+                      ? `${scanProgress.percent}%`
+                      : ""
+                    : ""}
+                </span>
               </div>
               <div className="w-full bg-slate-700 rounded-full h-3 overflow-hidden">
-                <div
-                  className="bg-teal-500 h-full rounded-full transition-all duration-300 ease-out"
-                  style={{ width: `${scanProgress?.percent ?? 0}%` }}
-                />
+                {scanProgress && scanProgress.total === 0 ? (
+                  // Indeterminate progress bar animation during preparation
+                  <div className="h-full w-1/3 bg-teal-500 rounded-full animate-pulse" />
+                ) : (
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ease-out ${
+                      isCancelling ? "bg-yellow-500" : "bg-teal-500"
+                    }`}
+                    style={{ width: `${scanProgress?.percent ?? 0}%` }}
+                  />
+                )}
               </div>
             </div>
 
-            {/* Current file */}
+            {/* Current file / status message */}
             {scanProgress && (
               <p className="text-gray-400 text-sm text-center truncate">
-                Processing: {scanProgress.currentFile}
+                {scanProgress.currentFile}
+              </p>
+            )}
+
+            {/* Skipped count */}
+            {scanProgress?.skipped !== undefined && scanProgress.skipped > 0 && (
+              <p className="text-yellow-400 text-sm text-center mt-2">
+                {scanProgress.skipped} duplicate{scanProgress.skipped !== 1 ? "s" : ""} skipped
               </p>
             )}
 
             {!scanProgress && (
               <p className="text-gray-400 text-sm text-center">
-                Scanning directory and generating thumbnails...
+                Initializing...
               </p>
             )}
+
+            {/* Cancel button */}
+            <div className="mt-6 text-center">
+              <Button
+                variant="outline"
+                onClick={handleCancelScan}
+                disabled={isCancelling}
+                className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              >
+                {isCancelling ? "Cancelling..." : "Cancel Import"}
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -679,11 +764,46 @@ export default function ObservationsPage() {
       </div>
 
       {/* Description */}
-      <p className="text-gray-300 mb-8 max-w-4xl">
+      <p className="text-gray-300 mb-4 max-w-4xl">
         Daily observation logs. Photos and some commentary. Most of these include just the raw,
         out-of-scope photos without any formal processing. At times, it may include a combination
         of out-of-scope and post-processed photos. But they will always be clearly marked.
       </p>
+
+      {/* Tag Filters */}
+      {allTags.length > 0 && (
+        <div className="mb-8">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-gray-400 text-sm mr-2">Filter by tag:</span>
+            {allTags.map((tag) => (
+              <button
+                key={tag}
+                onClick={() => toggleTag(tag)}
+                className={`px-3 py-1 rounded-full text-sm transition-colors ${
+                  selectedTags.includes(tag)
+                    ? "bg-teal-600 text-white"
+                    : "bg-slate-700 text-gray-300 hover:bg-slate-600"
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+            {selectedTags.length > 0 && (
+              <button
+                onClick={clearTagFilters}
+                className="px-3 py-1 rounded-full text-sm bg-slate-800 text-gray-400 hover:bg-slate-700 hover:text-white transition-colors"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+          {selectedTags.length > 0 && (
+            <p className="text-gray-500 text-sm mt-2">
+              Showing {filteredCollections.length} collection{filteredCollections.length !== 1 ? "s" : ""} with tag{selectedTags.length > 1 ? "s" : ""}: {selectedTags.join(", ")}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Collections */}
       {isLoading ? (

@@ -7,10 +7,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, State};
 use tokio::sync::Semaphore;
 use walkdir::WalkDir;
+
+/// Global cancellation flag for scan operations
+static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 use crate::db::models::{NewCollection, NewCollectionImage, NewImage};
 use crate::db::repository;
@@ -92,6 +96,20 @@ pub struct ScanProgress {
     pub current_file: String,
     /// Percentage complete (0-100)
     pub percent: u8,
+    /// Number of images skipped (duplicates)
+    #[serde(default)]
+    pub skipped: usize,
+    /// Whether the scan was cancelled
+    #[serde(default)]
+    pub cancelled: bool,
+}
+
+/// Cancel an ongoing scan operation
+#[tauri::command]
+pub fn cancel_scan() -> Result<(), String> {
+    SCAN_CANCELLED.store(true, Ordering::SeqCst);
+    log::info!("Scan cancellation requested");
+    Ok(())
 }
 
 /// Metadata extracted from a FITS file
@@ -486,6 +504,9 @@ pub async fn bulk_scan_directory(
     state: State<'_, AppState>,
     input: BulkScanInput,
 ) -> Result<BulkScanResult, String> {
+    // Reset cancellation flag at start
+    SCAN_CANCELLED.store(false, Ordering::SeqCst);
+
     // Clone what we need for the async block
     let db_pool = state.db.clone();
     let user_id = state.user_id.clone();
@@ -502,11 +523,44 @@ pub async fn bulk_scan_directory(
         errors: Vec::new(),
     };
 
+    // Emit "Scanning directory" progress
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: 0,
+        current_file: format!("Scanning directory: {}...", directory.display()),
+        percent: 0,
+        skipped: 0,
+        cancelled: false,
+    });
+
     // Scan directory for images
     let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
-    let total_images = discovered_images.len();
+    let total_discovered = discovered_images.len();
 
-    if total_images == 0 {
+    if total_discovered == 0 {
+        let _ = window.emit("scan-progress", &ScanProgress {
+            current: 0,
+            total: 0,
+            current_file: "No images found".to_string(),
+            percent: 100,
+            skipped: 0,
+            cancelled: false,
+        });
+        return Ok(result);
+    }
+
+    // Emit "Found images" progress
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_discovered,
+        current_file: format!("Found {} images, loading database...", total_discovered),
+        percent: 0,
+        skipped: 0,
+        cancelled: false,
+    });
+
+    // Check for cancellation
+    if SCAN_CANCELLED.load(Ordering::SeqCst) {
         return Ok(result);
     }
 
@@ -518,6 +572,21 @@ pub async fn bulk_scan_directory(
             .into_iter()
             .collect()
     };
+
+    // Emit progress after loading URLs
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_discovered,
+        current_file: format!("Loaded {} existing image records...", existing_urls.len()),
+        percent: 0,
+        skipped: 0,
+        cancelled: false,
+    });
+
+    // Check for cancellation
+    if SCAN_CANCELLED.load(Ordering::SeqCst) {
+        return Ok(result);
+    }
 
     // Pre-load URL to image ID mapping for images we need to add to collections
     let url_to_image_id: HashMap<String, String> = {
@@ -539,19 +608,95 @@ pub async fn bulk_scan_directory(
             .collect()
     };
 
-    // Emit initial progress
+    // Emit "Filtering duplicates" progress
     let _ = window.emit("scan-progress", &ScanProgress {
         current: 0,
-        total: total_images,
-        current_file: "Starting parallel processing...".to_string(),
+        total: total_discovered,
+        current_file: "Checking for duplicates...".to_string(),
         percent: 0,
+        skipped: 0,
+        cancelled: false,
     });
 
-    // === PHASE 2: Parallel processing of FITS metadata and thumbnails ===
-    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_PROCESSING));
-    let mut processing_tasks = Vec::with_capacity(total_images);
+    // Check for cancellation
+    if SCAN_CANCELLED.load(Ordering::SeqCst) {
+        return Ok(result);
+    }
+
+    // === PRE-FILTER: Separate new images from duplicates ===
+    // This ensures progress bar shows actual work to be done
+    let mut new_images: Vec<DiscoveredImage> = Vec::new();
+    let mut duplicate_images: Vec<DiscoveredImage> = Vec::new();
 
     for discovered in discovered_images {
+        // Build URL for duplicate checking
+        let url = discovered
+            .jpeg_path
+            .as_ref()
+            .or(discovered.fits_path.as_ref())
+            .map(|p| p.to_string_lossy().to_string());
+
+        if let Some(ref url_str) = url {
+            if existing_urls.contains(url_str) {
+                duplicate_images.push(discovered);
+            } else {
+                new_images.push(discovered);
+            }
+        } else {
+            new_images.push(discovered);
+        }
+    }
+
+    let skipped_duplicates = duplicate_images.len();
+    result.images_skipped = skipped_duplicates;
+    let total_to_process = new_images.len();
+
+    // Emit initial progress showing duplicates already skipped
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_discovered,
+        current_file: format!("Found {} new images ({} duplicates skipped)", total_to_process, skipped_duplicates),
+        percent: 0,
+        skipped: skipped_duplicates,
+        cancelled: false,
+    });
+
+    // If all images are duplicates, we're done
+    if total_to_process == 0 {
+        let _ = window.emit("scan-progress", &ScanProgress {
+            current: total_discovered,
+            total: total_discovered,
+            current_file: "All images already exist".to_string(),
+            percent: 100,
+            skipped: skipped_duplicates,
+            cancelled: false,
+        });
+        return Ok(result);
+    }
+
+    // Check for cancellation
+    if SCAN_CANCELLED.load(Ordering::SeqCst) {
+        let _ = window.emit("scan-progress", &ScanProgress {
+            current: 0,
+            total: total_discovered,
+            current_file: "Cancelled".to_string(),
+            percent: 0,
+            skipped: skipped_duplicates,
+            cancelled: true,
+        });
+        return Ok(result);
+    }
+
+    // === PHASE 2: Parallel processing of FITS metadata and thumbnails (new images only) ===
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_PROCESSING));
+    let mut processing_tasks = Vec::with_capacity(total_to_process);
+
+    for discovered in new_images {
+        // Check for cancellation before spawning new tasks
+        if SCAN_CANCELLED.load(Ordering::SeqCst) {
+            break;
+        }
+
         let permit = semaphore.clone().acquire_owned().await.unwrap();
         let task = tokio::spawn(async move {
             let result = process_single_image(discovered).await;
@@ -562,39 +707,80 @@ pub async fn bulk_scan_directory(
     }
 
     // Collect all processed results
-    let mut processed_images = Vec::with_capacity(total_images);
+    let mut processed_images = Vec::with_capacity(total_to_process);
     for (index, task) in processing_tasks.into_iter().enumerate() {
+        // Check for cancellation
+        if SCAN_CANCELLED.load(Ordering::SeqCst) {
+            task.abort();
+            let _ = window.emit("scan-progress", &ScanProgress {
+                current: skipped_duplicates + index,
+                total: total_discovered,
+                current_file: "Cancelled".to_string(),
+                percent: ((skipped_duplicates + index) * 100 / total_discovered) as u8,
+                skipped: skipped_duplicates,
+                cancelled: true,
+            });
+            return Ok(result);
+        }
+
         match task.await {
             Ok(processed) => {
-                // Emit progress
+                // Emit progress (include skipped in the count for accurate percentage)
+                let progress_current = skipped_duplicates + index + 1;
                 let _ = window.emit("scan-progress", &ScanProgress {
-                    current: index + 1,
-                    total: total_images,
+                    current: progress_current,
+                    total: total_discovered,
                     current_file: processed.discovered.base_name.clone(),
-                    percent: ((index + 1) * 50 / total_images) as u8, // 0-50% for processing
+                    percent: (progress_current * 50 / total_discovered) as u8, // 0-50% for processing
+                    skipped: skipped_duplicates,
+                    cancelled: false,
                 });
                 processed_images.push(processed);
             }
             Err(e) => {
+                if e.is_cancelled() {
+                    // Task was cancelled, don't count as error
+                    continue;
+                }
                 result.errors.push(format!("Task failed: {}", e));
                 result.images_skipped += 1;
             }
         }
     }
 
+    let total_images = total_discovered;
+
     // === PHASE 3: Sequential database operations ===
     let mut conn = db_pool.get().map_err(|e| e.to_string())?;
 
     // Track collections by session date to avoid duplicates
     let mut session_collections: HashMap<String, String> = HashMap::new();
+    let processed_count = processed_images.len();
 
     for (index, processed) in processed_images.into_iter().enumerate() {
+        // Check for cancellation
+        if SCAN_CANCELLED.load(Ordering::SeqCst) {
+            let _ = window.emit("scan-progress", &ScanProgress {
+                current: skipped_duplicates + index,
+                total: total_images,
+                current_file: "Cancelled".to_string(),
+                percent: ((skipped_duplicates + index) * 100 / total_images) as u8,
+                skipped: result.images_skipped,
+                cancelled: true,
+            });
+            return Ok(result);
+        }
+
         // Emit progress (50-100% for DB operations)
+        // Calculate progress: skipped duplicates are already counted, now add processed items
+        let progress_current = skipped_duplicates + index + 1;
         let _ = window.emit("scan-progress", &ScanProgress {
-            current: index + 1,
+            current: progress_current,
             total: total_images,
             current_file: processed.discovered.base_name.clone(),
-            percent: (50 + (index + 1) * 50 / total_images) as u8,
+            percent: (50 + (index + 1) * 50 / processed_count.max(1)) as u8,
+            skipped: result.images_skipped,
+            cancelled: false,
         });
 
         // Skip if processing failed
@@ -610,7 +796,7 @@ pub async fn bulk_scan_directory(
             continue;
         };
 
-        // Build URL for duplicate checking
+        // Build URL (already validated as non-duplicate in pre-filter phase)
         let url = processed.discovered
             .jpeg_path
             .as_ref()

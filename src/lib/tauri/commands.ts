@@ -548,6 +548,11 @@ export const scanApi = {
    */
   scan: (input: BulkScanInput) =>
     invoke<BulkScanResult>("bulk_scan_directory", { input }),
+
+  /**
+   * Cancel an ongoing scan operation
+   */
+  cancel: () => invoke<void>("cancel_scan"),
 };
 
 // =============================================================================
