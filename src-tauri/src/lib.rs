@@ -104,6 +104,7 @@ pub fn run() {
             // Schedule commands
             commands::get_schedules,
             commands::get_active_schedule,
+            commands::get_active_schedules,
             commands::get_schedule,
             commands::create_schedule,
             commands::update_schedule,
@@ -126,6 +127,9 @@ pub fn run() {
             commands::bulk_scan_directory,
             commands::preview_bulk_scan,
             commands::cancel_scan,
+            // Raw file collection commands
+            commands::collect_raw_files,
+            commands::cancel_collect,
             // Plate solving commands
             commands::plate_solve_image,
             commands::query_sky_region,

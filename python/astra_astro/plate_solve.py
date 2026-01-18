@@ -133,16 +133,18 @@ def _extract_wcs_info(wcs: WCS, image_width: int, image_height: int) -> dict:
 def solve_with_nova(
     image_path: str,
     api_key: str,
+    api_url: Optional[str] = None,
     scale_lower: Optional[float] = None,
     scale_upper: Optional[float] = None,
     timeout: int = 300,
 ) -> PlateSolveResult:
     """
-    Plate solve an image using nova.astrometry.net API.
+    Plate solve an image using nova.astrometry.net API or a local instance.
 
     Args:
         image_path: Path to the image file
         api_key: Astrometry.net API key
+        api_url: Custom API URL for local astrometry.net instance (optional)
         scale_lower: Lower bound of image scale (arcsec/pixel)
         scale_upper: Upper bound of image scale (arcsec/pixel)
         timeout: Maximum time to wait for solution (seconds)
@@ -155,6 +157,17 @@ def solve_with_nova(
     try:
         ast = AstrometryNet()
         ast.api_key = api_key
+
+        # Set custom API URL if provided (for local astrometry.net instance)
+        if api_url:
+            # Normalize URL (remove trailing slash)
+            base_url = api_url.rstrip("/")
+            # Set both URL attributes - API_URL needs /api suffix
+            ast.URL = base_url
+            if base_url.endswith("/api"):
+                ast.API_URL = base_url
+            else:
+                ast.API_URL = f"{base_url}/api"
 
         # Build solve parameters
         solve_kwargs = {
@@ -470,6 +483,7 @@ def solve_image(
     image_path: str,
     solver: str = "nova",
     api_key: Optional[str] = None,
+    api_url: Optional[str] = None,
     scale_lower: Optional[float] = None,
     scale_upper: Optional[float] = None,
     timeout: int = 300,
@@ -481,6 +495,7 @@ def solve_image(
         image_path: Path to the image file
         solver: Solver to use ("nova", "local", or "astap")
         api_key: API key for nova.astrometry.net (required for nova)
+        api_url: Custom API URL for local astrometry.net instance (optional)
         scale_lower: Lower bound of image scale (arcsec/pixel), optional hint
         scale_upper: Upper bound of image scale (arcsec/pixel), optional hint
         timeout: Maximum time to wait for solution (seconds)
@@ -506,7 +521,7 @@ def solve_image(
                 solver="nova",
                 error_message="API key required for nova.astrometry.net",
             ).to_dict()
-        result = solve_with_nova(image_path, api_key, scale_lower, scale_upper, timeout)
+        result = solve_with_nova(image_path, api_key, api_url, scale_lower, scale_upper, timeout)
     elif solver_lower == "local":
         result = solve_with_local(image_path, scale_lower, scale_upper, timeout)
     elif solver_lower == "astap":

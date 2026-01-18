@@ -16,12 +16,27 @@ use walkdir::WalkDir;
 /// Global cancellation flag for scan operations
 static SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
 
-use crate::db::models::{NewCollection, NewCollectionImage, NewImage};
+use crate::db::models::{NewCollection, NewCollectionImage, NewImage, NewScannedDirectory};
 use crate::db::repository;
 use crate::state::AppState;
 
+/// Get the modification time of a directory as Unix timestamp
+fn get_dir_mtime(path: &Path) -> Option<i64> {
+    path.metadata()
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+}
+
 /// Maximum number of concurrent CPU-intensive tasks (FITS parsing + thumbnail generation)
 const MAX_PARALLEL_PROCESSING: usize = 4;
+
+/// Number of images to process per batch (for large imports)
+const BATCH_SIZE: usize = 100;
+
+/// How often to emit progress during directory scanning (every N files)
+const SCAN_PROGRESS_INTERVAL: usize = 50;
 
 /// Maximum thumbnail dimension (width or height)
 const THUMBNAIL_SIZE: u32 = 300;
@@ -346,21 +361,42 @@ fn generate_collection_name(session_date: &NaiveDate, _object_name: Option<&str>
     session_date.format("%Y-%m-%d").to_string()
 }
 
-/// Scan a directory for image files
-fn scan_directory(directory: &Path, stacked_only: bool, max_files: Option<usize>) -> Vec<DiscoveredImage> {
+/// Scan a directory for image files with progress callback
+/// The callback receives (files_scanned, images_found) periodically
+fn scan_directory_with_progress<F>(
+    directory: &Path,
+    stacked_only: bool,
+    max_files: Option<usize>,
+    cancelled: &AtomicBool,
+    mut on_progress: F,
+) -> Vec<DiscoveredImage>
+where
+    F: FnMut(usize, usize), // (files_scanned, images_found)
+{
     let mut images: HashMap<String, DiscoveredImage> = HashMap::new();
+    let mut files_scanned: usize = 0;
 
     for entry in WalkDir::new(directory)
         .follow_links(true)
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        // Check for cancellation periodically
+        if files_scanned % SCAN_PROGRESS_INTERVAL == 0 {
+            if cancelled.load(Ordering::SeqCst) {
+                break;
+            }
+            on_progress(files_scanned, images.len());
+        }
+
         let path = entry.path();
 
         // Skip directories
         if path.is_dir() {
             continue;
         }
+
+        files_scanned += 1;
 
         // Get the filename
         let filename = path
@@ -438,6 +474,9 @@ fn scan_directory(directory: &Path, stacked_only: bool, max_files: Option<usize>
             }
         }
     }
+
+    // Final progress update
+    on_progress(files_scanned, images.len());
 
     // Apply max_files limit to the result
     let mut result: Vec<DiscoveredImage> = images.into_values().collect();
@@ -527,14 +566,30 @@ pub async fn bulk_scan_directory(
     let _ = window.emit("scan-progress", &ScanProgress {
         current: 0,
         total: 0,
-        current_file: format!("Scanning directory: {}...", directory.display()),
+        current_file: format!("Scanning: {}...", directory.display()),
         percent: 0,
         skipped: 0,
         cancelled: false,
     });
 
-    // Scan directory for images
-    let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
+    // Scan directory for images with progress updates
+    let window_clone = window.clone();
+    let discovered_images = scan_directory_with_progress(
+        &directory,
+        input.stacked_only,
+        input.max_files,
+        &SCAN_CANCELLED,
+        |files_scanned, images_found| {
+            let _ = window_clone.emit("scan-progress", &ScanProgress {
+                current: 0,
+                total: 0,
+                current_file: format!("Scanned {} files, found {} images...", files_scanned, images_found),
+                percent: 0,
+                skipped: 0,
+                cancelled: false,
+            });
+        },
+    );
     let total_discovered = discovered_images.len();
 
     if total_discovered == 0 {
@@ -549,13 +604,102 @@ pub async fn bulk_scan_directory(
         return Ok(result);
     }
 
+    // === DIRECTORY CACHE CHECK: Skip unchanged directories ===
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_discovered,
+        current_file: "Checking directory cache...".to_string(),
+        percent: 0,
+        skipped: 0,
+        cancelled: false,
+    });
+
+    // Group images by directory and get modification times
+    let mut dir_images: HashMap<PathBuf, Vec<DiscoveredImage>> = HashMap::new();
+    let mut dir_mtimes: HashMap<PathBuf, i64> = HashMap::new();
+
+    for img in discovered_images {
+        let dir = img.directory.clone();
+        if !dir_mtimes.contains_key(&dir) {
+            if let Some(mtime) = get_dir_mtime(&dir) {
+                dir_mtimes.insert(dir.clone(), mtime);
+            }
+        }
+        dir_images.entry(dir).or_default().push(img);
+    }
+
+    // Load cached directory info and filter out unchanged directories
+    let mut discovered_images: Vec<DiscoveredImage> = Vec::new();
+    let mut unchanged_dirs: Vec<PathBuf> = Vec::new();
+    let mut changed_dirs: HashMap<PathBuf, i64> = HashMap::new();
+    let mut skipped_from_cache: usize = 0;
+
+    {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+
+        for (dir, images) in dir_images {
+            let dir_path_str = dir.to_string_lossy().to_string();
+            let current_mtime = dir_mtimes.get(&dir).copied().unwrap_or(0);
+
+            // Check cache for this directory
+            if let Ok(Some(cached)) = repository::get_scanned_directory(&mut conn, &user_id, &dir_path_str) {
+                if cached.fs_modified_at == current_mtime {
+                    // Directory unchanged - skip these images
+                    skipped_from_cache += images.len();
+                    unchanged_dirs.push(dir);
+                    continue;
+                }
+            }
+
+            // Directory is new or changed - include its images
+            changed_dirs.insert(dir, current_mtime);
+            discovered_images.extend(images);
+        }
+    }
+
+    let total_after_cache = discovered_images.len();
+    result.images_skipped += skipped_from_cache;
+
+    // Emit progress after cache check
+    let _ = window.emit("scan-progress", &ScanProgress {
+        current: 0,
+        total: total_discovered,
+        current_file: if skipped_from_cache > 0 {
+            format!(
+                "Found {} images in {} changed directories ({} skipped from {} unchanged)",
+                total_after_cache,
+                changed_dirs.len(),
+                skipped_from_cache,
+                unchanged_dirs.len()
+            )
+        } else {
+            format!("Found {} images, loading database...", total_after_cache)
+        },
+        percent: 0,
+        skipped: skipped_from_cache,
+        cancelled: false,
+    });
+
+    // If all directories are unchanged, we're done
+    if total_after_cache == 0 {
+        let _ = window.emit("scan-progress", &ScanProgress {
+            current: total_discovered,
+            total: total_discovered,
+            current_file: format!("All {} directories unchanged since last scan", unchanged_dirs.len()),
+            percent: 100,
+            skipped: skipped_from_cache,
+            cancelled: false,
+        });
+        return Ok(result);
+    }
+
     // Emit "Found images" progress
     let _ = window.emit("scan-progress", &ScanProgress {
         current: 0,
         total: total_discovered,
-        current_file: format!("Found {} images, loading database...", total_discovered),
+        current_file: format!("Loading database ({} images to check)...", total_after_cache),
         percent: 0,
-        skipped: 0,
+        skipped: skipped_from_cache,
         cancelled: false,
     });
 
@@ -687,121 +831,109 @@ pub async fn bulk_scan_directory(
         return Ok(result);
     }
 
-    // === PHASE 2: Parallel processing of FITS metadata and thumbnails (new images only) ===
+    // === BATCH PROCESSING: Process images in batches to manage memory ===
     let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_PROCESSING));
-    let mut processing_tasks = Vec::with_capacity(total_to_process);
+    let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+    let mut session_collections: HashMap<String, String> = HashMap::new();
+    let mut images_processed: usize = 0;
+    let total_batches = (total_to_process + BATCH_SIZE - 1) / BATCH_SIZE;
 
-    for discovered in new_images {
-        // Check for cancellation before spawning new tasks
+    // Process images in batches
+    for (batch_idx, batch) in new_images.chunks(BATCH_SIZE).enumerate() {
+        // Check for cancellation at start of each batch
         if SCAN_CANCELLED.load(Ordering::SeqCst) {
-            break;
-        }
-
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
-        let task = tokio::spawn(async move {
-            let result = process_single_image(discovered).await;
-            drop(permit); // Release semaphore
-            result
-        });
-        processing_tasks.push(task);
-    }
-
-    // Collect all processed results
-    let mut processed_images = Vec::with_capacity(total_to_process);
-    for (index, task) in processing_tasks.into_iter().enumerate() {
-        // Check for cancellation
-        if SCAN_CANCELLED.load(Ordering::SeqCst) {
-            task.abort();
             let _ = window.emit("scan-progress", &ScanProgress {
-                current: skipped_duplicates + index,
+                current: skipped_duplicates + images_processed,
                 total: total_discovered,
                 current_file: "Cancelled".to_string(),
-                percent: ((skipped_duplicates + index) * 100 / total_discovered) as u8,
-                skipped: skipped_duplicates,
-                cancelled: true,
-            });
-            return Ok(result);
-        }
-
-        match task.await {
-            Ok(processed) => {
-                // Emit progress (include skipped in the count for accurate percentage)
-                let progress_current = skipped_duplicates + index + 1;
-                let _ = window.emit("scan-progress", &ScanProgress {
-                    current: progress_current,
-                    total: total_discovered,
-                    current_file: processed.discovered.base_name.clone(),
-                    percent: (progress_current * 50 / total_discovered) as u8, // 0-50% for processing
-                    skipped: skipped_duplicates,
-                    cancelled: false,
-                });
-                processed_images.push(processed);
-            }
-            Err(e) => {
-                if e.is_cancelled() {
-                    // Task was cancelled, don't count as error
-                    continue;
-                }
-                result.errors.push(format!("Task failed: {}", e));
-                result.images_skipped += 1;
-            }
-        }
-    }
-
-    let total_images = total_discovered;
-
-    // === PHASE 3: Sequential database operations ===
-    let mut conn = db_pool.get().map_err(|e| e.to_string())?;
-
-    // Track collections by session date to avoid duplicates
-    let mut session_collections: HashMap<String, String> = HashMap::new();
-    let processed_count = processed_images.len();
-
-    for (index, processed) in processed_images.into_iter().enumerate() {
-        // Check for cancellation
-        if SCAN_CANCELLED.load(Ordering::SeqCst) {
-            let _ = window.emit("scan-progress", &ScanProgress {
-                current: skipped_duplicates + index,
-                total: total_images,
-                current_file: "Cancelled".to_string(),
-                percent: ((skipped_duplicates + index) * 100 / total_images) as u8,
+                percent: ((skipped_duplicates + images_processed) * 100 / total_discovered.max(1)) as u8,
                 skipped: result.images_skipped,
                 cancelled: true,
             });
             return Ok(result);
         }
 
-        // Emit progress (50-100% for DB operations)
-        // Calculate progress: skipped duplicates are already counted, now add processed items
-        let progress_current = skipped_duplicates + index + 1;
+        let batch_size = batch.len();
         let _ = window.emit("scan-progress", &ScanProgress {
-            current: progress_current,
-            total: total_images,
-            current_file: processed.discovered.base_name.clone(),
-            percent: (50 + (index + 1) * 50 / processed_count.max(1)) as u8,
+            current: skipped_duplicates + images_processed,
+            total: total_discovered,
+            current_file: format!("Processing batch {}/{} ({} images)...", batch_idx + 1, total_batches, batch_size),
+            percent: ((skipped_duplicates + images_processed) * 100 / total_discovered.max(1)) as u8,
             skipped: result.images_skipped,
             cancelled: false,
         });
 
-        // Skip if processing failed
-        if let Some(error) = processed.error {
-            result.errors.push(error);
-            result.images_skipped += 1;
-            continue;
+        // PHASE 2: Parallel processing of FITS metadata and thumbnails for this batch
+        let mut processing_tasks = Vec::with_capacity(batch_size);
+
+        for discovered in batch {
+            if SCAN_CANCELLED.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let discovered_clone = discovered.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let task = tokio::spawn(async move {
+                let result = process_single_image(discovered_clone).await;
+                drop(permit);
+                result
+            });
+            processing_tasks.push(task);
         }
 
-        // We need metadata to proceed
-        let Some(metadata) = processed.metadata else {
-            result.images_skipped += 1;
-            continue;
-        };
+        // Collect batch results
+        let mut batch_processed: Vec<ProcessedImage> = Vec::with_capacity(batch_size);
+        for task in processing_tasks {
+            if SCAN_CANCELLED.load(Ordering::SeqCst) {
+                task.abort();
+                continue;
+            }
 
-        // Build URL (already validated as non-duplicate in pre-filter phase)
-        let url = processed.discovered
-            .jpeg_path
-            .as_ref()
-            .or(processed.discovered.fits_path.as_ref())
-            .map(|p| p.to_string_lossy().to_string());
+            match task.await {
+                Ok(processed) => batch_processed.push(processed),
+                Err(e) => {
+                    if !e.is_cancelled() {
+                        result.errors.push(format!("Task failed: {}", e));
+                        result.images_skipped += 1;
+                    }
+                }
+            }
+        }
+
+        // PHASE 3: Database operations for this batch
+        for processed in batch_processed {
+            images_processed += 1;
+
+            // Emit progress
+            let progress_current = skipped_duplicates + images_processed;
+            let _ = window.emit("scan-progress", &ScanProgress {
+                current: progress_current,
+                total: total_discovered,
+                current_file: processed.discovered.base_name.clone(),
+                percent: (progress_current * 100 / total_discovered.max(1)) as u8,
+                skipped: result.images_skipped,
+                cancelled: false,
+            });
+
+            // Skip if processing failed
+            if let Some(error) = processed.error {
+                result.errors.push(error);
+                result.images_skipped += 1;
+                continue;
+            }
+
+            // We need metadata to proceed
+            let Some(metadata) = processed.metadata else {
+                result.images_skipped += 1;
+                continue;
+            };
+
+            // Build URL
+            let url = processed.discovered
+                .jpeg_path
+                .as_ref()
+                .or(processed.discovered.fits_path.as_ref())
+                .map(|p| p.to_string_lossy().to_string());
 
         // Determine session date and get/create collection
         let session_date = metadata
@@ -1010,7 +1142,40 @@ pub async fn bulk_scan_directory(
             ));
         }
 
-        result.images_imported += 1;
+            result.images_imported += 1;
+        } // End of inner loop (for each processed image in batch)
+    } // End of batch loop
+
+    // === UPDATE DIRECTORY CACHE ===
+    // Save the modification times for all directories that were processed
+    if !changed_dirs.is_empty() {
+        let _ = window.emit("scan-progress", &ScanProgress {
+            current: total_discovered,
+            total: total_discovered,
+            current_file: format!("Updating cache for {} directories...", changed_dirs.len()),
+            percent: 99,
+            skipped: result.images_skipped,
+            cancelled: false,
+        });
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+
+        for (dir_path, mtime) in changed_dirs {
+            let dir_path_str = dir_path.to_string_lossy().to_string();
+            let entry = NewScannedDirectory {
+                id: uuid::Uuid::new_v4().to_string(),
+                user_id: user_id.clone(),
+                path: dir_path_str,
+                fs_modified_at: mtime,
+                last_scanned_at: now.clone(),
+                image_count: 0, // We don't track exact count per directory
+            };
+
+            if let Err(e) = repository::upsert_scanned_directory(&mut conn, &entry) {
+                log::warn!("Failed to update directory cache: {}", e);
+            }
+        }
     }
 
     Ok(result)
@@ -1065,7 +1230,15 @@ pub fn preview_bulk_scan(
         return Err(format!("Directory does not exist: {}", input.directory));
     }
 
-    let discovered_images = scan_directory(&directory, input.stacked_only, input.max_files);
+    // Use the progress version with a no-op callback and a dummy cancellation flag
+    let cancelled = AtomicBool::new(false);
+    let discovered_images = scan_directory_with_progress(
+        &directory,
+        input.stacked_only,
+        input.max_files,
+        &cancelled,
+        |_, _| {}, // No-op progress callback for preview
+    );
 
     let mut preview = BulkScanPreview {
         total_images: discovered_images.len(),
@@ -1123,4 +1296,266 @@ pub struct PreviewFile {
     pub has_fits: bool,
     pub has_jpeg: bool,
     pub is_stacked: bool,
+}
+
+// =============================================================================
+// Raw File Collection
+// =============================================================================
+
+/// Global cancellation flag for collect operations
+static COLLECT_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Input for collecting raw files
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CollectRawFilesInput {
+    /// List of stacked image file paths (from which we derive _sub directories)
+    pub stacked_paths: Vec<String>,
+    /// Target directory to copy files to
+    pub target_directory: String,
+}
+
+/// Result of collecting raw files
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CollectRawFilesResult {
+    /// Number of files copied
+    pub files_copied: usize,
+    /// Number of files skipped (already exist or errors)
+    pub files_skipped: usize,
+    /// Total bytes copied
+    pub bytes_copied: u64,
+    /// Any errors encountered
+    pub errors: Vec<String>,
+}
+
+/// Progress event payload for collect operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectProgress {
+    /// Current file being copied (1-indexed)
+    pub current: usize,
+    /// Total number of files to copy
+    pub total: usize,
+    /// Name of the current file being copied
+    pub current_file: String,
+    /// Percentage complete (0-100)
+    pub percent: u8,
+    /// Whether the operation was cancelled
+    #[serde(default)]
+    pub cancelled: bool,
+    /// Current phase of the operation
+    pub phase: String,
+}
+
+/// Cancel an ongoing collect operation
+#[tauri::command]
+pub fn cancel_collect() -> Result<(), String> {
+    COLLECT_CANCELLED.store(true, Ordering::SeqCst);
+    log::info!("Collect cancellation requested");
+    Ok(())
+}
+
+/// Derive the _sub directory path from a stacked image path
+/// Example: /data/SomeTarget/Stacked_*.jpg -> /data/SomeTarget_sub/
+fn get_sub_directory(stacked_path: &Path) -> Option<PathBuf> {
+    let parent = stacked_path.parent()?;
+    let parent_name = parent.file_name()?.to_str()?;
+
+    // Check if we're already in a Stacked subdirectory
+    // Seestar structure: /target_dir/Stacked/Stacked_123_xxx.jpg
+    // or direct: /target_dir/Stacked_123_xxx.jpg
+    let base_dir = if parent_name == "Stacked" {
+        parent.parent()?
+    } else {
+        parent
+    };
+
+    let base_name = base_dir.file_name()?.to_str()?;
+    let grandparent = base_dir.parent()?;
+
+    // Try <base>_sub first
+    let sub_dir = grandparent.join(format!("{}_sub", base_name));
+    if sub_dir.exists() {
+        return Some(sub_dir);
+    }
+
+    // Also try looking for a Light subdirectory directly
+    let light_dir = base_dir.join("Light");
+    if light_dir.exists() {
+        return Some(light_dir);
+    }
+
+    // Return the _sub path even if it doesn't exist (caller will check)
+    Some(sub_dir)
+}
+
+/// Collect raw subframe files for targets
+#[tauri::command]
+pub async fn collect_raw_files(
+    window: tauri::Window,
+    input: CollectRawFilesInput,
+) -> Result<CollectRawFilesResult, String> {
+    // Reset cancellation flag at start
+    COLLECT_CANCELLED.store(false, Ordering::SeqCst);
+
+    let target_dir = PathBuf::from(&input.target_directory);
+
+    // Create target directory if it doesn't exist
+    if !target_dir.exists() {
+        std::fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Failed to create target directory: {}", e))?;
+    }
+
+    let mut result = CollectRawFilesResult {
+        files_copied: 0,
+        files_skipped: 0,
+        bytes_copied: 0,
+        errors: Vec::new(),
+    };
+
+    // Emit initial progress
+    let _ = window.emit("collect-progress", &CollectProgress {
+        current: 0,
+        total: 0,
+        current_file: "Scanning for subframes...".to_string(),
+        percent: 0,
+        cancelled: false,
+        phase: "scanning".to_string(),
+    });
+
+    // Collect all unique _sub directories and find Light files
+    let mut source_files: Vec<PathBuf> = Vec::new();
+    let mut processed_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    for stacked_path_str in &input.stacked_paths {
+        if COLLECT_CANCELLED.load(Ordering::SeqCst) {
+            break;
+        }
+
+        let stacked_path = PathBuf::from(stacked_path_str);
+
+        if let Some(sub_dir) = get_sub_directory(&stacked_path) {
+            // Skip if we've already processed this directory
+            if processed_dirs.contains(&sub_dir) {
+                continue;
+            }
+            processed_dirs.insert(sub_dir.clone());
+
+            if sub_dir.exists() {
+                // Scan for Light_*.fit files
+                for entry in WalkDir::new(&sub_dir)
+                    .max_depth(2) // Don't go too deep
+                    .follow_links(true)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
+                    let path = entry.path();
+                    if path.is_file() {
+                        let filename = path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+
+                        // Match Light_*.fit or Light_*.fits
+                        if filename.to_lowercase().starts_with("light_") {
+                            let ext = path.extension()
+                                .and_then(|e| e.to_str())
+                                .map(|e| e.to_lowercase());
+
+                            if ext.as_deref() == Some("fit") || ext.as_deref() == Some("fits") {
+                                source_files.push(path.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            } else {
+                log::debug!("Sub directory does not exist: {}", sub_dir.display());
+            }
+        }
+    }
+
+    let total_files = source_files.len();
+
+    if total_files == 0 {
+        let _ = window.emit("collect-progress", &CollectProgress {
+            current: 0,
+            total: 0,
+            current_file: "No subframe files found".to_string(),
+            percent: 100,
+            cancelled: false,
+            phase: "complete".to_string(),
+        });
+        return Ok(result);
+    }
+
+    // Emit progress with total
+    let _ = window.emit("collect-progress", &CollectProgress {
+        current: 0,
+        total: total_files,
+        current_file: format!("Found {} files to copy", total_files),
+        percent: 0,
+        cancelled: false,
+        phase: "copying".to_string(),
+    });
+
+    // Copy files with progress
+    for (idx, source_path) in source_files.iter().enumerate() {
+        if COLLECT_CANCELLED.load(Ordering::SeqCst) {
+            let _ = window.emit("collect-progress", &CollectProgress {
+                current: idx,
+                total: total_files,
+                current_file: "Cancelled".to_string(),
+                percent: ((idx * 100) / total_files.max(1)) as u8,
+                cancelled: true,
+                phase: "cancelled".to_string(),
+            });
+            return Ok(result);
+        }
+
+        let filename = source_path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        let target_path = target_dir.join(filename);
+
+        // Emit progress
+        let _ = window.emit("collect-progress", &CollectProgress {
+            current: idx + 1,
+            total: total_files,
+            current_file: filename.to_string(),
+            percent: (((idx + 1) * 100) / total_files.max(1)) as u8,
+            cancelled: false,
+            phase: "copying".to_string(),
+        });
+
+        // Skip if file already exists
+        if target_path.exists() {
+            result.files_skipped += 1;
+            continue;
+        }
+
+        // Copy the file
+        match std::fs::copy(source_path, &target_path) {
+            Ok(bytes) => {
+                result.files_copied += 1;
+                result.bytes_copied += bytes;
+            }
+            Err(e) => {
+                result.errors.push(format!("Failed to copy {}: {}", filename, e));
+                result.files_skipped += 1;
+            }
+        }
+    }
+
+    // Emit completion
+    let _ = window.emit("collect-progress", &CollectProgress {
+        current: total_files,
+        total: total_files,
+        current_file: format!("Copied {} files ({} MB)",
+            result.files_copied,
+            result.bytes_copied / 1_000_000
+        ),
+        percent: 100,
+        cancelled: false,
+        phase: "complete".to_string(),
+    });
+
+    Ok(result)
 }

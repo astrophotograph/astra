@@ -51,6 +51,12 @@ export default function Layout() {
               Observations
             </Link>
             <Link
+              to="/collections"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Collections
+            </Link>
+            <Link
               to="/todo"
               className="text-sm text-gray-300 hover:text-white transition-colors"
             >

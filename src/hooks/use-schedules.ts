@@ -33,6 +33,13 @@ export function useActiveSchedule() {
   });
 }
 
+export function useActiveSchedules() {
+  return useQuery({
+    queryKey: [...scheduleKeys.active(), "all"],
+    queryFn: () => scheduleApi.getActiveSchedules(),
+  });
+}
+
 export function useSchedule(id: string) {
   return useQuery({
     queryKey: scheduleKeys.detail(id),

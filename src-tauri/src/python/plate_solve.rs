@@ -49,6 +49,7 @@ pub fn solve_image(
     image_path: &str,
     solver: &str,
     api_key: Option<&str>,
+    api_url: Option<&str>,
     scale_lower: Option<f64>,
     scale_upper: Option<f64>,
     timeout: Option<i32>,
@@ -72,6 +73,12 @@ pub fn solve_image(
             kwargs
                 .set_item("api_key", key)
                 .map_err(|e| format!("Failed to set api_key: {}", e))?;
+        }
+
+        if let Some(url) = api_url {
+            kwargs
+                .set_item("api_url", url)
+                .map_err(|e| format!("Failed to set api_url: {}", e))?;
         }
 
         if let Some(lower) = scale_lower {

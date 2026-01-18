@@ -143,15 +143,21 @@ export default function ObservationsPage() {
     return previewImages[collectionId] || null;
   };
 
-  // Extract all unique tags from collections
+  // Only consider observation collections for tags and counts
+  const observationCollections = collections.filter((c) => c.template === "astrolog");
+
+  // Extract all unique tags from observation collections
   const allTags = Array.from(
     new Set(
-      collections.flatMap((c) => parseTags(c.tags))
+      observationCollections.flatMap((c) => parseTags(c.tags))
     )
   ).sort();
 
-  // Filter collections by archived status and selected tags
+  // Filter collections: only observations (astrolog template), archived status, and selected tags
   const filteredCollections = collections.filter((c) => {
+    // Only show observation collections (template === "astrolog")
+    if (c.template !== "astrolog") return false;
+
     // Filter by archived status
     if (showArchived && !c.archived) return false;
     if (!showArchived && c.archived) return false;
@@ -168,8 +174,12 @@ export default function ObservationsPage() {
     return true;
   });
 
-  const archivedCount = collections.filter((c) => c.archived).length;
-  const groupedCollections = groupCollectionsByMonth(filteredCollections);
+  const archivedCount = observationCollections.filter((c) => c.archived).length;
+
+  // Separate favorites from regular collections
+  const favoriteCollections = filteredCollections.filter((c) => c.favorite);
+  const nonFavoriteCollections = filteredCollections.filter((c) => !c.favorite);
+  const groupedCollections = groupCollectionsByMonth(nonFavoriteCollections);
 
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) =>
@@ -810,20 +820,46 @@ export default function ObservationsPage() {
         <div className="text-center py-12">
           <p className="text-gray-400">Loading collections...</p>
         </div>
-      ) : collections.length === 0 ? (
+      ) : observationCollections.length === 0 ? (
         <div className="text-center py-12 rounded-lg bg-slate-800/50">
           <FolderOpen className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-          <p className="text-gray-400 mb-2">No collections yet</p>
+          <p className="text-gray-400 mb-2">No observation logs yet</p>
           <p className="text-sm text-gray-500">
-            Create a new collection to start organizing your observations.
+            Create a new observation or scan a directory to import images.
           </p>
         </div>
       ) : (
         <div className="space-y-8">
+          {/* Favorites section - shown at the top */}
+          {favoriteCollections.length > 0 && (
+            <div>
+              <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
+                <h2 className="text-lg font-semibold text-yellow-400 flex items-center gap-2">
+                  <svg className="w-5 h-5 fill-current" viewBox="0 0 20 20">
+                    <path d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z" />
+                  </svg>
+                  Favorites
+                </h2>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {favoriteCollections.map((collection) => (
+                  <CollectionCard
+                    key={collection.id}
+                    collection={collection}
+                    imageCount={getImageCount(collection.id)}
+                    previewImage={getPreviewImage(collection.id)}
+                    onRefresh={refetch}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Monthly grouped collections */}
           {Object.entries(groupedCollections).map(([monthYear, monthCollections]) => (
             <div key={monthYear}>
-              {/* Month header */}
-              <div className="bg-slate-800 rounded-lg px-4 py-3 mb-4">
+              {/* Month header - sticky below the main header (h-14 = 3.5rem) */}
+              <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
                 <h2 className="text-lg font-semibold text-white">{monthYear}</h2>
               </div>
 

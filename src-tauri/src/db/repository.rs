@@ -435,6 +435,18 @@ pub fn get_active_schedule(
         .optional()
 }
 
+/// Get all active schedules for a user (one per equipment set)
+pub fn get_active_schedules(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> QueryResult<Vec<ObservationSchedule>> {
+    observation_schedules::table
+        .filter(observation_schedules::user_id.eq(user_id))
+        .filter(observation_schedules::is_active.eq(true))
+        .order(observation_schedules::created_at.desc())
+        .load(conn)
+}
+
 pub fn get_schedule_by_id(
     conn: &mut SqliteConnection,
     schedule_id: &str,
@@ -449,17 +461,34 @@ pub fn create_schedule(
     conn: &mut SqliteConnection,
     new_schedule: &NewObservationSchedule,
 ) -> QueryResult<ObservationSchedule> {
-    // If this schedule is active, deactivate others first
+    // If this schedule is active, deactivate other schedules with the same equipment_id
     if new_schedule.is_active {
-        diesel::update(
-            observation_schedules::table.filter(
-                observation_schedules::user_id
-                    .eq(&new_schedule.user_id)
-                    .and(observation_schedules::is_active.eq(true)),
-            ),
-        )
-        .set(observation_schedules::is_active.eq(false))
-        .execute(conn)?;
+        // Only deactivate schedules with matching equipment_id (or both null)
+        if let Some(ref eq_id) = new_schedule.equipment_id {
+            // Deactivate schedules with the same equipment_id
+            diesel::update(
+                observation_schedules::table.filter(
+                    observation_schedules::user_id
+                        .eq(&new_schedule.user_id)
+                        .and(observation_schedules::is_active.eq(true))
+                        .and(observation_schedules::equipment_id.eq(eq_id)),
+                ),
+            )
+            .set(observation_schedules::is_active.eq(false))
+            .execute(conn)?;
+        } else {
+            // Deactivate schedules with null equipment_id
+            diesel::update(
+                observation_schedules::table.filter(
+                    observation_schedules::user_id
+                        .eq(&new_schedule.user_id)
+                        .and(observation_schedules::is_active.eq(true))
+                        .and(observation_schedules::equipment_id.is_null()),
+                ),
+            )
+            .set(observation_schedules::is_active.eq(false))
+            .execute(conn)?;
+        }
     }
 
     diesel::insert_into(observation_schedules::table)
@@ -476,19 +505,40 @@ pub fn update_schedule(
     schedule_id: &str,
     update: &UpdateObservationSchedule,
 ) -> QueryResult<ObservationSchedule> {
-    // If activating this schedule, deactivate others first
+    // If activating this schedule, deactivate other schedules with the same equipment_id
     if update.is_active == Some(true) {
         if let Some(schedule) = get_schedule_by_id(conn, schedule_id)? {
-            diesel::update(
-                observation_schedules::table.filter(
-                    observation_schedules::user_id
-                        .eq(&schedule.user_id)
-                        .and(observation_schedules::is_active.eq(true))
-                        .and(observation_schedules::id.ne(schedule_id)),
-                ),
-            )
-            .set(observation_schedules::is_active.eq(false))
-            .execute(conn)?;
+            // Determine which equipment_id to match:
+            // If update has equipment_id set, use that; otherwise use the existing schedule's equipment_id
+            let effective_equipment_id = update.equipment_id.as_ref().or(schedule.equipment_id.as_ref());
+
+            if let Some(eq_id) = effective_equipment_id {
+                // Deactivate schedules with the same equipment_id (excluding this one)
+                diesel::update(
+                    observation_schedules::table.filter(
+                        observation_schedules::user_id
+                            .eq(&schedule.user_id)
+                            .and(observation_schedules::is_active.eq(true))
+                            .and(observation_schedules::id.ne(schedule_id))
+                            .and(observation_schedules::equipment_id.eq(eq_id)),
+                    ),
+                )
+                .set(observation_schedules::is_active.eq(false))
+                .execute(conn)?;
+            } else {
+                // Deactivate schedules with null equipment_id (excluding this one)
+                diesel::update(
+                    observation_schedules::table.filter(
+                        observation_schedules::user_id
+                            .eq(&schedule.user_id)
+                            .and(observation_schedules::is_active.eq(true))
+                            .and(observation_schedules::id.ne(schedule_id))
+                            .and(observation_schedules::equipment_id.is_null()),
+                    ),
+                )
+                .set(observation_schedules::is_active.eq(false))
+                .execute(conn)?;
+            }
         }
     }
 
@@ -531,4 +581,67 @@ pub fn cache_object(conn: &mut SqliteConnection, cache_entry: &NewSimbadCache) -
         ))
         .execute(conn)?;
     Ok(())
+}
+
+// ============================================================================
+// ScannedDirectory Repository - Directory scan caching
+// ============================================================================
+
+/// Get a scanned directory entry by path
+pub fn get_scanned_directory(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    path: &str,
+) -> QueryResult<Option<ScannedDirectory>> {
+    scanned_directories::table
+        .filter(scanned_directories::user_id.eq(user_id))
+        .filter(scanned_directories::path.eq(path))
+        .first(conn)
+        .optional()
+}
+
+/// Get all scanned directories for a user that are subdirectories of a given path
+pub fn get_scanned_subdirectories(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    parent_path: &str,
+) -> QueryResult<Vec<ScannedDirectory>> {
+    // Use LIKE to find all paths that start with the parent path
+    let pattern = format!("{}%", parent_path);
+    scanned_directories::table
+        .filter(scanned_directories::user_id.eq(user_id))
+        .filter(scanned_directories::path.like(pattern))
+        .load(conn)
+}
+
+/// Create or update a scanned directory entry
+pub fn upsert_scanned_directory(
+    conn: &mut SqliteConnection,
+    entry: &NewScannedDirectory,
+) -> QueryResult<()> {
+    diesel::insert_into(scanned_directories::table)
+        .values(entry)
+        .on_conflict((scanned_directories::user_id, scanned_directories::path))
+        .do_update()
+        .set((
+            scanned_directories::fs_modified_at.eq(&entry.fs_modified_at),
+            scanned_directories::last_scanned_at.eq(&entry.last_scanned_at),
+            scanned_directories::image_count.eq(&entry.image_count),
+        ))
+        .execute(conn)?;
+    Ok(())
+}
+
+/// Delete a scanned directory entry
+pub fn delete_scanned_directory(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    path: &str,
+) -> QueryResult<usize> {
+    diesel::delete(
+        scanned_directories::table
+            .filter(scanned_directories::user_id.eq(user_id))
+            .filter(scanned_directories::path.eq(path)),
+    )
+    .execute(conn)
 }

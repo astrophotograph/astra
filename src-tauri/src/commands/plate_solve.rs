@@ -18,6 +18,8 @@ pub struct PlateSolveInput {
     pub solver: String,
     /// API key for nova.astrometry.net (required for nova solver)
     pub api_key: Option<String>,
+    /// Custom API URL for local astrometry.net instance (optional, defaults to nova.astrometry.net)
+    pub api_url: Option<String>,
     /// Lower bound of expected image scale (arcsec/pixel)
     pub scale_lower: Option<f64>,
     /// Upper bound of expected image scale (arcsec/pixel)
@@ -71,6 +73,7 @@ pub async fn plate_solve_image(
         file_path,
         &input.solver,
         input.api_key.as_deref(),
+        input.api_url.as_deref(),
         input.scale_lower,
         input.scale_upper,
         input.timeout,

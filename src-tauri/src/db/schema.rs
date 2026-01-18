@@ -92,6 +92,7 @@ diesel::table! {
         is_active -> Bool,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        equipment_id -> Nullable<Text>,
     }
 }
 
@@ -128,6 +129,17 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    scanned_directories (id) {
+        id -> Text,
+        user_id -> Text,
+        path -> Text,
+        fs_modified_at -> BigInt,
+        last_scanned_at -> Text,
+        image_count -> Integer,
+    }
+}
+
 diesel::joinable!(collections -> users (user_id));
 diesel::joinable!(images -> users (user_id));
 diesel::joinable!(images -> collections (collection_id));
@@ -145,4 +157,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     astro_objects,
     simbad_cache,
     collection_images,
+    scanned_directories,
 );

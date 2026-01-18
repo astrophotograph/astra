@@ -282,11 +282,15 @@ export default function ImageViewerPage() {
     setIsPlateSolving(true);
     setPlateSolveDialogOpen(false);
 
+    // Get local API URL from localStorage if set
+    const localApiUrl = localStorage.getItem("local_astrometry_url") || undefined;
+
     try {
       const result = await plateSolveApi.solve({
         id: image.id,
         solver: "nova",
         apiKey: plateSolveApiKey,
+        apiUrl: localApiUrl,
         queryCatalogs: true,
         timeout: 300,
       });
@@ -301,9 +305,18 @@ export default function ImageViewerPage() {
       } else {
         toast.error(result.errorMessage || "Plate solve failed");
       }
-    } catch (err) {
-      toast.error("Plate solve failed: " + (err as Error).message);
-      console.error(err);
+    } catch (err: unknown) {
+      // Handle different error formats from Tauri
+      let errorMsg = "Unknown error";
+      if (err instanceof Error) {
+        errorMsg = err.message;
+      } else if (typeof err === "string") {
+        errorMsg = err;
+      } else if (err && typeof err === "object" && "message" in err) {
+        errorMsg = String((err as { message: unknown }).message);
+      }
+      toast.error("Plate solve failed: " + errorMsg);
+      console.error("Plate solve error:", err);
     } finally {
       setIsPlateSolving(false);
     }
@@ -403,12 +416,10 @@ export default function ImageViewerPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Link to="/observations">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Back
-            </Button>
-          </Link>
+          <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back
+          </Button>
           <h1 className="text-2xl font-bold">{image.summary || image.filename}</h1>
         </div>
         <div className="flex items-center gap-2">

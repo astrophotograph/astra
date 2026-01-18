@@ -37,15 +37,19 @@ import {
 } from "@/components/ui/select";
 import {
   Compass,
+  FolderDown,
   FolderOpen,
   ImageIcon,
   Plus,
   Star,
   Trash2,
 } from "lucide-react";
-import { useCollection, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
+import CollectFilesDialog from "@/components/CollectFilesDialog";
+import CatalogCollectionView from "@/components/CatalogCollectionView";
+import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, imageKeys } from "@/hooks/use-images";
 import { imageApi, type Image } from "@/lib/tauri/commands";
+import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
 
 // Get session date from collection metadata
@@ -78,9 +82,16 @@ export default function CollectionDetailPage() {
   const { data: collection, isLoading, error } = useCollection(id || "");
   const { data: collectionImages = [], error: imagesError, isLoading: imagesLoading } = useCollectionImages(id || "");
   const { data: allImages = [] } = useImages();
+  const { data: allCollections = [] } = useCollections();
   const updateCollection = useUpdateCollection();
   const deleteCollection = useDeleteCollection();
   const [isAddingImages, setIsAddingImages] = useState(false);
+  const [collectDialogOpen, setCollectDialogOpen] = useState(false);
+
+  // Check if this is a catalog collection
+  const isCatalogCollection = collection
+    ? getCollectionType(collection.template) === "catalog"
+    : false;
 
   // Calculate moon phase for the session date
   const moonData = useMemo(() => {
@@ -97,6 +108,13 @@ export default function CollectionDetailPage() {
       isWaxing: moonIllumination.phase <= 0.5,
     };
   }, [collection]);
+
+  // Extract stacked image paths for raw file collection
+  const stackedPaths = useMemo(() => {
+    return collectionImages
+      .filter((img) => img.url)
+      .map((img) => img.url as string);
+  }, [collectionImages]);
 
   // Debug logging
   console.log("CollectionDetail debug:", {
@@ -259,14 +277,27 @@ export default function CollectionDetailPage() {
       <div className="flex justify-between items-start mb-2">
         <h1 className="text-3xl font-bold text-white">{collection.name}</h1>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-            onClick={() => setAddImagesDialogOpen(true)}
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Add Image
-          </Button>
+          {stackedPaths.length > 0 && !isCatalogCollection && (
+            <Button
+              variant="outline"
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+              onClick={() => setCollectDialogOpen(true)}
+              title="Collect raw subframe files"
+            >
+              <FolderDown className="w-4 h-4 mr-2" />
+              Collect Files
+            </Button>
+          )}
+          {!isCatalogCollection && (
+            <Button
+              variant="outline"
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+              onClick={() => setAddImagesDialogOpen(true)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Add Image
+            </Button>
+          )}
           <Button
             variant="outline"
             className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
@@ -387,8 +418,14 @@ export default function CollectionDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Images Grid */}
-      {collectionImages.length === 0 ? (
+      {/* Main Content: Catalog View or Image Grid */}
+      {isCatalogCollection ? (
+        <CatalogCollectionView
+          collection={collection}
+          allImages={allImages}
+          allCollections={allCollections}
+        />
+      ) : collectionImages.length === 0 ? (
         <div className="text-center py-12 bg-slate-800 rounded-lg">
           <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-500" />
           <p className="text-white">No images yet</p>
@@ -506,6 +543,14 @@ export default function CollectionDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Collect Files Dialog */}
+      <CollectFilesDialog
+        open={collectDialogOpen}
+        onOpenChange={setCollectDialogOpen}
+        targetName={collection.name}
+        stackedPaths={stackedPaths}
+      />
     </div>
   );
 }
@@ -514,7 +559,10 @@ export default function CollectionDetailPage() {
 function isPlateSolved(image: Image): boolean {
   if (!image.metadata) return false;
   try {
-    const metadata = JSON.parse(image.metadata);
+    const metadata =
+      typeof image.metadata === "string"
+        ? JSON.parse(image.metadata)
+        : image.metadata;
     return !!metadata.plate_solve;
   } catch {
     return false;

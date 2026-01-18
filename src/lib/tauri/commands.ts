@@ -175,6 +175,7 @@ export interface ObservationSchedule {
   is_synced: boolean;
   created_at: string;
   updated_at: string;
+  equipment_id: string | null;
 }
 
 export interface CreateScheduleInput {
@@ -183,6 +184,7 @@ export interface CreateScheduleInput {
   scheduled_date?: string;
   location?: string;
   is_active?: boolean;
+  equipment_id?: string;
 }
 
 export interface UpdateScheduleInput {
@@ -193,6 +195,7 @@ export interface UpdateScheduleInput {
   location?: string;
   items?: ScheduleItem[];
   is_active?: boolean;
+  equipment_id?: string;
 }
 
 // =============================================================================
@@ -296,6 +299,8 @@ export const scheduleApi = {
   getAll: () => invoke<ObservationSchedule[]>("get_schedules"),
 
   getActive: () => invoke<ObservationSchedule | null>("get_active_schedule"),
+
+  getActiveSchedules: () => invoke<ObservationSchedule[]>("get_active_schedules"),
 
   getById: (id: string) =>
     invoke<ObservationSchedule | null>("get_schedule", { id }),
@@ -556,6 +561,45 @@ export const scanApi = {
 };
 
 // =============================================================================
+// Raw File Collection Types
+// =============================================================================
+
+export interface CollectRawFilesInput {
+  /** List of stacked image file paths */
+  stacked_paths: string[];
+  /** Target directory to copy files to */
+  target_directory: string;
+}
+
+export interface CollectRawFilesResult {
+  /** Number of files copied */
+  files_copied: number;
+  /** Number of files skipped (already exist or errors) */
+  files_skipped: number;
+  /** Total bytes copied */
+  bytes_copied: number;
+  /** Any errors encountered */
+  errors: string[];
+}
+
+// =============================================================================
+// Raw File Collection Commands
+// =============================================================================
+
+export const collectApi = {
+  /**
+   * Collect raw subframe files for targets
+   */
+  collect: (input: CollectRawFilesInput) =>
+    invoke<CollectRawFilesResult>("collect_raw_files", { input }),
+
+  /**
+   * Cancel an ongoing collect operation
+   */
+  cancel: () => invoke<void>("cancel_collect"),
+};
+
+// =============================================================================
 // Plate Solving Types
 // =============================================================================
 
@@ -566,6 +610,8 @@ export interface PlateSolveInput {
   solver: string;
   /** API key for nova.astrometry.net (required for nova solver) */
   apiKey?: string;
+  /** Custom API URL for local astrometry.net instance (optional) */
+  apiUrl?: string;
   /** Lower bound of expected image scale (arcsec/pixel) */
   scaleLower?: number;
   /** Upper bound of expected image scale (arcsec/pixel) */

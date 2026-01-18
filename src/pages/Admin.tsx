@@ -46,6 +46,8 @@ import {
   Crosshair,
   Circle,
   Search,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { appApi, backupApi, type BackupInfo } from "@/lib/tauri/commands";
 import {
@@ -208,6 +210,10 @@ export default function AdminPage() {
   const [astrometryApiKey, setAstrometryApiKey] = useState(() =>
     localStorage.getItem("astrometry_api_key") || ""
   );
+  const [localAstrometryUrl, setLocalAstrometryUrl] = useState(() =>
+    localStorage.getItem("local_astrometry_url") || ""
+  );
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // Load app info and backups
   useEffect(() => {
@@ -655,6 +661,12 @@ export default function AdminPage() {
     toast.success("API key saved");
   };
 
+  // Save local astrometry URL
+  const saveLocalAstrometryUrl = () => {
+    localStorage.setItem("local_astrometry_url", localAstrometryUrl);
+    toast.success("Local API URL saved");
+  };
+
   // Format file size
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -974,32 +986,70 @@ export default function AdminPage() {
             </div>
 
             {plateSolveSolver === "nova" && (
-              <div className="space-y-2">
-                <Label htmlFor="api-key">Astrometry.net API Key</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="api-key"
-                    type="password"
-                    value={astrometryApiKey}
-                    onChange={(e) => setAstrometryApiKey(e.target.value)}
-                    placeholder="Enter your API key"
-                  />
-                  <Button variant="outline" onClick={saveAstrometryApiKey}>
-                    Save
-                  </Button>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="api-key">Astrometry.net API Key</Label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input
+                        id="api-key"
+                        type={showApiKey ? "text" : "password"}
+                        value={astrometryApiKey}
+                        onChange={(e) => setAstrometryApiKey(e.target.value)}
+                        placeholder="Enter your API key"
+                        className="pr-10"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                      >
+                        {showApiKey ? (
+                          <EyeOff className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </Button>
+                    </div>
+                    <Button variant="outline" onClick={saveAstrometryApiKey}>
+                      Save
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Get your free API key from{" "}
+                    <a
+                      href="https://nova.astrometry.net/api_help"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      nova.astrometry.net
+                    </a>
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Get your free API key from{" "}
-                  <a
-                    href="https://nova.astrometry.net/api_help"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary hover:underline"
-                  >
-                    nova.astrometry.net
-                  </a>
-                </p>
-              </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="local-api-url">Local API URL (Optional)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="local-api-url"
+                      type="url"
+                      value={localAstrometryUrl}
+                      onChange={(e) => setLocalAstrometryUrl(e.target.value)}
+                      placeholder="http://localhost:8080"
+                    />
+                    <Button variant="outline" onClick={saveLocalAstrometryUrl}>
+                      Save
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Leave empty to use the public nova.astrometry.net server. Set this if you have a local
+                    astrometry.net instance running (e.g., http://localhost:8080 or http://192.168.1.100:8080).
+                  </p>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>

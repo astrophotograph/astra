@@ -283,6 +283,7 @@ pub struct ObservationSchedule {
     pub is_active: bool,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    pub equipment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -296,6 +297,7 @@ pub struct NewObservationSchedule {
     pub location: Option<String>,
     pub items: String,
     pub is_active: bool,
+    pub equipment_id: Option<String>,
 }
 
 #[derive(Debug, Clone, AsChangeset, Serialize, Deserialize, Default)]
@@ -307,6 +309,7 @@ pub struct UpdateObservationSchedule {
     pub location: Option<String>,
     pub items: Option<String>,
     pub is_active: Option<bool>,
+    pub equipment_id: Option<String>,
 }
 
 /// Schedule item stored as JSON in the items field
@@ -375,4 +378,42 @@ pub struct NewSimbadCache {
     pub id: String,
     pub object_name: String,
     pub data: String,
+}
+
+// ============================================================================
+// ScannedDirectory - Cache for tracking scanned directories
+// ============================================================================
+
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = scanned_directories)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ScannedDirectory {
+    pub id: String,
+    pub user_id: String,
+    pub path: String,
+    /// Filesystem modification time as Unix timestamp
+    pub fs_modified_at: i64,
+    /// When we last scanned this directory (ISO 8601 string)
+    pub last_scanned_at: String,
+    /// Number of images found in this directory
+    pub image_count: i32,
+}
+
+#[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = scanned_directories)]
+pub struct NewScannedDirectory {
+    pub id: String,
+    pub user_id: String,
+    pub path: String,
+    pub fs_modified_at: i64,
+    pub last_scanned_at: String,
+    pub image_count: i32,
+}
+
+#[derive(Debug, Clone, AsChangeset, Serialize, Deserialize)]
+#[diesel(table_name = scanned_directories)]
+pub struct UpdateScannedDirectory {
+    pub fs_modified_at: Option<i64>,
+    pub last_scanned_at: Option<String>,
+    pub image_count: Option<i32>,
 }

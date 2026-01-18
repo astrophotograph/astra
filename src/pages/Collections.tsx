@@ -2,7 +2,7 @@
  * Collections Page - Manage observation collections
  */
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -34,13 +41,22 @@ import {
 } from "@/hooks/use-collections";
 import type { Collection, CreateCollectionInput } from "@/lib/tauri/commands";
 import { cn } from "@/lib/utils";
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal, Target } from "lucide-react";
+import {
+  type CollectionType,
+  getCollectionType,
+  COLLECTION_TYPE_COLORS,
+  COLLECTION_TEMPLATES,
+} from "@/lib/collection-utils";
+import TopTargetsDialog from "@/components/TopTargetsDialog";
 
 export default function CollectionsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [selectedType, setSelectedType] = useState<CollectionType | "all">("all");
+  const [topTargetsOpen, setTopTargetsOpen] = useState(false);
 
   // Form state for adding new collection
   const [newCollection, setNewCollection] = useState<CreateCollectionInput>({
@@ -48,6 +64,7 @@ export default function CollectionsPage() {
     description: "",
     visibility: "private",
     tags: "",
+    template: "",
   });
 
   // Queries and mutations
@@ -63,7 +80,12 @@ export default function CollectionsPage() {
     }
 
     try {
-      await createCollection.mutateAsync(newCollection);
+      // Convert "_custom" back to empty string for the API
+      const input = {
+        ...newCollection,
+        template: newCollection.template === "_custom" ? "" : newCollection.template,
+      };
+      await createCollection.mutateAsync(input);
       toast.success(`Created collection: ${newCollection.name}`);
       setDialogOpen(false);
       setNewCollection({
@@ -71,6 +93,7 @@ export default function CollectionsPage() {
         description: "",
         visibility: "private",
         tags: "",
+        template: "",
       });
     } catch (err) {
       toast.error("Failed to create collection");
@@ -156,12 +179,31 @@ export default function CollectionsPage() {
   }
 
   // Filter and separate collections
-  const visibleCollections = showArchived
+  const archivedFiltered = showArchived
     ? collections.filter((c) => c.archived)
     : collections.filter((c) => !c.archived);
+
+  // Apply type filter
+  const visibleCollections = selectedType === "all"
+    ? archivedFiltered
+    : archivedFiltered.filter((c) => getCollectionType(c.template) === selectedType);
+
   const favoriteCollections = visibleCollections.filter((c) => c.favorite);
   const regularCollections = visibleCollections.filter((c) => !c.favorite);
   const archivedCount = collections.filter((c) => c.archived).length;
+
+  // Type counts (from non-archived collections for the active view)
+  const typeCounts = useMemo(() => {
+    const base = showArchived
+      ? collections.filter((c) => c.archived)
+      : collections.filter((c) => !c.archived);
+    return {
+      all: base.length,
+      observation: base.filter((c) => getCollectionType(c.template) === "observation").length,
+      catalog: base.filter((c) => getCollectionType(c.template) === "catalog").length,
+      custom: base.filter((c) => getCollectionType(c.template) === "custom").length,
+    };
+  }, [collections, showArchived]);
 
   return (
     <div className="container py-8 space-y-8">
@@ -176,6 +218,13 @@ export default function CollectionsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setTopTargetsOpen(true)}
+          >
+            <Target className="h-4 w-4 mr-2" />
+            Top Targets
+          </Button>
           {archivedCount > 0 && (
             <Button
               variant={showArchived ? "default" : "outline"}
@@ -206,6 +255,26 @@ export default function CollectionsPage() {
                     setNewCollection({ ...newCollection, name: e.target.value })
                   }
                 />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="template">Type</Label>
+                <Select
+                  value={newCollection.template || ""}
+                  onValueChange={(value) =>
+                    setNewCollection({ ...newCollection, template: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a type..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {COLLECTION_TEMPLATES.map((tmpl) => (
+                      <SelectItem key={tmpl.value} value={tmpl.value || "_custom"}>
+                        {tmpl.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="description">Description</Label>
@@ -247,6 +316,54 @@ export default function CollectionsPage() {
           </DialogContent>
         </Dialog>
         </div>
+      </div>
+
+      {/* Type Filter Pills */}
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={() => setSelectedType("all")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
+            selectedType === "all"
+              ? "bg-white/10 text-white border-white/20"
+              : "bg-transparent text-gray-400 border-transparent hover:text-white hover:bg-white/5"
+          )}
+        >
+          All ({typeCounts.all})
+        </button>
+        <button
+          onClick={() => setSelectedType("observation")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
+            selectedType === "observation"
+              ? COLLECTION_TYPE_COLORS.observation
+              : "bg-transparent text-gray-400 border-transparent hover:text-violet-300 hover:bg-violet-500/10"
+          )}
+        >
+          Observations ({typeCounts.observation})
+        </button>
+        <button
+          onClick={() => setSelectedType("catalog")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
+            selectedType === "catalog"
+              ? COLLECTION_TYPE_COLORS.catalog
+              : "bg-transparent text-gray-400 border-transparent hover:text-blue-300 hover:bg-blue-500/10"
+          )}
+        >
+          Catalogs ({typeCounts.catalog})
+        </button>
+        <button
+          onClick={() => setSelectedType("custom")}
+          className={cn(
+            "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
+            selectedType === "custom"
+              ? COLLECTION_TYPE_COLORS.custom
+              : "bg-transparent text-gray-400 border-transparent hover:text-emerald-300 hover:bg-emerald-500/10"
+          )}
+        >
+          Custom ({typeCounts.custom})
+        </button>
       </div>
 
       {isLoading ? (
@@ -361,6 +478,13 @@ export default function CollectionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Top Targets Dialog */}
+      <TopTargetsDialog
+        open={topTargetsOpen}
+        onOpenChange={setTopTargetsOpen}
+        collections={collections}
+      />
     </div>
   );
 }
@@ -384,13 +508,22 @@ function CollectionCard({
   const tags = collection.tags
     ? collection.tags.split(",").map((t) => t.trim()).filter(Boolean)
     : [];
+  const collectionType = getCollectionType(collection.template);
 
   return (
     <Card className={cn("hover:shadow-md transition-shadow")}>
       <CardHeader className="pb-2">
         <div className="flex justify-between items-start">
           <div className="flex-1">
-            <Link to={`/c/${collection.id}`}>
+            <div className="flex items-center gap-2 mb-1">
+              <Badge
+                variant="outline"
+                className={cn("text-xs", COLLECTION_TYPE_COLORS[collectionType])}
+              >
+                {collectionType.charAt(0).toUpperCase() + collectionType.slice(1)}
+              </Badge>
+            </div>
+            <Link to={`/collections/${collection.id}`}>
               <CardTitle className="text-lg hover:underline">
                 {collection.name}
               </CardTitle>

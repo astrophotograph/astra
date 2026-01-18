@@ -29,7 +29,16 @@ import {
   Sparkles,
   Telescope,
   Trash2,
+  Settings2,
 } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useEquipment } from "@/contexts/EquipmentContext";
 import { AladinLite, type TargetInfo } from "@/components/AladinLite";
 import { SkyMapSidePanel } from "@/components/SkyMapSidePanel";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
@@ -51,6 +60,7 @@ export default function PlanPage() {
   const [newScheduleDialogOpen, setNewScheduleDialogOpen] = useState(false);
   const [newScheduleName, setNewScheduleName] = useState("");
   const [newScheduleDescription, setNewScheduleDescription] = useState("");
+  const [newScheduleEquipmentId, setNewScheduleEquipmentId] = useState<string>("");
   const [activeTab, setActiveTab] = useState("recommendations");
 
   // Pending target to add after schedule creation
@@ -59,6 +69,9 @@ export default function PlanPage() {
   // Sky map target/FOV state for altitude chart
   const [skyMapTarget, setSkyMapTarget] = useState<TargetInfo | null>(null);
   const [skyMapFov, setSkyMapFov] = useState<{ enabled: boolean; ra?: number; dec?: number }>({ enabled: false });
+
+  // Equipment context
+  const { equipmentSets, getEquipmentById } = useEquipment();
 
   // Queries and mutations
   const { data: schedules = [] } = useSchedules();
@@ -89,11 +102,13 @@ export default function PlanPage() {
         name: newScheduleName,
         description: newScheduleDescription || undefined,
         is_active: true,
+        equipment_id: newScheduleEquipmentId || undefined,
       });
       toast.success(`Created schedule: ${newScheduleName}`);
       setNewScheduleDialogOpen(false);
       setNewScheduleName("");
       setNewScheduleDescription("");
+      setNewScheduleEquipmentId("");
 
       // If there's a pending target, add it to the new schedule
       if (pendingTargetForSchedule && newSchedule) {
@@ -254,8 +269,9 @@ export default function PlanPage() {
                 <Dialog open={newScheduleDialogOpen} onOpenChange={(open) => {
                   setNewScheduleDialogOpen(open);
                   if (!open) {
-                    // Clear pending target when dialog is cancelled
+                    // Clear pending target and reset form when dialog is cancelled
                     setPendingTargetForSchedule(null);
+                    setNewScheduleEquipmentId("");
                   }
                 }}>
                   <DialogTrigger asChild>
@@ -292,6 +308,33 @@ export default function PlanPage() {
                           className="mt-1"
                         />
                       </div>
+                      {equipmentSets.length > 0 && (
+                        <div>
+                          <Label>Equipment (Optional)</Label>
+                          <Select
+                            value={newScheduleEquipmentId}
+                            onValueChange={setNewScheduleEquipmentId}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue placeholder="Select equipment set..." />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="">None</SelectItem>
+                              {equipmentSets.map((eq) => (
+                                <SelectItem key={eq.id} value={eq.id}>
+                                  <div className="flex items-center gap-2">
+                                    <Settings2 className="w-4 h-4 text-muted-foreground" />
+                                    {eq.name}
+                                  </div>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Associate this schedule with specific equipment to allow multiple active schedules.
+                          </p>
+                        </div>
+                      )}
                     </div>
                     <DialogFooter>
                       <Button variant="outline" onClick={() => setNewScheduleDialogOpen(false)}>
@@ -315,27 +358,47 @@ export default function PlanPage() {
                 <div className="space-y-4">
                   {/* Schedule selector */}
                   <div className="flex flex-wrap gap-2">
-                    {schedules.map((schedule) => (
-                      <Button
-                        key={schedule.id}
-                        variant={schedule.is_active ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handleSetActive(schedule.id)}
-                      >
-                        {schedule.name}
-                        {schedule.is_active && (
-                          <Badge variant="secondary" className="ml-2">
-                            Active
-                          </Badge>
-                        )}
-                      </Button>
-                    ))}
+                    {schedules.map((schedule) => {
+                      const equipment = schedule.equipment_id
+                        ? getEquipmentById(schedule.equipment_id)
+                        : null;
+                      return (
+                        <Button
+                          key={schedule.id}
+                          variant={schedule.is_active ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => handleSetActive(schedule.id)}
+                          className="flex items-center gap-1"
+                        >
+                          {schedule.name}
+                          {equipment && (
+                            <Badge variant="outline" className="ml-1 text-xs">
+                              <Settings2 className="w-3 h-3 mr-1" />
+                              {equipment.name}
+                            </Badge>
+                          )}
+                          {schedule.is_active && (
+                            <Badge variant="secondary" className="ml-1">
+                              Active
+                            </Badge>
+                          )}
+                        </Button>
+                      );
+                    })}
                   </div>
 
                   {/* Active schedule items */}
                   {activeSchedule && (
                     <div className="space-y-2">
-                      <h3 className="font-medium">{activeSchedule.name}</h3>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-medium">{activeSchedule.name}</h3>
+                        {activeSchedule.equipment_id && getEquipmentById(activeSchedule.equipment_id) && (
+                          <Badge variant="outline" className="text-xs">
+                            <Settings2 className="w-3 h-3 mr-1" />
+                            {getEquipmentById(activeSchedule.equipment_id)?.name}
+                          </Badge>
+                        )}
+                      </div>
                       {activeSchedule.description && (
                         <p className="text-sm text-muted-foreground">
                           {activeSchedule.description}

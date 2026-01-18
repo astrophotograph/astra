@@ -14,6 +14,7 @@ pub struct CreateScheduleInput {
     pub scheduled_date: Option<String>,
     pub location: Option<String>,
     pub is_active: Option<bool>,
+    pub equipment_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,6 +26,7 @@ pub struct UpdateScheduleInput {
     pub location: Option<String>,
     pub items: Option<Vec<ScheduleItem>>,
     pub is_active: Option<bool>,
+    pub equipment_id: Option<String>,
 }
 
 #[tauri::command]
@@ -40,6 +42,15 @@ pub fn get_active_schedule(
 ) -> Result<Option<ObservationSchedule>, String> {
     let mut conn = state.db.get().map_err(|e| e.to_string())?;
     repository::get_active_schedule(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_active_schedules(
+    state: State<'_, AppState>,
+) -> Result<Vec<ObservationSchedule>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    repository::get_active_schedules(&mut conn, &state.user_id)
         .map_err(|e| e.to_string())
 }
 
@@ -69,6 +80,7 @@ pub fn create_schedule(
         location: input.location,
         items: "[]".to_string(),
         is_active: input.is_active.unwrap_or(false),
+        equipment_id: input.equipment_id,
     };
 
     repository::create_schedule(&mut conn, &new_schedule)
@@ -93,6 +105,7 @@ pub fn update_schedule(
         location: input.location,
         items: items_json,
         is_active: input.is_active,
+        equipment_id: input.equipment_id,
     };
 
     repository::update_schedule(&mut conn, &input.id, &update)
