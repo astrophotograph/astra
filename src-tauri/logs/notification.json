@@ -158,5 +158,37 @@
     "hook_event_name": "Notification",
     "message": "Claude needs your permission to use Update",
     "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Fetch",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "hook_event_name": "Notification",
+    "message": "Claude Code needs your attention",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "hook_event_name": "Notification",
+    "message": "Claude Code needs your approval for the plan",
+    "notification_type": "permission_prompt"
   }
 ]
