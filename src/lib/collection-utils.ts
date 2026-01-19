@@ -11,7 +11,7 @@ export type CollectionType = "observation" | "catalog" | "custom";
  */
 export function getCollectionType(template: string | null): CollectionType {
   if (template === "astrolog") return "observation";
-  if (["messier", "caldwell", "catalog"].includes(template || "")) return "catalog";
+  if (["messier", "caldwell", "ngc", "catalog"].includes(template || "")) return "catalog";
   return "custom";
 }
 
@@ -40,5 +40,6 @@ export const COLLECTION_TEMPLATES = [
   { value: "astrolog", label: "Observation Log", type: "observation" as CollectionType },
   { value: "messier", label: "Messier Catalog", type: "catalog" as CollectionType },
   { value: "caldwell", label: "Caldwell Catalog", type: "catalog" as CollectionType },
+  { value: "ngc", label: "NGC Catalog", type: "catalog" as CollectionType },
   { value: "catalog", label: "Generic Catalog", type: "catalog" as CollectionType },
 ] as const;

@@ -81,8 +81,16 @@ function getCatalogFromName(name: string): string {
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  const hours = Math.floor(seconds / 3600);
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.round((seconds % 3600) / 60);
+
+  if (days > 0) {
+    if (hours > 0) return `${days}d ${hours}h`;
+    if (minutes > 0) return `${days}d ${minutes}m`;
+    return `${days}d`;
+  }
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 

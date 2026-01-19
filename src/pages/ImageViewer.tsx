@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { marked } from "marked";
 import { imageApi, plateSolveApi, skymapApi, type CatalogObject } from "@/lib/tauri/commands";
@@ -75,6 +75,7 @@ function decToDMS(decDeg: number): string {
 export default function ImageViewerPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isEditing, setIsEditing] = useState(false);
   const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -101,6 +102,16 @@ export default function ImageViewerPage() {
   const updateImage = useUpdateImage();
   const deleteImage = useDeleteImage();
   const { equipmentSets } = useEquipment();
+
+  // Check for action query param (e.g., ?action=platesolve)
+  useEffect(() => {
+    const action = searchParams.get("action");
+    if (action === "platesolve" && image?.id) {
+      setPlateSolveDialogOpen(true);
+      // Clear the query param so it doesn't re-trigger
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, image?.id, setSearchParams]);
 
   // Fetch full image data from backend
   useEffect(() => {

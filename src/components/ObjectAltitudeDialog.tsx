@@ -38,14 +38,20 @@ interface ScheduleItemInfo {
   end_time: string;
 }
 
-// Format seconds into human-readable duration (e.g., "2h 30m" or "45m 30s")
+// Format seconds into human-readable duration (e.g., "2d 5h" or "2h 30m" or "45m 30s")
 function formatDuration(totalSeconds: number): string {
   if (totalSeconds === 0) return "0s";
 
-  const hours = Math.floor(totalSeconds / 3600);
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = Math.round(totalSeconds % 60);
 
+  if (days > 0) {
+    if (hours > 0) return `${days}d ${hours}h`;
+    if (minutes > 0) return `${days}d ${minutes}m`;
+    return `${days}d`;
+  }
   if (hours > 0) {
     if (minutes > 0) {
       return `${hours}h ${minutes}m`;

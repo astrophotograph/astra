@@ -2,7 +2,7 @@
  * Observations Page - View and manage observation collections
  */
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -35,19 +35,39 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, FolderOpen, FolderSearch, Loader2, MoreHorizontal } from "lucide-react";
+import { Plus, FolderOpen, FolderSearch, Loader2, MoreHorizontal, Compass, Clock } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
+import { useUpdateCollection, useDeleteCollection, useCollections, useCreateCollection, useCollectionsMetadata } from "@/hooks/use-collections";
 import { toast } from "sonner";
-import { useCollections, useCreateCollection } from "@/hooks/use-collections";
 import { useImages } from "@/hooks/use-images";
 import type { Collection, BulkScanPreview, Image } from "@/lib/tauri/commands";
-import { parseTags, scanApi, collectionImageApi, imageApi } from "@/lib/tauri/commands";
+import { parseTags, scanApi } from "@/lib/tauri/commands";
+
+/**
+ * Format seconds as human-readable duration
+ */
+function formatDuration(seconds: number): string {
+  if (seconds === 0) return "0s";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+
+  if (days > 0) {
+    if (hours > 0) return `${days}d ${hours}h`;
+    if (minutes > 0) return `${days}d ${minutes}m`;
+    return `${days}d`;
+  }
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
 
 export default function ObservationsPage() {
   const { data: collections = [], isLoading, refetch } = useCollections();
@@ -90,58 +110,35 @@ export default function ObservationsPage() {
   } | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
 
-  // Image counts and preview thumbnails for collections
-  const [imageCounts, setImageCounts] = useState<Record<string, number>>({});
-  const [previewImages, setPreviewImages] = useState<Record<string, Image | null>>({});
+  // Fetch metadata for collections using cached React Query hook
+  const { data: collectionsMetadata = {}, isLoading: isLoadingMetadata } = useCollectionsMetadata(collections);
+
   const [showArchived, setShowArchived] = useState(false);
+  const [showNeedsPlateSolving, setShowNeedsPlateSolving] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-
-  // Fetch image counts and preview images for all collections
-  useEffect(() => {
-    const fetchCollectionData = async () => {
-      const counts: Record<string, number> = {};
-      const previews: Record<string, Image | null> = {};
-
-      for (const collection of collections) {
-        try {
-          // Fetch count
-          const count = await collectionImageApi.getCount(collection.id);
-          counts[collection.id] = count;
-
-          // Fetch images to get preview (first image or favorite)
-          if (count > 0) {
-            const images = await imageApi.getByCollection(collection.id);
-            // Prefer favorite image, otherwise use first image
-            const favorite = images.find((img) => img.favorite);
-            previews[collection.id] = favorite || images[0] || null;
-          } else {
-            previews[collection.id] = null;
-          }
-        } catch (err) {
-          console.error(`Error fetching data for ${collection.id}:`, err);
-          counts[collection.id] = 0;
-          previews[collection.id] = null;
-        }
-      }
-
-      setImageCounts(counts);
-      setPreviewImages(previews);
-    };
-
-    if (collections.length > 0) {
-      fetchCollectionData();
-    }
-  }, [collections]);
 
   // Get image count for each collection
   const getImageCount = (collectionId: string) => {
-    return imageCounts[collectionId] ?? 0;
+    return collectionsMetadata[collectionId]?.imageCount ?? 0;
   };
 
   // Get preview image for each collection
   const getPreviewImage = (collectionId: string) => {
-    return previewImages[collectionId] || null;
+    return collectionsMetadata[collectionId]?.previewImage || null;
   };
+
+  // Get plate-solved count for each collection
+  const getPlateSolvedCount = (collectionId: string) => {
+    return collectionsMetadata[collectionId]?.plateSolvedCount ?? 0;
+  };
+
+  // Get total exposure time for each collection
+  const getTotalExposure = (collectionId: string) => {
+    return collectionsMetadata[collectionId]?.totalExposureSeconds ?? 0;
+  };
+
+  // Loading state: collections loading OR metadata loading (but metadata can use cache)
+  const isLoadingCollectionData = isLoading || (collections.length > 0 && isLoadingMetadata && Object.keys(collectionsMetadata).length === 0);
 
   // Only consider observation collections for tags and counts
   const observationCollections = collections.filter((c) => c.template === "astrolog");
@@ -162,6 +159,20 @@ export default function ObservationsPage() {
     if (showArchived && !c.archived) return false;
     if (!showArchived && c.archived) return false;
 
+    // Filter by needs plate solving (collections with unsolved images)
+    if (showNeedsPlateSolving) {
+      const meta = collectionsMetadata[c.id];
+      if (meta) {
+        // Show only collections where not all images are plate solved
+        if (meta.imageCount === 0 || meta.plateSolvedCount >= meta.imageCount) {
+          return false;
+        }
+      } else {
+        // No metadata yet, exclude from filter
+        return false;
+      }
+    }
+
     // Filter by selected tags (if any)
     if (selectedTags.length > 0) {
       const collectionTags = parseTags(c.tags);
@@ -175,6 +186,22 @@ export default function ObservationsPage() {
   });
 
   const archivedCount = observationCollections.filter((c) => c.archived).length;
+
+  // Calculate total stats across all observation collections (excluding archived)
+  const totalStats = observationCollections
+    .filter((c) => !c.archived)
+    .reduce(
+      (acc, c) => {
+        const meta = collectionsMetadata[c.id];
+        if (meta) {
+          acc.imageCount += meta.imageCount;
+          acc.plateSolvedCount += meta.plateSolvedCount;
+          acc.totalExposureSeconds += meta.totalExposureSeconds;
+        }
+        return acc;
+      },
+      { imageCount: 0, plateSolvedCount: 0, totalExposureSeconds: 0 }
+    );
 
   // Separate favorites from regular collections
   const favoriteCollections = filteredCollections.filter((c) => c.favorite);
@@ -443,6 +470,15 @@ export default function ObservationsPage() {
           {showArchived ? "Archived Observations" : "Observation Log"}
         </h1>
         <div className="flex gap-2">
+          {/* Needs Plate Solving Filter */}
+          <Button
+            variant={showNeedsPlateSolving ? "default" : "outline"}
+            onClick={() => setShowNeedsPlateSolving(!showNeedsPlateSolving)}
+            className={showNeedsPlateSolving ? "" : "bg-transparent border-gray-600 text-white hover:bg-gray-800"}
+          >
+            <Compass className="w-4 h-4 mr-2" />
+            {showNeedsPlateSolving ? "Show All" : "Needs Solving"}
+          </Button>
           {/* Archive Toggle */}
           {archivedCount > 0 && (
             <Button
@@ -723,7 +759,9 @@ export default function ObservationsPage() {
                   <SelectContent className="bg-slate-700 border-slate-600">
                     <SelectItem value="general">General Collection</SelectItem>
                     <SelectItem value="astrolog">Observation Log</SelectItem>
-                    <SelectItem value="messier">Messier Object</SelectItem>
+                    <SelectItem value="messier">Messier Catalog</SelectItem>
+                    <SelectItem value="caldwell">Caldwell Catalog</SelectItem>
+                    <SelectItem value="ngc">NGC Catalog</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-gray-500">Choose the type of collection to organize your content</p>
@@ -780,6 +818,28 @@ export default function ObservationsPage() {
         of out-of-scope and post-processed photos. But they will always be clearly marked.
       </p>
 
+      {/* Total Stats Summary */}
+      {!isLoadingCollectionData && totalStats.imageCount > 0 && (
+        <div className="flex flex-wrap gap-4 mb-6 text-sm">
+          <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
+            <span className="text-gray-400">Total Images:</span>
+            <span className="text-white font-medium">{totalStats.imageCount}</span>
+          </div>
+          <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
+            <Clock className="w-4 h-4 text-teal-400" />
+            <span className="text-gray-400">Total Imaging Time:</span>
+            <span className="text-white font-medium">{formatDuration(totalStats.totalExposureSeconds)}</span>
+          </div>
+          {totalStats.plateSolvedCount > 0 && (
+            <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
+              <Compass className="w-4 h-4 text-teal-400" />
+              <span className="text-gray-400">Plate Solved:</span>
+              <span className="text-white font-medium">{totalStats.plateSolvedCount}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tag Filters */}
       {allTags.length > 0 && (
         <div className="mb-8">
@@ -816,9 +876,19 @@ export default function ObservationsPage() {
       )}
 
       {/* Collections */}
-      {isLoading ? (
-        <div className="text-center py-12">
-          <p className="text-gray-400">Loading collections...</p>
+      {isLoading || isLoadingCollectionData ? (
+        <div className="space-y-8">
+          {/* Skeleton for monthly group */}
+          <div>
+            <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
+              <Skeleton className="h-6 w-40" />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <CollectionCardSkeleton key={i} />
+              ))}
+            </div>
+          </div>
         </div>
       ) : observationCollections.length === 0 ? (
         <div className="text-center py-12 rounded-lg bg-slate-800/50">
@@ -847,6 +917,8 @@ export default function ObservationsPage() {
                     key={collection.id}
                     collection={collection}
                     imageCount={getImageCount(collection.id)}
+                    plateSolvedCount={getPlateSolvedCount(collection.id)}
+                    totalExposure={getTotalExposure(collection.id)}
                     previewImage={getPreviewImage(collection.id)}
                     onRefresh={refetch}
                   />
@@ -870,6 +942,8 @@ export default function ObservationsPage() {
                     key={collection.id}
                     collection={collection}
                     imageCount={getImageCount(collection.id)}
+                    plateSolvedCount={getPlateSolvedCount(collection.id)}
+                    totalExposure={getTotalExposure(collection.id)}
                     previewImage={getPreviewImage(collection.id)}
                     onRefresh={refetch}
                   />
@@ -883,14 +957,43 @@ export default function ObservationsPage() {
   );
 }
 
+function CollectionCardSkeleton() {
+  return (
+    <div>
+      <div className="overflow-hidden rounded-lg">
+        {/* Image area skeleton */}
+        <div className="relative aspect-[4/3] bg-slate-700">
+          {/* Title skeleton */}
+          <div className="absolute top-0 left-0 right-0 p-3">
+            <Skeleton className="h-5 w-3/4" />
+          </div>
+          {/* Bottom info bar skeleton */}
+          <div className="absolute bottom-0 left-0 right-0 p-3 flex items-end justify-between">
+            <Skeleton className="h-6 w-20" />
+            <Skeleton className="h-5 w-16" />
+          </div>
+        </div>
+      </div>
+      {/* Date skeleton */}
+      <div className="flex justify-center mt-2">
+        <Skeleton className="h-4 w-32" />
+      </div>
+    </div>
+  );
+}
+
 function CollectionCard({
   collection,
   imageCount,
+  plateSolvedCount,
+  totalExposure,
   previewImage,
   onRefresh,
 }: {
   collection: Collection;
   imageCount: number;
+  plateSolvedCount: number;
+  totalExposure: number;
   previewImage: Image | null;
   onRefresh: () => void;
 }) {
@@ -1009,10 +1112,30 @@ function CollectionCard({
 
             {/* Bottom info bar */}
             <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/60 to-transparent flex items-end justify-between">
-              {/* Photo count */}
-              <span className="bg-slate-800/90 text-white text-sm px-2 py-1 rounded">
-                {imageCount} photo{imageCount !== 1 ? "s" : ""}
-              </span>
+              {/* Photo count, exposure time, and plate-solved count */}
+              <div className="flex gap-2 flex-wrap">
+                <span className="bg-slate-800/90 text-white text-sm px-2 py-1 rounded">
+                  {imageCount} photo{imageCount !== 1 ? "s" : ""}
+                </span>
+                {totalExposure > 0 && (
+                  <span
+                    className="bg-slate-800/90 text-white text-sm px-2 py-1 rounded flex items-center gap-1"
+                    title="Total imaging time"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-teal-400" />
+                    {formatDuration(totalExposure)}
+                  </span>
+                )}
+                {plateSolvedCount > 0 && (
+                  <span
+                    className="bg-teal-600/90 text-white text-sm px-2 py-1 rounded flex items-center gap-1"
+                    title={`${plateSolvedCount} plate solved`}
+                  >
+                    <Compass className="w-3.5 h-3.5" />
+                    {plateSolvedCount}
+                  </span>
+                )}
+              </div>
 
               {/* Tags */}
               {tags.length > 0 && (

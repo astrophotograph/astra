@@ -1,8 +1,10 @@
 /**
  * Astronomical Catalog Definitions
  *
- * Contains Messier and Caldwell catalog objects with metadata.
+ * Contains Messier, Caldwell, and NGC catalog objects with metadata.
  */
+
+import { NGC_CATALOG_DATA, NGC_TOTAL_COUNT, type NGCEntry } from "./ngc-catalog-data";
 
 export interface CatalogEntry {
   id: string;
@@ -22,6 +24,14 @@ export interface CatalogDefinition {
   name: string;
   description: string;
   objects: CatalogEntry[];
+  // Pagination support for large catalogs
+  pagination?: {
+    totalObjects: number;
+    pageSize: number;
+    totalPages: number;
+    currentPage: number;
+    pageRanges: { page: number; label: string; start: number; end: number }[];
+  };
 }
 
 /**
@@ -256,9 +266,77 @@ export const CALDWELL_CATALOG: CatalogEntry[] = [
 ];
 
 /**
- * Get catalog definition by template name
+ * NGC Catalog - 8,148 objects from OpenNGC database
+ * Loaded in pages of 100 for performance.
  */
-export function getCatalog(template: string): CatalogDefinition | null {
+const NGC_TOTAL_OBJECTS = NGC_TOTAL_COUNT;
+const NGC_PAGE_SIZE = 100;
+
+// Build a map of NGC number to entry for quick lookup
+const NGC_MAP = new Map<number, NGCEntry>();
+for (const entry of NGC_CATALOG_DATA) {
+  NGC_MAP.set(entry.num, entry);
+}
+
+// Get the max NGC number in the catalog
+const NGC_MAX_NUMBER = Math.max(...NGC_CATALOG_DATA.map(e => e.num));
+
+/**
+ * Convert NGCEntry to CatalogEntry
+ */
+function ngcToCatalogEntry(entry: NGCEntry): CatalogEntry {
+  return {
+    id: `NGC${entry.num}`,
+    name: `NGC ${entry.num}`,
+    commonName: entry.commonName || undefined,
+    type: entry.type,
+    constellation: entry.constellation,
+    ra: entry.ra,
+    dec: entry.dec,
+    magnitude: entry.magnitude || undefined,
+    size: entry.size || undefined,
+  };
+}
+
+/**
+ * Get NGC catalog entries for a specific range
+ */
+function getNGCEntries(start: number, end: number): CatalogEntry[] {
+  const entries: CatalogEntry[] = [];
+  for (let num = start; num <= end && num <= NGC_MAX_NUMBER; num++) {
+    const ngcEntry = NGC_MAP.get(num);
+    if (ngcEntry) {
+      entries.push(ngcToCatalogEntry(ngcEntry));
+    }
+  }
+  return entries;
+}
+
+/**
+ * Generate all NGC page ranges (by NGC number, not by count)
+ */
+function getNGCPageRanges(): { page: number; label: string; start: number; end: number }[] {
+  const ranges: { page: number; label: string; start: number; end: number }[] = [];
+  let page = 0;
+  for (let start = 1; start <= NGC_MAX_NUMBER; start += NGC_PAGE_SIZE) {
+    const end = Math.min(start + NGC_PAGE_SIZE - 1, NGC_MAX_NUMBER);
+    ranges.push({
+      page,
+      label: `NGC ${start}-${end}`,
+      start,
+      end,
+    });
+    page++;
+  }
+  return ranges;
+}
+
+/**
+ * Get catalog definition by template name
+ * @param template - The catalog template name
+ * @param page - Optional page number for paginated catalogs (0-indexed)
+ */
+export function getCatalog(template: string, page?: number): CatalogDefinition | null {
   switch (template) {
     case "messier":
       return {
@@ -274,9 +352,37 @@ export function getCatalog(template: string): CatalogDefinition | null {
         description: "109 deep-sky objects compiled by Sir Patrick Caldwell-Moore to complement the Messier catalog",
         objects: CALDWELL_CATALOG,
       };
+    case "ngc": {
+      const pageRanges = getNGCPageRanges();
+      const totalPages = pageRanges.length;
+      const currentPage = Math.max(0, Math.min(page ?? 0, totalPages - 1));
+      const range = pageRanges[currentPage];
+      const objects = getNGCEntries(range.start, range.end);
+
+      return {
+        id: "ngc",
+        name: "NGC Catalog",
+        description: `The New General Catalogue of Nebulae and Clusters of Stars (NGC ${range.start}-${range.end})`,
+        objects,
+        pagination: {
+          totalObjects: NGC_TOTAL_OBJECTS,
+          pageSize: NGC_PAGE_SIZE,
+          totalPages,
+          currentPage,
+          pageRanges,
+        },
+      };
+    }
     default:
       return null;
   }
+}
+
+/**
+ * Get all NGC entries (for matching purposes only, not for display)
+ */
+export function getAllNGCEntries(): CatalogEntry[] {
+  return NGC_CATALOG_DATA.map(ngcToCatalogEntry);
 }
 
 /**

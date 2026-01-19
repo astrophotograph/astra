@@ -7,15 +7,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Camera,
   Clock,
@@ -171,8 +170,16 @@ export function extractExposureSeconds(image: Image): number {
 function formatDuration(seconds: number): string {
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  const hours = Math.floor(seconds / 3600);
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.round((seconds % 3600) / 60);
+
+  if (days > 0) {
+    if (hours > 0) return `${days}d ${hours}h`;
+    if (minutes > 0) return `${days}d ${minutes}m`;
+    return `${days}d`;
+  }
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
@@ -251,100 +258,104 @@ export default function CatalogObjectDialog({
 
   return (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="dark max-w-2xl max-h-[85vh] overflow-hidden flex flex-col bg-slate-900 border-slate-700">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-3 text-white">
-              <span className="text-2xl font-bold">{object.name}</span>
-              {object.commonName && (
-                <span className="text-lg text-slate-400 font-normal">
-                  {object.commonName}
-                </span>
-              )}
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              {object.type} in {object.constellation}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex-1 overflow-hidden flex flex-col gap-4">
-            {/* Object Info */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <div className="bg-slate-800 rounded-lg p-3">
-                <div className="text-xs text-slate-400 mb-1">Magnitude</div>
-                <div className="text-lg font-semibold text-white">
-                  {object.magnitude ?? "—"}
-                </div>
-              </div>
-              <div className="bg-slate-800 rounded-lg p-3">
-                <div className="text-xs text-slate-400 mb-1">Size</div>
-                <div className="text-lg font-semibold text-white">
-                  {object.size ? `${object.size}'` : "—"}
-                </div>
-              </div>
-              <div className="bg-slate-800 rounded-lg p-3 col-span-2">
-                <div className="text-xs text-slate-400 mb-1">Coordinates</div>
-                <div className="text-sm font-mono text-white">
-                  {formatCoords(object.ra, object.dec)}
-                </div>
-              </div>
-            </div>
-
-            {/* Stats Summary */}
-            {images.length > 0 && (
-              <div className="bg-slate-800/50 rounded-lg p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-white">Your Images</h3>
-                  {stackedPaths.length > 0 && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setCollectDialogOpen(true)}
-                      className="border-slate-600 text-slate-300 hover:bg-slate-700"
-                    >
-                      <FolderDown className="w-4 h-4 mr-2" />
-                      Collect Files
-                    </Button>
-                  )}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                  <div className="flex items-center gap-2 text-slate-300">
-                    <ImageIcon className="w-4 h-4 text-teal-400" />
-                    <span>
-                      {stats.imageCount} image
-                      {stats.imageCount !== 1 ? "s" : ""}
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="right"
+          className="dark w-[75vw] sm:max-w-none bg-slate-900 border-slate-700 p-0 flex flex-col"
+        >
+          <div className="flex-1 overflow-y-auto">
+            <div className="p-6 space-y-6">
+              {/* Header */}
+              <SheetHeader className="pr-8">
+                <SheetTitle className="flex items-center gap-3 text-white">
+                  <span className="text-2xl font-bold">{object.name}</span>
+                  {object.commonName && (
+                    <span className="text-lg text-slate-400 font-normal">
+                      {object.commonName}
                     </span>
-                  </div>
-                  <div className="flex items-center gap-2 text-slate-300">
-                    <Clock className="w-4 h-4 text-teal-400" />
-                    <span>{formatDuration(stats.totalExposure)} total</span>
-                  </div>
-                  {stats.telescopes.length > 0 && (
-                    <div className="flex items-center gap-2 text-slate-300">
-                      <Telescope className="w-4 h-4 text-teal-400" />
-                      <span className="truncate" title={stats.telescopes.join(", ")}>
-                        {stats.telescopes.length === 1
-                          ? stats.telescopes[0]
-                          : `${stats.telescopes.length} scopes`}
-                      </span>
-                    </div>
                   )}
-                  {stats.cameras.length > 0 && (
-                    <div className="flex items-center gap-2 text-slate-300">
-                      <Camera className="w-4 h-4 text-teal-400" />
-                      <span className="truncate" title={stats.cameras.join(", ")}>
-                        {stats.cameras.length === 1
-                          ? stats.cameras[0]
-                          : `${stats.cameras.length} cameras`}
-                      </span>
-                    </div>
-                  )}
+                </SheetTitle>
+                <SheetDescription className="text-slate-400">
+                  {object.type} in {object.constellation}
+                </SheetDescription>
+              </SheetHeader>
+
+              {/* Object Info */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="bg-slate-800 rounded-lg p-3">
+                  <div className="text-xs text-slate-400 mb-1">Magnitude</div>
+                  <div className="text-lg font-semibold text-white">
+                    {object.magnitude ?? "—"}
+                  </div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-3">
+                  <div className="text-xs text-slate-400 mb-1">Size</div>
+                  <div className="text-lg font-semibold text-white">
+                    {object.size ? `${object.size}'` : "—"}
+                  </div>
+                </div>
+                <div className="bg-slate-800 rounded-lg p-3 col-span-2">
+                  <div className="text-xs text-slate-400 mb-1">Coordinates</div>
+                  <div className="text-sm font-mono text-white">
+                    {formatCoords(object.ra, object.dec)}
+                  </div>
                 </div>
               </div>
-            )}
 
-            {/* Image Grid */}
-            <ScrollArea className="flex-1">
+              {/* Stats Summary */}
+              {images.length > 0 && (
+                <div className="bg-slate-800/50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-semibold text-white">Your Images</h3>
+                    {stackedPaths.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCollectDialogOpen(true)}
+                        className="border-slate-600 text-slate-300 hover:bg-slate-700"
+                      >
+                        <FolderDown className="w-4 h-4 mr-2" />
+                        Collect Files
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                    <div className="flex items-center gap-2 text-slate-300">
+                      <ImageIcon className="w-4 h-4 text-teal-400" />
+                      <span>
+                        {stats.imageCount} image
+                        {stats.imageCount !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-300">
+                      <Clock className="w-4 h-4 text-teal-400" />
+                      <span>{formatDuration(stats.totalExposure)} total</span>
+                    </div>
+                    {stats.telescopes.length > 0 && (
+                      <div className="flex items-center gap-2 text-slate-300">
+                        <Telescope className="w-4 h-4 text-teal-400" />
+                        <span className="truncate" title={stats.telescopes.join(", ")}>
+                          {stats.telescopes.length === 1
+                            ? stats.telescopes[0]
+                            : `${stats.telescopes.length} scopes`}
+                        </span>
+                      </div>
+                    )}
+                    {stats.cameras.length > 0 && (
+                      <div className="flex items-center gap-2 text-slate-300">
+                        <Camera className="w-4 h-4 text-teal-400" />
+                        <span className="truncate" title={stats.cameras.join(", ")}>
+                          {stats.cameras.length === 1
+                            ? stats.cameras[0]
+                            : `${stats.cameras.length} cameras`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Image Grid */}
               {images.length === 0 ? (
                 <div className="text-center py-8 text-slate-400">
                   <ImageIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
@@ -354,7 +365,7 @@ export default function CatalogObjectDialog({
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pr-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                   {images.map((imgData) => (
                     <Link
                       key={imgData.image.id}
@@ -415,18 +426,18 @@ export default function CatalogObjectDialog({
                   ))}
                 </div>
               )}
-            </ScrollArea>
 
-            {/* Aliases / Additional Names */}
-            {object.aliases && object.aliases.length > 0 && (
-              <div className="text-sm text-slate-400">
-                <span className="text-slate-500">Also known as: </span>
-                {object.aliases.join(", ")}
-              </div>
-            )}
+              {/* Aliases / Additional Names */}
+              {object.aliases && object.aliases.length > 0 && (
+                <div className="text-sm text-slate-400">
+                  <span className="text-slate-500">Also known as: </span>
+                  {object.aliases.join(", ")}
+                </div>
+              )}
+            </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       {/* Collect Files Dialog */}
       <CollectFilesDialog

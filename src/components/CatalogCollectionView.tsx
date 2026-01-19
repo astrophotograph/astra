@@ -16,10 +16,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Check, Clock, ImageIcon, Search } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, ImageIcon, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getCatalog,
+  getAllNGCEntries,
   matchesCatalogEntry,
   type CatalogEntry,
 } from "@/lib/catalogs";
@@ -57,8 +58,16 @@ function formatDuration(seconds: number): string {
   if (seconds === 0) return "—";
   if (seconds < 60) return `${Math.round(seconds)}s`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  const hours = Math.floor(seconds / 3600);
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.round((seconds % 3600) / 60);
+
+  if (days > 0) {
+    if (hours > 0) return `${days}d ${hours}h`;
+    if (minutes > 0) return `${days}d ${minutes}m`;
+    return `${days}d`;
+  }
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
@@ -74,20 +83,30 @@ export default function CatalogCollectionView({
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortField>("number");
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
+  const [currentPage, setCurrentPage] = useState(0);
 
-  // Get catalog definition
+  // Get catalog definition (with pagination support)
   const catalog = useMemo(() => {
-    return getCatalog(collection.template || "");
-  }, [collection.template]);
+    return getCatalog(collection.template || "", currentPage);
+  }, [collection.template, currentPage]);
+
+  // For NGC catalog, we need all entries for image matching
+  const allCatalogObjects = useMemo(() => {
+    if (collection.template === "ngc") {
+      return getAllNGCEntries();
+    }
+    return catalog?.objects || [];
+  }, [collection.template, catalog]);
 
   // Build a map of catalog objects to their images
+  // For NGC, we match against all entries but only display current page
   const objectImageMap = useMemo(() => {
     if (!catalog) return new Map<string, ImageWithMeta[]>();
 
     const map = new Map<string, ImageWithMeta[]>();
 
-    // Initialize all catalog entries with empty arrays
-    for (const entry of catalog.objects) {
+    // Initialize all catalog entries with empty arrays (use allCatalogObjects for initialization)
+    for (const entry of allCatalogObjects) {
       map.set(entry.id, []);
     }
 
@@ -118,8 +137,8 @@ export default function CatalogCollectionView({
 
         const normalizedName = normalizeObjectName(annotation.name);
 
-        // Find matching catalog entry
-        for (const entry of catalog.objects) {
+        // Find matching catalog entry (search all objects, not just current page)
+        for (const entry of allCatalogObjects) {
           if (
             matchesCatalogEntry(annotation.name, entry) ||
             matchesCatalogEntry(normalizedName, entry)
@@ -142,29 +161,37 @@ export default function CatalogCollectionView({
     }
 
     return map;
-  }, [catalog, allImages, allCollections]);
+  }, [catalog, allCatalogObjects, allImages, allCollections]);
 
-  // Compute statistics
+  // Compute statistics (uses all objects for total, not just current page)
   const stats = useMemo(() => {
-    if (!catalog) return { total: 0, captured: 0, totalExposure: 0 };
+    if (!catalog) return { total: 0, captured: 0, totalExposure: 0, pageTotal: 0, pageCaptured: 0 };
 
     let captured = 0;
     let totalExposure = 0;
+    let pageCaptured = 0;
 
-    for (const [, images] of objectImageMap) {
+    // Count all captured objects
+    for (const [id, images] of objectImageMap) {
       if (images.length > 0) {
         captured++;
         totalExposure += images.reduce(
           (sum, img) => sum + img.exposureSeconds,
           0
         );
+        // Check if this object is on the current page
+        if (catalog.objects.find((o) => o.id === id)) {
+          pageCaptured++;
+        }
       }
     }
 
     return {
-      total: catalog.objects.length,
+      total: catalog.pagination?.totalObjects ?? catalog.objects.length,
       captured,
       totalExposure,
+      pageTotal: catalog.objects.length,
+      pageCaptured,
     };
   }, [catalog, objectImageMap]);
 
@@ -331,9 +358,71 @@ export default function CatalogCollectionView({
         </Select>
       </div>
 
+      {/* Pagination Controls (for large catalogs like NGC) */}
+      {catalog.pagination && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+            disabled={currentPage === 0}
+            className="bg-slate-800 border-slate-600 text-white hover:bg-slate-700"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </Button>
+          <Select
+            value={currentPage.toString()}
+            onValueChange={(v) => setCurrentPage(parseInt(v, 10))}
+          >
+            <SelectTrigger className="w-44 bg-slate-800 border-slate-600 text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="dark bg-slate-800 border-slate-600 max-h-80">
+              {catalog.pagination.pageRanges.map((range) => {
+                // Count captured in this range
+                let rangeCaptured = 0;
+                for (let i = range.start; i <= range.end; i++) {
+                  const id = `NGC${i}`;
+                  if ((objectImageMap.get(id) || []).length > 0) {
+                    rangeCaptured++;
+                  }
+                }
+                return (
+                  <SelectItem
+                    key={range.page}
+                    value={range.page.toString()}
+                    className="text-white focus:bg-slate-700 focus:text-white"
+                  >
+                    <span className="flex items-center justify-between w-full gap-2">
+                      {range.label}
+                      {rangeCaptured > 0 && (
+                        <span className="text-teal-400 text-xs">({rangeCaptured})</span>
+                      )}
+                    </span>
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((p) => Math.min(catalog.pagination!.totalPages - 1, p + 1))}
+            disabled={currentPage === catalog.pagination.totalPages - 1}
+            className="bg-slate-800 border-slate-600 text-white hover:bg-slate-700"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </Button>
+          <span className="text-sm text-slate-400 ml-2">
+            Page {currentPage + 1} of {catalog.pagination.totalPages}
+          </span>
+        </div>
+      )}
+
       {/* Results count */}
       <div className="text-sm text-slate-400">
         Showing {filteredObjects.length} of {catalog.objects.length} objects
+        {catalog.pagination && ` (${stats.captured} captured across all ${stats.total} NGC objects)`}
       </div>
 
       {/* Object Grid */}
