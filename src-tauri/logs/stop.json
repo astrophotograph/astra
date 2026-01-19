@@ -222,5 +222,37 @@
     "permission_mode": "acceptEdits",
     "hook_event_name": "Stop",
     "stop_hook_active": false
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "permission_mode": "acceptEdits",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "permission_mode": "default",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "permission_mode": "default",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
+  },
+  {
+    "session_id": "6c1cb0a2-2588-4678-a2b7-10b4b3d875ba",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/6c1cb0a2-2588-4678-a2b7-10b4b3d875ba.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/src-tauri",
+    "permission_mode": "acceptEdits",
+    "hook_event_name": "Stop",
+    "stop_hook_active": false
   }
 ]

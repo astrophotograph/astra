@@ -36,6 +36,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  CheckSquare,
   Compass,
   FolderDown,
   FolderOpen,
@@ -44,8 +45,10 @@ import {
   Map,
   MoreHorizontal,
   Plus,
+  Square,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -90,6 +93,10 @@ export default function CollectionDetailPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [addImagesDialogOpen, setAddImagesDialogOpen] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedForRemoval, setSelectedForRemoval] = useState<string[]>([]);
+  const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
+  const [isRemovingImages, setIsRemovingImages] = useState(false);
 
   const queryClient = useQueryClient();
   const { data: collection, isLoading, error } = useCollection(id || "");
@@ -111,7 +118,7 @@ export default function CollectionDetailPage() {
     return saved ? parseInt(saved, 10) : 1;
   });
   const [isBatchPlateSolving, setIsBatchPlateSolving] = useState(false);
-  const [batchPlateSolveProgress, setBatchPlateSolveProgress] = useState({ current: 0, total: 0, currentFilename: "", successCount: 0, failCount: 0 });
+  const [batchPlateSolveProgress, setBatchPlateSolveProgress] = useState({ current: 0, total: 0, currentFilename: "", successCount: 0, failCount: 0, avgSolveTime: 0 });
   const batchPlateSolveCancelRef = useRef(false);
 
   // Check if this is a catalog collection
@@ -123,11 +130,16 @@ export default function CollectionDetailPage() {
   const plateSolveStats = useMemo(() => {
     const solved = collectionImages.filter(isPlateSolved);
     const unsolved = collectionImages.filter((img) => !isPlateSolved(img));
+    const solvable = unsolved.filter((img) => !hasPlateSolveFailed(img));
+    const failed = unsolved.filter(hasPlateSolveFailed);
     return {
       solvedCount: solved.length,
       unsolvedCount: unsolved.length,
+      solvableCount: solvable.length,
+      skippedCount: failed.length,
       totalCount: collectionImages.length,
       unsolvedImages: unsolved,
+      solvableImages: solvable,
     };
   }, [collectionImages]);
 
@@ -259,6 +271,60 @@ export default function CollectionDetailPage() {
     }
   };
 
+  // Toggle image selection for batch removal
+  const toggleImageForRemoval = (imageId: string) => {
+    setSelectedForRemoval((prev) =>
+      prev.includes(imageId)
+        ? prev.filter((id) => id !== imageId)
+        : [...prev, imageId]
+    );
+  };
+
+  // Select all images for removal
+  const selectAllForRemoval = () => {
+    setSelectedForRemoval(collectionImages.map((img) => img.id));
+  };
+
+  // Clear selection
+  const clearSelection = () => {
+    setSelectedForRemoval([]);
+    setSelectionMode(false);
+  };
+
+  // Remove selected images from collection
+  const handleRemoveSelected = async () => {
+    if (!collection || selectedForRemoval.length === 0) return;
+
+    setIsRemovingImages(true);
+    setRemoveConfirmOpen(false);
+
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const imageId of selectedForRemoval) {
+      try {
+        await imageApi.removeFromCollection(imageId, collection.id);
+        successCount++;
+      } catch (err) {
+        console.error(`Failed to remove image ${imageId}:`, err);
+        failCount++;
+      }
+    }
+
+    // Invalidate queries to refresh the data
+    await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
+
+    setIsRemovingImages(false);
+    setSelectedForRemoval([]);
+    setSelectionMode(false);
+
+    if (failCount === 0) {
+      toast.success(`Removed ${successCount} image${successCount !== 1 ? "s" : ""} from collection`);
+    } else {
+      toast.info(`Removed ${successCount} image${successCount !== 1 ? "s" : ""}, ${failCount} failed`);
+    }
+  };
+
   // Toggle image favorite status
   const handleToggleFavorite = async (image: Image) => {
     try {
@@ -282,8 +348,12 @@ export default function CollectionDetailPage() {
       return;
     }
 
-    if (plateSolveStats.unsolvedCount === 0) {
-      toast.info("All images are already plate solved");
+    if (plateSolveStats.solvableCount === 0) {
+      if (plateSolveStats.skippedCount > 0) {
+        toast.info(`All images are either solved or have previously failed (${plateSolveStats.skippedCount} skipped)`);
+      } else {
+        toast.info("All images are already plate solved");
+      }
       return;
     }
 
@@ -298,99 +368,112 @@ export default function CollectionDetailPage() {
     setBatchPlateSolveDialogOpen(false);
 
     const localApiUrl = localStorage.getItem("local_astrometry_url") || undefined;
-    const imagesToSolve = plateSolveStats.unsolvedImages;
+    const imagesToSolve = [...plateSolveStats.solvableImages]; // Copy to use as queue (excludes failed)
+    const totalCount = imagesToSolve.length;
     let successCount = 0;
     let failCount = 0;
     let completedCount = 0;
+    let queueIndex = 0; // Next image to process
+    let totalSolveTime = 0; // Total time spent solving (in seconds)
+    const activeImages: string[] = []; // Currently processing filenames
 
     const parallelCount = Math.max(1, Math.min(batchPlateSolveParallel, 10)); // Clamp between 1-10
 
-    // Process images in parallel batches
-    const solveImage = async (img: typeof imagesToSolve[0]): Promise<boolean> => {
-      if (batchPlateSolveCancelRef.current) {
-        return false;
-      }
+    // Update progress display
+    const updateProgress = () => {
+      const avgSolveTime = completedCount > 0 ? totalSolveTime / completedCount : 0;
+      setBatchPlateSolveProgress({
+        current: completedCount,
+        total: totalCount,
+        currentFilename: activeImages.length > 0
+          ? (activeImages.length === 1 ? activeImages[0] : `${activeImages.length} images in parallel`)
+          : "",
+        successCount,
+        failCount,
+        avgSolveTime,
+      });
+    };
 
-      try {
-        const result = await plateSolveApi.solve({
-          id: img.id,
-          solver: "nova",
-          apiKey: batchPlateSolveApiKey,
-          apiUrl: localApiUrl,
-          queryCatalogs: true,
-          timeout: 300,
-        });
-
-        if (result.success) {
-          return true;
-        } else {
-          console.warn(`Plate solve failed for ${img.filename}: ${result.errorMessage}`);
-          return false;
+    // Worker function that pulls from queue
+    const worker = async (): Promise<void> => {
+      while (!batchPlateSolveCancelRef.current) {
+        // Get next image from queue
+        const index = queueIndex++;
+        if (index >= imagesToSolve.length) {
+          break; // No more images
         }
-      } catch (err) {
-        console.error(`Plate solve error for ${img.filename}:`, err);
-        return false;
+
+        const img = imagesToSolve[index];
+        activeImages.push(img.filename);
+        updateProgress();
+
+        const startTime = Date.now();
+        try {
+          const result = await plateSolveApi.solve({
+            id: img.id,
+            solver: "nova",
+            apiKey: batchPlateSolveApiKey,
+            apiUrl: localApiUrl,
+            queryCatalogs: true,
+            timeout: 300,
+          });
+
+          if (result.success) {
+            successCount++;
+          } else {
+            console.warn(`Plate solve failed for ${img.filename}: ${result.errorMessage}`);
+            failCount++;
+          }
+        } catch (err) {
+          console.error(`Plate solve error for ${img.filename}:`, err);
+          failCount++;
+        }
+        const elapsedTime = (Date.now() - startTime) / 1000; // Convert to seconds
+        totalSolveTime += elapsedTime;
+
+        // Remove from active list and update progress
+        const activeIndex = activeImages.indexOf(img.filename);
+        if (activeIndex > -1) {
+          activeImages.splice(activeIndex, 1);
+        }
+        completedCount++;
+        updateProgress();
       }
     };
 
-    // Process in chunks of parallelCount
-    for (let i = 0; i < imagesToSolve.length; i += parallelCount) {
-      if (batchPlateSolveCancelRef.current) {
-        break;
-      }
+    // Start worker pool - each worker pulls from queue as it completes
+    const workers = Array(parallelCount).fill(null).map(() => worker());
 
-      const chunk = imagesToSolve.slice(i, i + parallelCount);
+    // Run workers and handle completion (don't block UI on cancel)
+    Promise.all(workers).then(async () => {
+      // Only update UI if not already cancelled (cancel handler updates UI immediately)
+      if (!batchPlateSolveCancelRef.current) {
+        // Refresh data after batch completes
+        await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection?.id || "") });
 
-      setBatchPlateSolveProgress({
-        current: completedCount,
-        total: imagesToSolve.length,
-        currentFilename: parallelCount > 1 ? `${chunk.length} images in parallel` : chunk[0]?.filename || "",
-        successCount,
-        failCount,
-      });
+        setIsBatchPlateSolving(false);
+        setBatchPlateSolveProgress({ current: 0, total: 0, currentFilename: "", successCount: 0, failCount: 0, avgSolveTime: 0 });
 
-      // Process chunk in parallel
-      const results = await Promise.all(chunk.map(solveImage));
-
-      for (const success of results) {
-        completedCount++;
-        if (success) {
-          successCount++;
-        } else if (!batchPlateSolveCancelRef.current) {
-          failCount++;
+        if (failCount === 0) {
+          toast.success(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}`);
+        } else {
+          toast.info(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}, ${failCount} failed`);
         }
+      } else {
+        // Still refresh data even when cancelled (to show any images that completed)
+        await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection?.id || "") });
       }
-
-      // Update progress after chunk completes
-      setBatchPlateSolveProgress({
-        current: completedCount,
-        total: imagesToSolve.length,
-        currentFilename: "",
-        successCount,
-        failCount,
-      });
-    }
-
-    // Refresh data after batch completes
-    await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection?.id || "") });
-
-    const wasCancelled = batchPlateSolveCancelRef.current;
-    setIsBatchPlateSolving(false);
-    setBatchPlateSolveProgress({ current: 0, total: 0, currentFilename: "", successCount: 0, failCount: 0 });
-
-    if (wasCancelled) {
-      toast.info(`Cancelled. Solved ${successCount} image${successCount !== 1 ? "s" : ""} before stopping.`);
-    } else if (failCount === 0) {
-      toast.success(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}`);
-    } else {
-      toast.info(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}, ${failCount} failed`);
-    }
+    });
   };
 
-  // Cancel batch plate solve
-  const handleCancelBatchPlateSolve = () => {
+  // Cancel batch plate solve - immediately closes UI, workers finish in background
+  const handleCancelBatchPlateSolve = async () => {
     batchPlateSolveCancelRef.current = true;
-    toast.info("Cancelling... waiting for current images to finish");
+    setIsBatchPlateSolving(false);
+    setBatchPlateSolveProgress({ current: 0, total: 0, currentFilename: "", successCount: 0, failCount: 0, avgSolveTime: 0 });
+    // Immediately refresh data to pick up any failures that already completed
+    await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection?.id || "") });
+    toast.info("Cancelled. Any in-progress solves will complete in the background.");
   };
 
   // Toggle image selection
@@ -456,61 +539,110 @@ export default function CollectionDetailPage() {
       <div className="flex justify-between items-start mb-2">
         <h1 className="text-3xl font-bold text-white">{collection.name}</h1>
         <div className="flex items-center gap-2">
-          {stackedPaths.length > 0 && !isCatalogCollection && (
-            <Button
-              variant="outline"
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-              onClick={() => setCollectDialogOpen(true)}
-              title="Collect raw subframe files"
-            >
-              <FolderDown className="w-4 h-4 mr-2" />
-              Collect Files
-            </Button>
-          )}
-          {!isCatalogCollection && collectionImages.length > 0 && (
-            <Button
-              variant="outline"
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-              onClick={() => setBatchPlateSolveDialogOpen(true)}
-              disabled={isBatchPlateSolving}
-              title="Plate solve all unsolved images"
-            >
-              {isBatchPlateSolving ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Compass className="w-4 h-4 mr-2" />
+          {selectionMode ? (
+            <>
+              {/* Selection mode buttons */}
+              <Button
+                variant="outline"
+                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                onClick={selectAllForRemoval}
+              >
+                <CheckSquare className="w-4 h-4 mr-2" />
+                Select All
+              </Button>
+              {selectedForRemoval.length > 0 && (
+                <span className="px-2 py-1 bg-slate-700 rounded text-sm text-white">
+                  {selectedForRemoval.length} selected
+                </span>
               )}
-              {isBatchPlateSolving ? "Solving..." : "Batch Plate Solve"}
-            </Button>
+              <Button
+                variant="outline"
+                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                onClick={clearSelection}
+              >
+                <X className="w-4 h-4 mr-2" />
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => setRemoveConfirmOpen(true)}
+                disabled={selectedForRemoval.length === 0}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Remove {selectedForRemoval.length > 0 ? `(${selectedForRemoval.length})` : ""}
+              </Button>
+            </>
+          ) : (
+            <>
+              {/* Normal mode buttons */}
+              {stackedPaths.length > 0 && !isCatalogCollection && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setCollectDialogOpen(true)}
+                  title="Collect raw subframe files"
+                >
+                  <FolderDown className="w-4 h-4 mr-2" />
+                  Collect Files
+                </Button>
+              )}
+              {!isCatalogCollection && collectionImages.length > 0 && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setBatchPlateSolveDialogOpen(true)}
+                  disabled={isBatchPlateSolving}
+                  title="Plate solve all unsolved images"
+                >
+                  {isBatchPlateSolving ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Compass className="w-4 h-4 mr-2" />
+                  )}
+                  {isBatchPlateSolving ? "Solving..." : "Batch Plate Solve"}
+                </Button>
+              )}
+              {!isCatalogCollection && skyMapFootprints.length > 0 && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setSkyMapOpen(true)}
+                  title="View sky coverage map"
+                >
+                  <Map className="w-4 h-4 mr-2" />
+                  Sky Map
+                </Button>
+              )}
+              {!isCatalogCollection && collectionImages.length > 0 && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setSelectionMode(true)}
+                  title="Select images to remove"
+                >
+                  <Square className="w-4 h-4 mr-2" />
+                  Select
+                </Button>
+              )}
+              {!isCatalogCollection && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setAddImagesDialogOpen(true)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Image
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                onClick={handleStartEdit}
+              >
+                Edit
+              </Button>
+            </>
           )}
-          {!isCatalogCollection && skyMapFootprints.length > 0 && (
-            <Button
-              variant="outline"
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-              onClick={() => setSkyMapOpen(true)}
-              title="View sky coverage map"
-            >
-              <Map className="w-4 h-4 mr-2" />
-              Sky Map
-            </Button>
-          )}
-          {!isCatalogCollection && (
-            <Button
-              variant="outline"
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-              onClick={() => setAddImagesDialogOpen(true)}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add Image
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-            onClick={handleStartEdit}
-          >
-            Edit
-          </Button>
         </div>
       </div>
 
@@ -647,6 +779,9 @@ export default function CollectionDetailPage() {
               image={image}
               onRemove={() => handleRemoveImage(image.id)}
               onToggleFavorite={() => handleToggleFavorite(image)}
+              selectionMode={selectionMode}
+              isSelected={selectedForRemoval.includes(image.id)}
+              onToggleSelect={() => toggleImageForRemoval(image.id)}
             />
           ))}
         </div>
@@ -676,6 +811,47 @@ export default function CollectionDetailPage() {
               disabled={deleteCollection.isPending}
             >
               {deleteCollection.isPending ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove Images Confirmation Dialog */}
+      <Dialog open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+          <DialogHeader>
+            <DialogTitle>Remove Images from Collection</DialogTitle>
+            <DialogDescription className="text-gray-400">
+              Are you sure you want to remove {selectedForRemoval.length} image{selectedForRemoval.length !== 1 ? "s" : ""} from this collection?
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-gray-400">
+            The images will not be deleted from your library, only removed from &quot;{collection.name}&quot;.
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRemoveConfirmOpen(false)}
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleRemoveSelected}
+              disabled={isRemovingImages}
+            >
+              {isRemovingImages ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Removing...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Remove {selectedForRemoval.length} Image{selectedForRemoval.length !== 1 ? "s" : ""}
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -772,14 +948,22 @@ export default function CollectionDetailPage() {
                 <span className="text-teal-400 font-medium">{plateSolveStats.solvedCount}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">To be solved:</span>
-                <span className="text-amber-400 font-medium">{plateSolveStats.unsolvedCount}</span>
+                <span className="text-gray-400">Ready to solve:</span>
+                <span className="text-amber-400 font-medium">{plateSolveStats.solvableCount}</span>
               </div>
+              {plateSolveStats.skippedCount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Previously failed (skipped):</span>
+                  <span className="text-red-400 font-medium">{plateSolveStats.skippedCount}</span>
+                </div>
+              )}
             </div>
 
-            {plateSolveStats.unsolvedCount === 0 ? (
+            {plateSolveStats.solvableCount === 0 ? (
               <p className="text-center text-teal-400 text-sm">
-                All images in this collection are already plate solved!
+                {plateSolveStats.skippedCount > 0
+                  ? "All remaining images have previously failed plate solving."
+                  : "All images in this collection are already plate solved!"}
               </p>
             ) : (
               <>
@@ -826,7 +1010,7 @@ export default function CollectionDetailPage() {
 
                 {/* Warning */}
                 <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 text-sm text-amber-200">
-                  <strong>Note:</strong> This will submit {plateSolveStats.unsolvedCount} image{plateSolveStats.unsolvedCount !== 1 ? "s" : ""} to Astrometry.net for plate solving.
+                  <strong>Note:</strong> This will submit {plateSolveStats.solvableCount} image{plateSolveStats.solvableCount !== 1 ? "s" : ""} to Astrometry.net for plate solving.
                   Each image may take a few minutes to process.
                 </div>
               </>
@@ -840,13 +1024,13 @@ export default function CollectionDetailPage() {
             >
               Cancel
             </Button>
-            {plateSolveStats.unsolvedCount > 0 && (
+            {plateSolveStats.solvableCount > 0 && (
               <Button
                 onClick={handleBatchPlateSolve}
                 disabled={!batchPlateSolveApiKey}
               >
                 <Compass className="w-4 h-4 mr-2" />
-                Solve {plateSolveStats.unsolvedCount} Image{plateSolveStats.unsolvedCount !== 1 ? "s" : ""}
+                Solve {plateSolveStats.solvableCount} Image{plateSolveStats.solvableCount !== 1 ? "s" : ""}
               </Button>
             )}
           </DialogFooter>
@@ -881,6 +1065,11 @@ export default function CollectionDetailPage() {
               <span className="text-teal-400">
                 {batchPlateSolveProgress.successCount} solved
               </span>
+              {batchPlateSolveProgress.avgSolveTime > 0 && (
+                <span className="text-gray-400">
+                  Avg: {batchPlateSolveProgress.avgSolveTime.toFixed(1)}s
+                </span>
+              )}
               {batchPlateSolveProgress.failCount > 0 && (
                 <span className="text-red-400">
                   {batchPlateSolveProgress.failCount} failed
@@ -932,14 +1121,34 @@ function isPlateSolved(image: Image): boolean {
   }
 }
 
+// Check if plate solving has previously failed for an image
+function hasPlateSolveFailed(image: Image): boolean {
+  if (!image.metadata) return false;
+  try {
+    const metadata =
+      typeof image.metadata === "string"
+        ? JSON.parse(image.metadata)
+        : image.metadata;
+    return !!metadata.plate_solve_failed;
+  } catch {
+    return false;
+  }
+}
+
 function ImageCard({
   image,
   onRemove,
   onToggleFavorite,
+  selectionMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: {
   image: Image;
   onRemove: () => void;
   onToggleFavorite: () => void;
+  selectionMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const navigate = useNavigate();
   const plateSolved = isPlateSolved(image);
@@ -951,41 +1160,80 @@ function ImageCard({
     navigate(`/i/${image.id}?action=platesolve`);
   };
 
-  return (
-    <div className="group relative rounded-lg overflow-hidden bg-slate-800 border border-slate-700">
-      <Link to={`/i/${image.id}`}>
-        <div className="aspect-video bg-slate-700 relative">
-          {image.thumbnail ? (
-            <img
-              src={image.thumbnail}
-              alt={image.filename}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center">
-              <ImageIcon className="w-10 h-10 text-gray-500" />
-            </div>
-          )}
-          {/* Plate-solved indicator */}
-          {plateSolved && (
-            <div
-              className="absolute bottom-2 left-2 w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
-              title="Plate solved"
-            >
-              <Compass className="w-3.5 h-3.5 text-white" />
-            </div>
-          )}
-        </div>
-        <div className="p-2">
-          <p className="font-medium truncate text-sm text-white">{image.summary || image.filename}</p>
-          {image.favorite && (
-            <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 inline" />
-          )}
-        </div>
-      </Link>
+  const handleClick = (e: React.MouseEvent) => {
+    if (selectionMode && onToggleSelect) {
+      e.preventDefault();
+      onToggleSelect();
+    }
+  };
 
-      {/* Dropdown Menu */}
-      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+  const cardContent = (
+    <>
+      <div className="aspect-video bg-slate-700 relative">
+        {image.thumbnail ? (
+          <img
+            src={image.thumbnail}
+            alt={image.filename}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <ImageIcon className="w-10 h-10 text-gray-500" />
+          </div>
+        )}
+        {/* Plate-solved indicator */}
+        {plateSolved && (
+          <div
+            className="absolute bottom-2 left-2 w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
+            title="Plate solved"
+          >
+            <Compass className="w-3.5 h-3.5 text-white" />
+          </div>
+        )}
+        {/* Selection checkbox */}
+        {selectionMode && (
+          <div className="absolute top-2 left-2">
+            <div
+              className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
+                isSelected
+                  ? "bg-teal-500 text-white"
+                  : "bg-black/50 text-white border border-white/50"
+              }`}
+            >
+              {isSelected ? (
+                <CheckSquare className="w-4 h-4" />
+              ) : (
+                <Square className="w-4 h-4" />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+      <div className="p-2">
+        <p className="font-medium truncate text-sm text-white">{image.summary || image.filename}</p>
+        {image.favorite && (
+          <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 inline" />
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <div
+      className={`group relative rounded-lg overflow-hidden bg-slate-800 border transition-colors ${
+        isSelected ? "border-teal-500 ring-2 ring-teal-500/50" : "border-slate-700"
+      } ${selectionMode ? "cursor-pointer" : ""}`}
+      onClick={handleClick}
+    >
+      {selectionMode ? (
+        cardContent
+      ) : (
+        <Link to={`/i/${image.id}`}>{cardContent}</Link>
+      )}
+
+      {/* Dropdown Menu - hidden in selection mode */}
+      {!selectionMode && (
+        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -1032,6 +1280,7 @@ function ImageCard({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      )}
     </div>
   );
 }

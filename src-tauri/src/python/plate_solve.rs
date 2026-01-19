@@ -53,6 +53,9 @@ pub fn solve_image(
     scale_lower: Option<f64>,
     scale_upper: Option<f64>,
     timeout: Option<i32>,
+    hint_ra: Option<f64>,
+    hint_dec: Option<f64>,
+    hint_radius: Option<f64>,
 ) -> Result<PlateSolveResult, String> {
     Python::with_gil(|py| {
         // Import our module
@@ -97,6 +100,25 @@ pub fn solve_image(
             kwargs
                 .set_item("timeout", t)
                 .map_err(|e| format!("Failed to set timeout: {}", e))?;
+        }
+
+        // Add hint coordinates for faster solving
+        if let Some(ra) = hint_ra {
+            kwargs
+                .set_item("hint_ra", ra)
+                .map_err(|e| format!("Failed to set hint_ra: {}", e))?;
+        }
+
+        if let Some(dec) = hint_dec {
+            kwargs
+                .set_item("hint_dec", dec)
+                .map_err(|e| format!("Failed to set hint_dec: {}", e))?;
+        }
+
+        if let Some(radius) = hint_radius {
+            kwargs
+                .set_item("hint_radius", radius)
+                .map_err(|e| format!("Failed to set hint_radius: {}", e))?;
         }
 
         // Call solve_image function

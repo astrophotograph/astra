@@ -32,6 +32,12 @@ pub struct PlateSolveInput {
     pub catalogs: Option<Vec<String>>,
     /// Magnitude limit for bright stars
     pub star_mag_limit: Option<f64>,
+    /// Hint RA in degrees (to speed up solving)
+    pub hint_ra: Option<f64>,
+    /// Hint Dec in degrees (to speed up solving)
+    pub hint_dec: Option<f64>,
+    /// Hint search radius in degrees (default: 10)
+    pub hint_radius: Option<f64>,
 }
 
 /// Combined result from plate solving and catalog query
@@ -77,6 +83,9 @@ pub async fn plate_solve_image(
         input.scale_lower,
         input.scale_upper,
         input.timeout,
+        input.hint_ra,
+        input.hint_dec,
+        input.hint_radius,
     )?;
 
     let mut objects = Vec::new();
@@ -97,9 +106,9 @@ pub async fn plate_solve_image(
         });
     }
 
-    // If solve was successful, update the image metadata and annotations
+    // Update image metadata based on solve result
     if solve_result.success {
-        // Build metadata JSON
+        // Build metadata JSON for successful solve
         let plate_solve_metadata = serde_json::json!({
             "plate_solve": {
                 "solved_at": chrono::Utc::now().to_rfc3339(),
@@ -114,7 +123,7 @@ pub async fn plate_solve_image(
             }
         });
 
-        // Merge with existing metadata if present
+        // Merge with existing metadata if present, and remove any failed flag
         let new_metadata = if let Some(existing) = &image.metadata {
             if let Ok(mut existing_json) = serde_json::from_str::<serde_json::Value>(existing) {
                 if let Some(obj) = existing_json.as_object_mut() {
@@ -122,6 +131,8 @@ pub async fn plate_solve_image(
                         "plate_solve".to_string(),
                         plate_solve_metadata["plate_solve"].clone(),
                     );
+                    // Remove failed flag if present (image is now solved)
+                    obj.remove("plate_solve_failed");
                 }
                 serde_json::to_string(&existing_json).ok()
             } else {
@@ -163,6 +174,53 @@ pub async fn plate_solve_image(
 
         if let Err(e) = repository::update_image(&mut conn, &input.id, &update) {
             log::error!("Failed to update image after plate solve: {}", e);
+        }
+    } else {
+        // Build metadata JSON for failed solve
+        let failed_metadata = serde_json::json!({
+            "plate_solve_failed": {
+                "failed_at": chrono::Utc::now().to_rfc3339(),
+                "solver": solve_result.solver,
+                "error_message": solve_result.error_message,
+            }
+        });
+
+        // Merge with existing metadata if present
+        let new_metadata = if let Some(existing) = &image.metadata {
+            if let Ok(mut existing_json) = serde_json::from_str::<serde_json::Value>(existing) {
+                if let Some(obj) = existing_json.as_object_mut() {
+                    obj.insert(
+                        "plate_solve_failed".to_string(),
+                        failed_metadata["plate_solve_failed"].clone(),
+                    );
+                }
+                serde_json::to_string(&existing_json).ok()
+            } else {
+                Some(failed_metadata.to_string())
+            }
+        } else {
+            Some(failed_metadata.to_string())
+        };
+
+        // Update the image in database with failed flag
+        let update = UpdateImage {
+            collection_id: None,
+            filename: None,
+            url: None,
+            summary: None,
+            description: None,
+            content_type: None,
+            favorite: None,
+            tags: None,
+            visibility: None,
+            location: None,
+            annotations: None,
+            metadata: new_metadata,
+            thumbnail: None,
+        };
+
+        if let Err(e) = repository::update_image(&mut conn, &input.id, &update) {
+            log::error!("Failed to update image after plate solve failure: {}", e);
         }
     }
 

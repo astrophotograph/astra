@@ -5,7 +5,7 @@
  * of each plate-solved image. Clicking on a footprint shows image details.
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import {
@@ -82,11 +82,18 @@ export default function SkyMapSheet({
     return saved ? parseInt(saved, 10) : 1;
   });
   const [isSolving, setIsSolving] = useState(false);
-  const [solveProgress, setSolveProgress] = useState({ current: 0, total: 0, successCount: 0, failCount: 0 });
+  const [solveProgress, setSolveProgress] = useState({ current: 0, total: 0, successCount: 0, failCount: 0, avgSolveTime: 0 });
   const cancelRef = useRef(false);
 
   // Precomputed corners for hit testing
   const footprintCorners = useRef<Map<string, Array<[number, number]>>>(new Map());
+
+  // Filter out images that have previously failed plate solving
+  const solvableImages = useMemo(() => {
+    return unsolvedImages.filter(img => !img.hasFailed);
+  }, [unsolvedImages]);
+
+  const skippedCount = unsolvedImages.length - solvableImages.length;
 
   // Load Aladin Lite script when sheet opens
   useEffect(() => {
@@ -289,8 +296,12 @@ export default function SkyMapSheet({
       return;
     }
 
-    if (unsolvedImages.length === 0) {
-      toast.info("All images are already plate solved");
+    if (solvableImages.length === 0) {
+      if (skippedCount > 0) {
+        toast.info(`All images are either solved or have previously failed (${skippedCount} skipped)`);
+      } else {
+        toast.info("All images are already plate solved");
+      }
       return;
     }
 
@@ -305,92 +316,122 @@ export default function SkyMapSheet({
     setBatchDialogOpen(false);
 
     const localApiUrl = localStorage.getItem("local_astrometry_url") || undefined;
-    const imagesToSolve = unsolvedImages.slice(0, maxCount);
+    const imagesToSolve = solvableImages.slice(0, maxCount);
+    const totalCount = imagesToSolve.length;
     let successCount = 0;
     let failCount = 0;
     let completedCount = 0;
+    let queueIndex = 0; // Next image to process
+    let totalSolveTime = 0; // Total time spent solving (in seconds)
 
     const effectiveParallel = Math.max(1, Math.min(parallelCount, 10));
 
-    // Process images in parallel batches
-    const solveImage = async (img: UnsolvedImage): Promise<boolean> => {
-      if (cancelRef.current) {
-        return false;
+    // Build a map of collection ID to solved image coordinates for fallback hints
+    const collectionHints = new Map<string, { ra: number; dec: number }>();
+    for (const fp of images) {
+      if (fp.collectionId && !collectionHints.has(fp.collectionId)) {
+        collectionHints.set(fp.collectionId, { ra: fp.centerRa, dec: fp.centerDec });
       }
+    }
 
-      try {
-        const result = await plateSolveApi.solve({
-          id: img.id,
-          solver: "nova",
-          apiKey,
-          apiUrl: localApiUrl,
-          queryCatalogs: true,
-          timeout: 300,
-        });
+    // Update progress display
+    const updateProgress = () => {
+      const avgSolveTime = completedCount > 0 ? totalSolveTime / completedCount : 0;
+      setSolveProgress({
+        current: completedCount,
+        total: totalCount,
+        successCount,
+        failCount,
+        avgSolveTime,
+      });
+    };
 
-        return result.success;
-      } catch (err) {
-        console.error(`Plate solve error for ${img.filename}:`, err);
-        return false;
+    // Worker function that pulls from queue
+    const worker = async (): Promise<void> => {
+      while (!cancelRef.current) {
+        // Get next image from queue
+        const index = queueIndex++;
+        if (index >= imagesToSolve.length) {
+          break; // No more images
+        }
+
+        const img = imagesToSolve[index];
+
+        // Determine coordinate hints:
+        // 1. Use metadata hints if available
+        // 2. Fall back to coordinates from a solved image in same collection
+        let hintRa = img.hintRa;
+        let hintDec = img.hintDec;
+
+        if (hintRa === undefined || hintDec === undefined) {
+          const collectionHint = collectionHints.get(img.collectionId);
+          if (collectionHint) {
+            hintRa = collectionHint.ra;
+            hintDec = collectionHint.dec;
+          }
+        }
+
+        const startTime = Date.now();
+        try {
+          const result = await plateSolveApi.solve({
+            id: img.id,
+            solver: "nova",
+            apiKey,
+            apiUrl: localApiUrl,
+            queryCatalogs: true,
+            timeout: 300,
+            hintRa,
+            hintDec,
+            hintRadius: hintRa !== undefined ? 15 : undefined, // 15 degree search radius when using hints
+          });
+
+          if (result.success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+        } catch (err) {
+          console.error(`Plate solve error for ${img.filename}:`, err);
+          failCount++;
+        }
+        const elapsedTime = (Date.now() - startTime) / 1000; // Convert to seconds
+        totalSolveTime += elapsedTime;
+
+        completedCount++;
+        updateProgress();
       }
     };
 
-    // Process in chunks
-    for (let i = 0; i < imagesToSolve.length; i += effectiveParallel) {
-      if (cancelRef.current) {
-        break;
-      }
+    // Start worker pool - each worker pulls from queue as it completes
+    const workers = Array(effectiveParallel).fill(null).map(() => worker());
 
-      const chunk = imagesToSolve.slice(i, i + effectiveParallel);
+    // Run workers and handle completion (don't block UI on cancel)
+    Promise.all(workers).then(() => {
+      // Only update UI if not already cancelled (cancel handler updates UI immediately)
+      if (!cancelRef.current) {
+        setIsSolving(false);
+        setSolveProgress({ current: 0, total: 0, successCount: 0, failCount: 0, avgSolveTime: 0 });
 
-      setSolveProgress({
-        current: completedCount,
-        total: imagesToSolve.length,
-        successCount,
-        failCount,
-      });
-
-      // Process chunk in parallel
-      const results = await Promise.all(chunk.map(solveImage));
-
-      for (const success of results) {
-        completedCount++;
-        if (success) {
-          successCount++;
-        } else if (!cancelRef.current) {
-          failCount++;
+        if (failCount === 0) {
+          toast.success(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}`);
+        } else {
+          toast.info(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}, ${failCount} failed`);
         }
       }
 
-      // Update progress after chunk completes
-      setSolveProgress({
-        current: completedCount,
-        total: imagesToSolve.length,
-        successCount,
-        failCount,
-      });
-    }
-
-    const wasCancelled = cancelRef.current;
-    setIsSolving(false);
-    setSolveProgress({ current: 0, total: 0, successCount: 0, failCount: 0 });
-
-    if (wasCancelled) {
-      toast.info(`Cancelled. Solved ${successCount} image${successCount !== 1 ? "s" : ""} before stopping.`);
-    } else if (failCount === 0) {
-      toast.success(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}`);
-    } else {
-      toast.info(`Plate solved ${successCount} image${successCount !== 1 ? "s" : ""}, ${failCount} failed`);
-    }
-
-    // Notify parent to refresh data
-    onSolveComplete?.();
+      // Notify parent to refresh data (even when cancelled, to show completed solves)
+      onSolveComplete?.();
+    });
   };
 
-  // Cancel batch plate solve
+  // Cancel batch plate solve - immediately closes UI, workers finish in background
   const handleCancelSolve = () => {
     cancelRef.current = true;
-    toast.info("Cancelling... waiting for current images to finish");
+    setIsSolving(false);
+    setSolveProgress({ current: 0, total: 0, successCount: 0, failCount: 0, avgSolveTime: 0 });
+    // Immediately refresh data to pick up any failures that already completed
+    onSolveComplete?.();
+    toast.info("Cancelled. Any in-progress solves will complete in the background.");
   };
 
   // Reset when sheet closes
@@ -506,6 +547,11 @@ export default function SkyMapSheet({
                   <span className="text-teal-400">
                     {solveProgress.successCount} solved
                   </span>
+                  {solveProgress.avgSolveTime > 0 && (
+                    <span className="text-gray-400">
+                      Avg: {solveProgress.avgSolveTime.toFixed(1)}s
+                    </span>
+                  )}
                   {solveProgress.failCount > 0 && (
                     <span className="text-red-400">
                       {solveProgress.failCount} failed
@@ -540,13 +586,19 @@ export default function SkyMapSheet({
             {/* Stats */}
             <div className="bg-slate-900 rounded-lg p-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Total unsolved:</span>
-                <span className="text-amber-400 font-medium">{unsolvedImages.length}</span>
-              </div>
-              <div className="flex justify-between text-sm">
                 <span className="text-gray-400">Already solved:</span>
                 <span className="text-teal-400 font-medium">{images.length}</span>
               </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-400">Ready to solve:</span>
+                <span className="text-amber-400 font-medium">{solvableImages.length}</span>
+              </div>
+              {skippedCount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-400">Previously failed (skipped):</span>
+                  <span className="text-red-400 font-medium">{skippedCount}</span>
+                </div>
+              )}
             </div>
 
             {/* API Key Input */}
@@ -580,13 +632,13 @@ export default function SkyMapSheet({
                 id="batch-max-count"
                 type="number"
                 min={1}
-                max={unsolvedImages.length}
+                max={solvableImages.length || 1}
                 value={maxCount}
-                onChange={(e) => setMaxCount(Math.max(1, Math.min(unsolvedImages.length, parseInt(e.target.value) || 1)))}
+                onChange={(e) => setMaxCount(Math.max(1, Math.min(solvableImages.length || 1, parseInt(e.target.value) || 1)))}
                 className="bg-slate-700 border-slate-600 w-32"
               />
               <p className="text-xs text-gray-500">
-                Limit the number of images to solve in this batch (1-{unsolvedImages.length}).
+                Limit the number of images to solve in this batch (1-{solvableImages.length}).
               </p>
             </div>
 

@@ -624,6 +624,12 @@ export interface PlateSolveInput {
   catalogs?: string[];
   /** Magnitude limit for bright stars */
   starMagLimit?: number;
+  /** Hint RA in degrees (to speed up solving) */
+  hintRa?: number;
+  /** Hint Dec in degrees (to speed up solving) */
+  hintDec?: number;
+  /** Hint search radius in degrees (default: 10) */
+  hintRadius?: number;
 }
 
 export interface PlateSolveResult {
