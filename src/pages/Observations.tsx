@@ -35,7 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, FolderOpen, FolderSearch, Loader2, MoreHorizontal, Compass, Clock } from "lucide-react";
+import { Plus, FolderOpen, FolderSearch, Loader2, MoreHorizontal, Compass, Clock, Map } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
@@ -46,6 +46,8 @@ import {
 import { useUpdateCollection, useDeleteCollection, useCollections, useCreateCollection, useCollectionsMetadata } from "@/hooks/use-collections";
 import { toast } from "sonner";
 import { useImages } from "@/hooks/use-images";
+import SkyMapSheet from "@/components/SkyMapSheet";
+import { useSkyMapImages } from "@/hooks/use-sky-map-images";
 import type { Collection, BulkScanPreview, Image } from "@/lib/tauri/commands";
 import { parseTags, scanApi } from "@/lib/tauri/commands";
 
@@ -116,6 +118,7 @@ export default function ObservationsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [showNeedsPlateSolving, setShowNeedsPlateSolving] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [skyMapOpen, setSkyMapOpen] = useState(false);
 
   // Get image count for each collection
   const getImageCount = (collectionId: string) => {
@@ -202,6 +205,12 @@ export default function ObservationsPage() {
       },
       { imageCount: 0, plateSolvedCount: 0, totalExposureSeconds: 0 }
     );
+
+  // Fetch plate-solved images for sky map
+  const { data: skyMapData, refetch: refetchSkyMap } = useSkyMapImages(observationCollections, collectionsMetadata);
+  const skyMapFootprints = skyMapData?.footprints ?? [];
+  const skyMapCollectionColors = skyMapData?.collectionColors ?? {};
+  const skyMapUnsolvedImages = skyMapData?.unsolvedImages ?? [];
 
   // Separate favorites from regular collections
   const favoriteCollections = filteredCollections.filter((c) => c.favorite);
@@ -479,6 +488,17 @@ export default function ObservationsPage() {
             <Compass className="w-4 h-4 mr-2" />
             {showNeedsPlateSolving ? "Show All" : "Needs Solving"}
           </Button>
+          {/* Sky Coverage Map */}
+          {skyMapFootprints.length > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => setSkyMapOpen(true)}
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+            >
+              <Map className="w-4 h-4 mr-2" />
+              Sky Coverage
+            </Button>
+          )}
           {/* Archive Toggle */}
           {archivedCount > 0 && (
             <Button
@@ -953,6 +973,20 @@ export default function ObservationsPage() {
           ))}
         </div>
       )}
+
+      {/* Sky Coverage Map Sheet */}
+      <SkyMapSheet
+        open={skyMapOpen}
+        onOpenChange={setSkyMapOpen}
+        images={skyMapFootprints}
+        title="Sky Coverage"
+        collectionColors={skyMapCollectionColors}
+        unsolvedImages={skyMapUnsolvedImages}
+        onSolveComplete={() => {
+          refetchSkyMap();
+          refetch();
+        }}
+      />
     </div>
   );
 }

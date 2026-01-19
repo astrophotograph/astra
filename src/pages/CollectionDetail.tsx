@@ -41,6 +41,7 @@ import {
   FolderOpen,
   ImageIcon,
   Loader2,
+  Map,
   MoreHorizontal,
   Plus,
   Star,
@@ -61,6 +62,8 @@ import { imageApi, plateSolveApi, type Image } from "@/lib/tauri/commands";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
+import SkyMapSheet from "@/components/SkyMapSheet";
+import { getImageFootprint, type ImageFootprint } from "@/lib/sky-map-utils";
 
 // Get session date from collection metadata
 function getSessionDate(collection: { metadata?: string | null }): Date | null {
@@ -98,6 +101,7 @@ export default function CollectionDetailPage() {
   const updateImage = useUpdateImage();
   const [isAddingImages, setIsAddingImages] = useState(false);
   const [collectDialogOpen, setCollectDialogOpen] = useState(false);
+  const [skyMapOpen, setSkyMapOpen] = useState(false);
   const [batchPlateSolveDialogOpen, setBatchPlateSolveDialogOpen] = useState(false);
   const [batchPlateSolveApiKey, setBatchPlateSolveApiKey] = useState(() => {
     return localStorage.getItem("astrometry_api_key") || "";
@@ -126,6 +130,13 @@ export default function CollectionDetailPage() {
       unsolvedImages: unsolved,
     };
   }, [collectionImages]);
+
+  // Extract footprints for sky map
+  const skyMapFootprints = useMemo((): ImageFootprint[] => {
+    return collectionImages
+      .map((img) => getImageFootprint(img, collection ?? undefined))
+      .filter((fp): fp is ImageFootprint => fp !== null);
+  }, [collectionImages, collection]);
 
   // Calculate moon phase for the session date
   const moonData = useMemo(() => {
@@ -470,6 +481,17 @@ export default function CollectionDetailPage() {
                 <Compass className="w-4 h-4 mr-2" />
               )}
               {isBatchPlateSolving ? "Solving..." : "Batch Plate Solve"}
+            </Button>
+          )}
+          {!isCatalogCollection && skyMapFootprints.length > 0 && (
+            <Button
+              variant="outline"
+              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+              onClick={() => setSkyMapOpen(true)}
+              title="View sky coverage map"
+            >
+              <Map className="w-4 h-4 mr-2" />
+              Sky Map
             </Button>
           )}
           {!isCatalogCollection && (
@@ -883,6 +905,14 @@ export default function CollectionDetailPage() {
         onOpenChange={setCollectDialogOpen}
         targetName={collection.name}
         stackedPaths={stackedPaths}
+      />
+
+      {/* Sky Map Sheet */}
+      <SkyMapSheet
+        open={skyMapOpen}
+        onOpenChange={setSkyMapOpen}
+        images={skyMapFootprints}
+        title={`${collection.name} - Sky Map`}
       />
     </div>
   );
