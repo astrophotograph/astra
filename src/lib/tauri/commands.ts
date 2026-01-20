@@ -153,6 +153,13 @@ export interface UpdateImageInput {
   metadata?: string;
 }
 
+export interface PopulateFitsUrlsResult {
+  totalChecked: number;
+  updated: number;
+  alreadySet: number;
+  noFitsFound: number;
+}
+
 export interface ScheduleItem {
   id: string;
   todo_id: string;
@@ -282,6 +289,13 @@ export const imageApi = {
 
   getThumbnail: (id: string) =>
     invoke<string>("get_image_thumbnail", { id }),
+
+  // FITS URL population methods
+  populateFitsUrls: () =>
+    invoke<PopulateFitsUrlsResult>("populate_fits_urls"),
+
+  ensureFitsUrl: (id: string) =>
+    invoke<string | null>("ensure_fits_url", { id }),
 };
 
 export const collectionImageApi = {

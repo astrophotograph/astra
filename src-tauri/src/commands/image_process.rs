@@ -117,6 +117,30 @@ pub struct ProcessImageResponse {
     pub result: ProcessingResult,
 }
 
+/// Find companion FITS file for a given image URL (same logic as in images.rs)
+fn find_fits_companion(url: &str) -> Option<String> {
+    let path = Path::new(url);
+
+    // Only process image files (jpg, jpeg, png)
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+        return None;
+    }
+
+    // Try .fit extension first, then .fits
+    let stem = path.file_stem()?.to_str()?;
+    let parent = path.parent()?;
+
+    for fits_ext in &["fit", "fits"] {
+        let fits_path = parent.join(format!("{}.{}", stem, fits_ext));
+        if fits_path.exists() {
+            return Some(fits_path.to_string_lossy().to_string());
+        }
+    }
+
+    None
+}
+
 /// Process a FITS image with stretch and enhancements
 #[tauri::command]
 pub async fn process_fits_image(
@@ -125,9 +149,28 @@ pub async fn process_fits_image(
 ) -> Result<ProcessImageResponse, String> {
     // Get the image from the database
     let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let image = repository::get_image_by_id(&mut conn, &input.id)
+    let mut image = repository::get_image_by_id(&mut conn, &input.id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Image not found: {}", input.id))?;
+
+    // Lazy populate fits_url if missing
+    if image.fits_url.is_none() {
+        if let Some(url) = &image.url {
+            if let Some(fits_path) = find_fits_companion(url) {
+                // Update database with the discovered fits_url
+                let update = UpdateImage {
+                    fits_url: Some(fits_path.clone()),
+                    ..Default::default()
+                };
+                if let Err(e) = repository::update_image(&mut conn, &input.id, &update) {
+                    log::warn!("Failed to update fits_url for image {}: {}", input.id, e);
+                } else {
+                    log::info!("Lazily populated fits_url for image {}: {}", input.id, fits_path);
+                    image.fits_url = Some(fits_path);
+                }
+            }
+        }
+    }
 
     // Get the FITS file path (prefer fits_url, fallback to url if it's a FITS file)
     let file_path = image

@@ -272,3 +272,135 @@ pub fn get_image_thumbnail(state: State<'_, AppState>, id: String) -> Result<Str
     // Otherwise, return full image data as fallback
     get_image_data(state, id)
 }
+
+// ============================================================================
+// FITS URL Population Commands
+// ============================================================================
+
+/// Find companion FITS file for a given image URL
+fn find_fits_companion(url: &str) -> Option<String> {
+    let path = Path::new(url);
+
+    // Only process image files (jpg, jpeg, png)
+    let ext = path.extension()?.to_str()?.to_lowercase();
+    if !matches!(ext.as_str(), "jpg" | "jpeg" | "png") {
+        return None;
+    }
+
+    // Try .fit extension first, then .fits
+    let stem = path.file_stem()?.to_str()?;
+    let parent = path.parent()?;
+
+    for fits_ext in &["fit", "fits"] {
+        let fits_path = parent.join(format!("{}.{}", stem, fits_ext));
+        if fits_path.exists() {
+            return Some(fits_path.to_string_lossy().to_string());
+        }
+    }
+
+    None
+}
+
+/// Result of populating FITS URLs
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PopulateFitsUrlsResult {
+    pub total_checked: i32,
+    pub updated: i32,
+    pub already_set: i32,
+    pub no_fits_found: i32,
+}
+
+/// Populate fits_url for all images that are missing it
+/// This checks for companion .fit/.fits files alongside the image URL
+#[tauri::command]
+pub fn populate_fits_urls(state: State<'_, AppState>) -> Result<PopulateFitsUrlsResult, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+
+    // Get all images for this user
+    let images = repository::get_images_by_user(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut result = PopulateFitsUrlsResult {
+        total_checked: 0,
+        updated: 0,
+        already_set: 0,
+        no_fits_found: 0,
+    };
+
+    for image in images {
+        result.total_checked += 1;
+
+        // Skip if fits_url already set
+        if image.fits_url.is_some() {
+            result.already_set += 1;
+            continue;
+        }
+
+        // Skip if no url
+        let Some(url) = &image.url else {
+            result.no_fits_found += 1;
+            continue;
+        };
+
+        // Try to find companion FITS file
+        if let Some(fits_path) = find_fits_companion(url) {
+            let update = UpdateImage {
+                fits_url: Some(fits_path.clone()),
+                ..Default::default()
+            };
+
+            if let Err(e) = repository::update_image(&mut conn, &image.id, &update) {
+                log::warn!("Failed to update fits_url for image {}: {}", image.id, e);
+            } else {
+                log::info!("Populated fits_url for image {}: {}", image.id, fits_path);
+                result.updated += 1;
+            }
+        } else {
+            result.no_fits_found += 1;
+        }
+    }
+
+    log::info!(
+        "populate_fits_urls complete: checked={}, updated={}, already_set={}, no_fits={}",
+        result.total_checked, result.updated, result.already_set, result.no_fits_found
+    );
+
+    Ok(result)
+}
+
+/// Ensure fits_url is populated for a single image (lazy population)
+/// Returns the fits_url if found/already set, None otherwise
+#[tauri::command]
+pub fn ensure_fits_url(state: State<'_, AppState>, id: String) -> Result<Option<String>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+
+    let image = repository::get_image_by_id(&mut conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", id))?;
+
+    // Return existing fits_url if set
+    if let Some(fits_url) = &image.fits_url {
+        return Ok(Some(fits_url.clone()));
+    }
+
+    // Try to find and set fits_url
+    let Some(url) = &image.url else {
+        return Ok(None);
+    };
+
+    if let Some(fits_path) = find_fits_companion(url) {
+        let update = UpdateImage {
+            fits_url: Some(fits_path.clone()),
+            ..Default::default()
+        };
+
+        repository::update_image(&mut conn, &id, &update)
+            .map_err(|e| e.to_string())?;
+
+        log::info!("Lazily populated fits_url for image {}: {}", id, fits_path);
+        Ok(Some(fits_path))
+    } else {
+        Ok(None)
+    }
+}

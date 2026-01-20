@@ -48,8 +48,9 @@ import {
   Search,
   Eye,
   EyeOff,
+  Wrench,
 } from "lucide-react";
-import { appApi, backupApi, type BackupInfo } from "@/lib/tauri/commands";
+import { appApi, backupApi, imageApi, type BackupInfo, type PopulateFitsUrlsResult } from "@/lib/tauri/commands";
 import {
   parseHorizonFile,
   type HorizonProfile,
@@ -118,6 +119,10 @@ export default function AdminPage() {
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<BackupInfo | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+
+  // FITS URL population
+  const [isPopulatingFits, setIsPopulatingFits] = useState(false);
+  const [fitsPopulateResult, setFitsPopulateResult] = useState<PopulateFitsUrlsResult | null>(null);
 
   // Location management
   const {
@@ -287,6 +292,26 @@ export default function AdminPage() {
     } catch (err) {
       toast.error("Failed to delete backup");
       console.error(err);
+    }
+  };
+
+  // Populate FITS URLs for all images
+  const handlePopulateFitsUrls = async () => {
+    setIsPopulatingFits(true);
+    setFitsPopulateResult(null);
+    try {
+      const result = await imageApi.populateFitsUrls();
+      setFitsPopulateResult(result);
+      if (result.updated > 0) {
+        toast.success(`Updated ${result.updated} images with FITS URLs`);
+      } else {
+        toast.info("No images needed FITS URL updates");
+      }
+    } catch (err) {
+      toast.error("Failed to populate FITS URLs");
+      console.error(err);
+    } finally {
+      setIsPopulatingFits(false);
     }
   };
 
@@ -1152,6 +1177,46 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Database Maintenance */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Wrench className="w-5 h-5" />
+              Database Maintenance
+            </CardTitle>
+            <CardDescription>
+              Maintenance tasks for the image database
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <Label className="text-muted-foreground">Populate FITS URLs</Label>
+              <p className="text-sm text-muted-foreground mb-2">
+                Scan images for companion FITS files and update database records.
+                This links JPG preview images with their original FITS data.
+              </p>
+              <Button
+                onClick={handlePopulateFitsUrls}
+                disabled={isPopulatingFits}
+                variant="outline"
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${isPopulatingFits ? "animate-spin" : ""}`} />
+                {isPopulatingFits ? "Scanning..." : "Populate FITS URLs"}
+              </Button>
+            </div>
+
+            {fitsPopulateResult && (
+              <div className="border rounded-lg p-3 bg-muted/30 text-sm space-y-1">
+                <p><strong>Results:</strong></p>
+                <p>Images checked: {fitsPopulateResult.totalChecked}</p>
+                <p>Updated with FITS URL: {fitsPopulateResult.updated}</p>
+                <p>Already had FITS URL: {fitsPopulateResult.alreadySet}</p>
+                <p>No FITS file found: {fitsPopulateResult.noFitsFound}</p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

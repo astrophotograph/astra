@@ -101,6 +101,9 @@ pub fn run() {
             // Image data serving commands
             commands::get_image_data,
             commands::get_image_thumbnail,
+            // FITS URL population commands
+            commands::populate_fits_urls,
+            commands::ensure_fits_url,
             // Schedule commands
             commands::get_schedules,
             commands::get_active_schedule,
