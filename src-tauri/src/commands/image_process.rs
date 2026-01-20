@@ -107,6 +107,8 @@ pub struct ProcessImageInput {
     pub color_calibration: Option<bool>,
     /// Noise reduction strength 0-1 (optional, defaults to 0)
     pub noise_reduction: Option<f64>,
+    /// Contrast adjustment (optional, defaults to 1.3 for Seestar-like output)
+    pub contrast: Option<f64>,
 }
 
 /// Response from image processing
@@ -221,6 +223,7 @@ pub async fn process_fits_image(
         star_reduction: input.star_reduction.unwrap_or(false),
         color_calibration: input.color_calibration.unwrap_or(true),
         noise_reduction: input.noise_reduction.unwrap_or(0.0),
+        contrast: input.contrast.unwrap_or(1.3),
     };
 
     // Create progress channel

@@ -143,6 +143,10 @@ pub fn run() {
             commands::process_fits_image,
             commands::classify_target_type,
             commands::get_processing_defaults,
+            // Target browser commands
+            commands::get_targets,
+            commands::search_images_by_target,
+            commands::get_images_by_target,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

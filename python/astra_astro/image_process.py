@@ -37,6 +37,7 @@ class ProcessingParams:
     star_reduction: bool = False  # Reduce star brightness for nebulae
     color_calibration: bool = True
     noise_reduction: float = 0.0  # 0-1 strength
+    contrast: float = 1.3  # Contrast adjustment (1.0=none, 1.3=Seestar-like, 1.5=moderate, 2.0=strong)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -48,6 +49,7 @@ class ProcessingParams:
             "starReduction": self.star_reduction,
             "colorCalibration": self.color_calibration,
             "noiseReduction": self.noise_reduction,
+            "contrast": self.contrast,
         }
 
 
@@ -182,8 +184,8 @@ def _statistical_stretch(
     """
     Apply statistical stretch to image data.
 
-    Uses percentile-based stretching with gamma correction, which better
-    preserves the dynamic range of astrophotography images.
+    Uses percentile-based stretching with gamma correction and contrast
+    enhancement, optimized for astrophotography images.
 
     Args:
         data: Image data (can be raw or normalized)
@@ -196,8 +198,7 @@ def _statistical_stretch(
                  f"min={np.min(data):.6f}, max={np.max(data):.6f}")
 
     # Use percentile-based clipping to preserve dynamic range
-    # This is more robust than min/max for astro images with outliers
-    black_point = np.percentile(data, 1)      # Clip shadows at 1st percentile
+    black_point = np.percentile(data, 0.5)    # Clip shadows at 0.5th percentile
     white_point = np.percentile(data, 99.9)   # Clip highlights at 99.9th percentile
 
     logger.debug(f"Percentile clip: black={black_point:.4f}, white={white_point:.4f}")
@@ -226,8 +227,35 @@ def _statistical_stretch(
     else:
         logger.debug("Skipping gamma (median at extreme)")
 
-    logger.debug(f"Final median={np.median(stretched):.4f}")
+    logger.debug(f"Final median={np.median(stretched):.4f}, std={np.std(stretched):.4f}")
     return stretched
+
+
+def _apply_contrast_curve(data: np.ndarray, strength: float = 1.5) -> np.ndarray:
+    """
+    Apply contrast enhancement by scaling around the mean.
+
+    This preserves the overall brightness (mean) while increasing
+    the spread (standard deviation) of values.
+
+    Args:
+        data: Image data (0-1 range)
+        strength: Contrast strength (1.0 = no change, 1.5 = 50% more contrast)
+
+    Returns:
+        Contrast-enhanced data (0-1 range)
+    """
+    if strength <= 1.0:
+        return data
+
+    # Scale around the mean to increase contrast
+    # new_data = mean + (data - mean) * strength
+    mean = np.mean(data)
+    logger.debug(f"Contrast adjustment: mean={mean:.4f}, strength={strength}")
+
+    result = mean + (data - mean) * strength
+
+    return np.clip(result, 0, 1)
 
 
 def _arcsinh_stretch(data: np.ndarray, factor: float = 0.15) -> np.ndarray:
@@ -566,10 +594,11 @@ def process_image(
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
 
-        # Generate output paths
+        # Generate output paths with timestamp to avoid overwriting
         base_name = Path(input_fits_path).stem
-        output_fits_path = os.path.join(output_dir, f"{base_name}_processed.fits")
-        output_preview_path = os.path.join(output_dir, f"{base_name}_preview.png")
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_fits_path = os.path.join(output_dir, f"{base_name}_processed_{timestamp}.fits")
+        output_preview_path = os.path.join(output_dir, f"{base_name}_preview_{timestamp}.png")
 
         # Load FITS
         report_progress("loading", 0.05, "Loading FITS file")
@@ -638,6 +667,13 @@ def process_image(
             # Default to statistical
             processed = _statistical_stretch(processed, stretch_factor)
         report_progress("stretch", 0.70, f"{stretch_name} stretch complete")
+
+        # 3b. Apply contrast adjustment if requested
+        if params.contrast > 1.0:
+            report_progress("contrast", 0.72, f"Applying contrast ({params.contrast:.1f})")
+            logger.info(f"Applying contrast: {params.contrast}")
+            processed = _apply_contrast_curve(processed, params.contrast)
+            report_progress("contrast", 0.74, "Contrast adjustment complete")
 
         # 4. Star reduction (optional)
         if star_reduction:
@@ -730,6 +766,8 @@ def process_image_from_dict(
             params.color_calibration = bool(params_dict["colorCalibration"])
         if "noiseReduction" in params_dict:
             params.noise_reduction = float(params_dict["noiseReduction"])
+        if "contrast" in params_dict:
+            params.contrast = float(params_dict["contrast"])
 
     result = process_image(input_fits_path, output_dir, params, object_name, progress_callback)
     return result.to_dict()

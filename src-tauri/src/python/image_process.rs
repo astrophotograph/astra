@@ -38,6 +38,8 @@ pub struct ProcessingParams {
     pub color_calibration: bool,
     /// Noise reduction strength (0-1)
     pub noise_reduction: f64,
+    /// Contrast adjustment (1.0=none, 1.3=Seestar-like, 1.5=moderate, 2.0=strong)
+    pub contrast: f64,
 }
 
 impl Default for ProcessingParams {
@@ -50,6 +52,7 @@ impl Default for ProcessingParams {
             star_reduction: false,
             color_calibration: true,
             noise_reduction: 0.0,
+            contrast: 1.3,
         }
     }
 }
@@ -115,6 +118,9 @@ pub fn process_image(
         params_dict
             .set_item("noiseReduction", params.noise_reduction)
             .map_err(|e| format!("Failed to set noiseReduction: {}", e))?;
+        params_dict
+            .set_item("contrast", params.contrast)
+            .map_err(|e| format!("Failed to set contrast: {}", e))?;
 
         // Call process_image_from_dict function
         let result = astra_astro
@@ -257,6 +263,9 @@ pub fn process_image_with_progress(
         params_dict
             .set_item("noiseReduction", params.noise_reduction)
             .map_err(|e| format!("Failed to set noiseReduction: {}", e))?;
+        params_dict
+            .set_item("contrast", params.contrast)
+            .map_err(|e| format!("Failed to set contrast: {}", e))?;
 
         // Create progress callback
         let progress_callback = PyCFunction::new_closure(

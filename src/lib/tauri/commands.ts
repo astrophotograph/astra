@@ -775,6 +775,8 @@ export interface ProcessImageInput {
   colorCalibration?: boolean;
   /** Noise reduction strength 0-1 (optional, defaults to 0) */
   noiseReduction?: number;
+  /** Contrast adjustment (optional, defaults to 1.3 for Seestar-like output) */
+  contrast?: number;
 }
 
 export interface ProcessingResult {
@@ -804,6 +806,7 @@ export interface ProcessingParams {
   starReduction: boolean;
   colorCalibration: boolean;
   noiseReduction: number;
+  contrast: number;
 }
 
 // Target type enum for UI
@@ -847,4 +850,42 @@ export const imageProcessApi = {
    */
   getDefaults: (targetType: string) =>
     invoke<ProcessingParams>("get_processing_defaults", { targetType }),
+};
+
+// =============================================================================
+// Target Browser Types
+// =============================================================================
+
+export interface TargetWithCount {
+  /** Target/object name */
+  name: string;
+  /** Number of images of this target */
+  imageCount: number;
+  /** ID of the most recent image */
+  latestImageId: string | null;
+  /** Thumbnail of the most recent image */
+  latestThumbnail: string | null;
+}
+
+// =============================================================================
+// Target Browser Commands
+// =============================================================================
+
+export const targetApi = {
+  /**
+   * Get all unique targets with their image counts
+   */
+  getAll: () => invoke<TargetWithCount[]>("get_targets"),
+
+  /**
+   * Search images by target name (partial match)
+   */
+  searchImages: (query: string) =>
+    invoke<Image[]>("search_images_by_target", { query }),
+
+  /**
+   * Get all images for a specific target (exact match)
+   */
+  getImages: (targetName: string) =>
+    invoke<Image[]>("get_images_by_target", { targetName }),
 };

@@ -584,6 +584,145 @@ pub fn cache_object(conn: &mut SqliteConnection, cache_entry: &NewSimbadCache) -
 }
 
 // ============================================================================
+// Target Browser Repository - Aggregate images by target/object
+// ============================================================================
+
+/// A target with its image count
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetWithCount {
+    pub name: String,
+    pub image_count: i64,
+    pub latest_image_id: Option<String>,
+    pub latest_thumbnail: Option<String>,
+}
+
+/// Extract object names from annotations JSON
+fn extract_annotation_names(annotations: &str) -> Vec<String> {
+    if let Ok(parsed) = serde_json::from_str::<Vec<serde_json::Value>>(annotations) {
+        parsed
+            .iter()
+            .filter_map(|ann| ann.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect()
+    } else {
+        vec![]
+    }
+}
+
+/// Get unique targets (from summary and annotations) with image counts
+pub fn get_targets_with_counts(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> QueryResult<Vec<TargetWithCount>> {
+    // Get all images for this user
+    let images = images::table
+        .filter(images::user_id.eq(user_id))
+        .order(images::created_at.desc())
+        .load::<Image>(conn)?;
+
+    // Group by target name (from summary and annotations) and count
+    // Key: target name, Value: (count, latest_image_id, latest_thumbnail)
+    let mut target_map: std::collections::HashMap<String, (i64, Option<String>, Option<String>)> =
+        std::collections::HashMap::new();
+
+    for image in &images {
+        // Collect all target names for this image
+        let mut target_names: Vec<String> = Vec::new();
+
+        // Add summary if present
+        if let Some(summary) = &image.summary {
+            let trimmed = summary.trim();
+            if !trimmed.is_empty() {
+                target_names.push(trimmed.to_string());
+            }
+        }
+
+        // Add names from annotations (plate solving results)
+        if let Some(annotations) = &image.annotations {
+            target_names.extend(extract_annotation_names(annotations));
+        }
+
+        // Update counts for each target name
+        for name in target_names {
+            let entry = target_map.entry(name).or_insert((0, None, None));
+            entry.0 += 1;
+            // Keep the first (most recent) image's id and thumbnail
+            if entry.1.is_none() {
+                entry.1 = Some(image.id.clone());
+                entry.2 = image.thumbnail.clone();
+            }
+        }
+    }
+
+    // Convert to vec and sort by count descending
+    let mut targets: Vec<TargetWithCount> = target_map
+        .into_iter()
+        .map(|(name, (count, latest_id, thumbnail))| TargetWithCount {
+            name,
+            image_count: count,
+            latest_image_id: latest_id,
+            latest_thumbnail: thumbnail,
+        })
+        .collect();
+
+    targets.sort_by(|a, b| b.image_count.cmp(&a.image_count));
+    Ok(targets)
+}
+
+/// Search images by target name (partial match in summary or annotations)
+pub fn search_images_by_target(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    query: &str,
+) -> QueryResult<Vec<Image>> {
+    let pattern = format!("%{}%", query);
+    // Search in both summary and annotations fields
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(
+            images::summary.like(&pattern)
+                .or(images::annotations.like(&pattern))
+        )
+        .order(images::created_at.desc())
+        .load(conn)
+}
+
+/// Get images for a specific target (matches summary or annotation names)
+pub fn get_images_by_target(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    target_name: &str,
+) -> QueryResult<Vec<Image>> {
+    // First try exact match on summary
+    let mut results: Vec<Image> = images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::summary.eq(target_name))
+        .order(images::created_at.desc())
+        .load(conn)?;
+
+    // Also search in annotations - use LIKE since it's JSON
+    // This pattern matches the target name in annotations JSON
+    let annotation_pattern = format!("%\"name\":\"{}%", target_name);
+    let annotation_results: Vec<Image> = images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::annotations.like(&annotation_pattern))
+        .order(images::created_at.desc())
+        .load(conn)?;
+
+    // Merge results, avoiding duplicates
+    let existing_ids: std::collections::HashSet<String> = results.iter().map(|i| i.id.clone()).collect();
+    for image in annotation_results {
+        if !existing_ids.contains(&image.id) {
+            results.push(image);
+        }
+    }
+
+    // Sort by created_at descending
+    results.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    Ok(results)
+}
+
+// ============================================================================
 // ScannedDirectory Repository - Directory scan caching
 // ============================================================================
 

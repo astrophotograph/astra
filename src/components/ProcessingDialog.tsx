@@ -83,6 +83,7 @@ export function ProcessingDialog({
   const [starReduction, setStarReduction] = useState(false);
   const [colorCalibration, setColorCalibration] = useState(true);
   const [noiseReduction, setNoiseReduction] = useState(0);
+  const [contrast, setContrast] = useState(1.3);
 
   // UI state
   const [isProcessing, setIsProcessing] = useState(false);
@@ -159,6 +160,7 @@ export function ProcessingDialog({
       setStarReduction(false);
       setColorCalibration(true);
       setNoiseReduction(0);
+      setContrast(1.3);
       setDetectedTarget(null);
     }
   }, [open, currentTargetType]);
@@ -217,6 +219,7 @@ export function ProcessingDialog({
         starReduction,
         colorCalibration,
         noiseReduction,
+        contrast,
       };
 
       const result = await imageProcessApi.process(input);
@@ -335,6 +338,29 @@ export function ProcessingDialog({
             />
             <p className="text-xs text-muted-foreground">
               Higher values create a more aggressive stretch (brighter midtones)
+            </p>
+          </div>
+
+          {/* Contrast */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="contrast">Contrast</Label>
+              <span className="text-sm text-muted-foreground">
+                {contrast === 1.0
+                  ? "Off"
+                  : contrast.toFixed(1) + "x"}
+              </span>
+            </div>
+            <Slider
+              id="contrast"
+              min={10}
+              max={20}
+              step={1}
+              value={[contrast * 10]}
+              onValueChange={(v) => setContrast(v[0] / 10)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Adjust image contrast (1.3x matches Seestar output)
             </p>
           </div>
 

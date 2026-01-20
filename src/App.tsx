@@ -9,6 +9,7 @@ import Collections from "./pages/Collections";
 import CollectionDetail from "./pages/CollectionDetail";
 import Plan from "./pages/Plan";
 import Observations from "./pages/Observations";
+import Targets from "./pages/Targets";
 import ImageViewer from "./pages/ImageViewer";
 import Admin from "./pages/Admin";
 
@@ -24,6 +25,7 @@ function App() {
               <Route path="/collections" element={<Collections />} />
               <Route path="/plan" element={<Plan />} />
               <Route path="/observations" element={<Observations />} />
+              <Route path="/targets" element={<Targets />} />
               <Route path="/settings" element={<Admin />} />
               <Route path="/i/:id" element={<ImageViewer />} />
               <Route path="/collections/:id" element={<CollectionDetail />} />
