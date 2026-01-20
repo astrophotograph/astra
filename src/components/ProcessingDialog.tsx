@@ -2,8 +2,9 @@
  * Processing Dialog - Configure and run image processing
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +25,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import { Loader2, Sparkles, Wand2 } from "lucide-react";
 import {
   imageProcessApi,
@@ -33,6 +35,28 @@ import {
   type ProcessImageResponse,
   type TargetInfo,
 } from "@/lib/tauri/commands";
+
+/** Progress event payload from backend */
+interface ProcessingProgressEvent {
+  imageId: string;
+  step: string;
+  progress: number;
+  message: string;
+}
+
+/** Human-readable step names */
+const STEP_LABELS: Record<string, string> = {
+  init: "Initializing",
+  loading: "Loading FITS file",
+  classifying: "Classifying target",
+  background: "Removing background",
+  calibration: "Color calibration",
+  stretch: "Applying stretch",
+  stars: "Star reduction",
+  noise: "Noise reduction",
+  saving: "Saving files",
+  complete: "Complete",
+};
 
 interface ProcessingDialogProps {
   open: boolean;
@@ -64,6 +88,59 @@ export function ProcessingDialog({
   const [isProcessing, setIsProcessing] = useState(false);
   const [isClassifying, setIsClassifying] = useState(false);
   const [detectedTarget, setDetectedTarget] = useState<TargetInfo | null>(null);
+
+  // Progress state
+  const [progressStep, setProgressStep] = useState("");
+  const [progressPercent, setProgressPercent] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("");
+  const unlistenRef = useRef<UnlistenFn | null>(null);
+
+  // Set up progress event listener
+  useEffect(() => {
+    let mounted = true;
+
+    const setupListener = async () => {
+      // Clean up previous listener if any
+      if (unlistenRef.current) {
+        unlistenRef.current();
+        unlistenRef.current = null;
+      }
+
+      if (!isProcessing) return;
+
+      try {
+        const unlisten = await listen<ProcessingProgressEvent>(
+          "image-processing-progress",
+          (event) => {
+            if (!mounted) return;
+            // Only update if this is for our image
+            if (event.payload.imageId === imageId) {
+              setProgressStep(event.payload.step);
+              setProgressPercent(event.payload.progress * 100);
+              setProgressMessage(event.payload.message);
+            }
+          },
+        );
+        if (mounted) {
+          unlistenRef.current = unlisten;
+        } else {
+          unlisten();
+        }
+      } catch (err) {
+        console.error("Failed to set up progress listener:", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      mounted = false;
+      if (unlistenRef.current) {
+        unlistenRef.current();
+        unlistenRef.current = null;
+      }
+    };
+  }, [isProcessing, imageId]);
 
   // Auto-classify target when dialog opens
   useEffect(() => {
@@ -125,6 +202,10 @@ export function ProcessingDialog({
   const handleProcess = async () => {
     if (!imageId) return;
 
+    // Reset progress state
+    setProgressStep("");
+    setProgressPercent(0);
+    setProgressMessage("");
     setIsProcessing(true);
     try {
       const input: ProcessImageInput = {
@@ -141,7 +222,9 @@ export function ProcessingDialog({
       const result = await imageProcessApi.process(input);
 
       if (result.success) {
-        toast.success(`Image processed in ${result.processingTime.toFixed(1)}s`);
+        toast.success(
+          `Image processed in ${result.processingTime.toFixed(1)}s`,
+        );
         onProcess?.(result);
         onOpenChange(false);
       } else {
@@ -305,7 +388,9 @@ export function ProcessingDialog({
             <div className="flex items-center justify-between">
               <Label htmlFor="noise-reduction">Noise Reduction</Label>
               <span className="text-sm text-muted-foreground">
-                {noiseReduction === 0 ? "Off" : `${(noiseReduction * 100).toFixed(0)}%`}
+                {noiseReduction === 0
+                  ? "Off"
+                  : `${(noiseReduction * 100).toFixed(0)}%`}
               </span>
             </div>
             <Slider
@@ -321,6 +406,27 @@ export function ProcessingDialog({
             </p>
           </div>
         </div>
+
+        {/* Progress Section - shown during processing */}
+        {isProcessing && (
+          <div className="space-y-3 p-4 bg-muted/50 rounded-lg border">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-teal-500" />
+                <span className="font-medium">
+                  {STEP_LABELS[progressStep] || progressStep || "Processing..."}
+                </span>
+              </div>
+              <span className="text-sm text-muted-foreground">
+                {progressPercent.toFixed(0)}%
+              </span>
+            </div>
+            <Progress value={progressPercent} className="h-2" />
+            {progressMessage && (
+              <p className="text-xs text-muted-foreground">{progressMessage}</p>
+            )}
+          </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

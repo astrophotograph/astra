@@ -7,10 +7,11 @@ use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
-use tauri::State;
+use std::sync::mpsc;
+use tauri::{Emitter, State, Window};
 
-use crate::db::{models::{NewCollection, NewImage, UpdateImage}, repository};
-use crate::python::image_process::{self, ProcessingParams, ProcessingResult, TargetInfo};
+use crate::db::{models::{NewCollection, NewCollectionImage, NewImage, UpdateImage}, repository};
+use crate::python::image_process::{self, ProcessingParams, ProcessingProgress, ProcessingResult, TargetInfo};
 use crate::state::AppState;
 
 /// Name of the collection for processed images
@@ -145,6 +146,7 @@ fn find_fits_companion(url: &str) -> Option<String> {
 #[tauri::command]
 pub async fn process_fits_image(
     state: State<'_, AppState>,
+    window: Window,
     input: ProcessImageInput,
 ) -> Result<ProcessImageResponse, String> {
     // Get the image from the database
@@ -183,10 +185,11 @@ pub async fn process_fits_image(
                 lower.ends_with(".fit") || lower.ends_with(".fits")
             })
         })
-        .ok_or_else(|| "Image has no FITS file path".to_string())?;
+        .ok_or_else(|| "Image has no FITS file path".to_string())?
+        .clone();
 
     // Verify the file exists
-    let path = Path::new(file_path);
+    let path = Path::new(&file_path);
     if !path.exists() {
         return Err(format!("FITS file not found: {}", file_path));
     }
@@ -195,7 +198,9 @@ pub async fn process_fits_image(
     let output_dir = path
         .parent()
         .unwrap_or(Path::new("."))
-        .join("processed");
+        .join("processed")
+        .to_string_lossy()
+        .to_string();
 
     // Get object name from existing metadata for auto-classification
     let object_name: Option<String> = image
@@ -218,12 +223,33 @@ pub async fn process_fits_image(
         noise_reduction: input.noise_reduction.unwrap_or(0.0),
     };
 
-    // Process the image
-    let result = image_process::process_image(
-        file_path,
-        output_dir.to_str().unwrap(),
+    // Create progress channel
+    let (progress_tx, progress_rx) = mpsc::channel::<ProcessingProgress>();
+
+    // Spawn a task to forward progress events to the frontend
+    let window_clone = window.clone();
+    let image_id = input.id.clone();
+    std::thread::spawn(move || {
+        while let Ok(progress) = progress_rx.recv() {
+            let payload = serde_json::json!({
+                "imageId": image_id,
+                "step": progress.step,
+                "progress": progress.progress,
+                "message": progress.message,
+            });
+            if let Err(e) = window_clone.emit("image-processing-progress", payload) {
+                log::warn!("Failed to emit progress event: {}", e);
+            }
+        }
+    });
+
+    // Process the image with progress reporting
+    let result = image_process::process_image_with_progress(
+        &file_path,
+        &output_dir,
         &params,
         object_name.as_deref(),
+        progress_tx,
     )?;
 
     // Update image metadata and import processed image
@@ -311,7 +337,7 @@ pub async fn process_fits_image(
                 let new_image = NewImage {
                     id: new_image_id.clone(),
                     user_id: image.user_id.clone(),
-                    collection_id: Some(collection_id),
+                    collection_id: Some(collection_id.clone()),
                     filename,
                     url: Some(result.output_preview_path.clone()),
                     summary,
@@ -333,6 +359,15 @@ pub async fn process_fits_image(
 
                 match repository::create_image(&mut conn, &new_image) {
                     Ok(created_image) => {
+                        // Also add to collection_images junction table
+                        let collection_image = NewCollectionImage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            collection_id: collection_id.clone(),
+                            image_id: created_image.id.clone(),
+                        };
+                        if let Err(e) = repository::add_image_to_collection(&mut conn, &collection_image) {
+                            log::error!("Failed to add image to collection_images: {}", e);
+                        }
                         log::info!(
                             "Imported processed image {} into 'Processed' collection",
                             created_image.id

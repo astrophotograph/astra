@@ -157,23 +157,22 @@ def _calculate_mtf_balance(median: float, target: float) -> float:
     """
     Calculate MTF balance parameter to achieve target median.
 
-    Given current median and target median, find m such that
-    MTF(m, median) = target.
+    Given current median x and target median t, find m such that
+    MTF(m, x) = t.
 
-    Solving for m:
-    m = (target * (2 * median - 1) - median) / ((target - 1) * (2 * median - 1) - 1)
+    Derivation from MTF(m, x) = (m - 1) * x / ((2m - 1) * x - m) = t:
+    m = x * (t - 1) / (2 * t * x - t - x)
     """
     if median <= 0 or median >= 1:
         return 0.5
 
-    # Simplified formula
-    numerator = target * (2 * median - 1) - median
-    denominator = (target - 1) * (2 * median - 1) - 1
+    x, t = median, target
+    denominator = 2 * t * x - t - x
 
     if abs(denominator) < 1e-10:
         return 0.5
 
-    m = numerator / denominator
+    m = x * (t - 1) / denominator
     return np.clip(m, 0.0001, 0.9999)
 
 
@@ -183,42 +182,52 @@ def _statistical_stretch(
     """
     Apply statistical stretch to image data.
 
-    This stretch normalizes data based on median and MAD (median absolute deviation)
-    to clip black point, then applies MTF to achieve target median.
+    Uses percentile-based stretching with gamma correction, which better
+    preserves the dynamic range of astrophotography images.
 
     Args:
-        data: Image data (normalized 0-1)
-        target_median: Target median value after stretch
+        data: Image data (can be raw or normalized)
+        target_median: Target median value after stretch (0.1-0.2 typical)
 
     Returns:
-        Stretched image data
+        Stretched image data (0-1 range)
     """
-    # Calculate statistics
-    median = np.median(data)
-    mad = np.median(np.abs(data - median))
+    logger.debug(f"Statistical stretch: input median={np.median(data):.6f}, "
+                 f"min={np.min(data):.6f}, max={np.max(data):.6f}")
 
-    if mad < 1e-10:
-        # Flat image, just normalize
-        return data
+    # Use percentile-based clipping to preserve dynamic range
+    # This is more robust than min/max for astro images with outliers
+    black_point = np.percentile(data, 1)      # Clip shadows at 1st percentile
+    white_point = np.percentile(data, 99.9)   # Clip highlights at 99.9th percentile
 
-    # Calculate shadows clipping point (2.8 sigma below median)
-    shadows = median - 2.8 * mad * 1.4826  # 1.4826 converts MAD to sigma
+    logger.debug(f"Percentile clip: black={black_point:.4f}, white={white_point:.4f}")
 
-    # Normalize: clip shadows and scale to 0-1
-    normalized = (data - shadows) / (1.0 - shadows)
-    normalized = np.clip(normalized, 0, 1)
+    # Handle edge case of flat image
+    if white_point <= black_point:
+        logger.warning("Flat image detected, returning as-is")
+        return np.clip(data, 0, 1) if np.max(data) <= 1 else data / np.max(data)
 
-    # Calculate current median after normalization
-    new_median = np.median(normalized)
+    # Stretch to 0-1 range using percentile clipping
+    stretched = (data - black_point) / (white_point - black_point)
+    stretched = np.clip(stretched, 0, 1)
 
-    if new_median <= 0 or new_median >= 1:
-        return normalized
+    current_median = np.median(stretched)
+    logger.debug(f"After percentile stretch: median={current_median:.4f}")
 
-    # Calculate MTF balance to achieve target median
-    m = _calculate_mtf_balance(new_median, target_median)
+    # Apply gamma correction to achieve target median
+    # If stretched median^gamma = target_median, then:
+    # gamma = log(target_median) / log(current_median)
+    if 0.001 < current_median < 0.999:
+        gamma = np.log(target_median) / np.log(current_median)
+        # Clamp gamma to reasonable range (0.2 to 2.0)
+        gamma = np.clip(gamma, 0.2, 2.0)
+        logger.debug(f"Applying gamma={gamma:.3f}")
+        stretched = np.power(stretched, gamma)
+    else:
+        logger.debug("Skipping gamma (median at extreme)")
 
-    # Apply MTF stretch
-    return _mtf(m, normalized)
+    logger.debug(f"Final median={np.median(stretched):.4f}")
+    return stretched
 
 
 def _arcsinh_stretch(data: np.ndarray, factor: float = 0.15) -> np.ndarray:
@@ -411,13 +420,14 @@ def _reduce_stars(data: np.ndarray, threshold: float = 0.8) -> np.ndarray:
 
 def _load_fits(fits_path: str) -> tuple[np.ndarray, dict]:
     """
-    Load FITS file and return normalized data and header.
+    Load FITS file and return data and header.
 
     Args:
         fits_path: Path to FITS file
 
     Returns:
-        Tuple of (image data normalized to 0-1, header dict)
+        Tuple of (image data as float64, header dict)
+        Note: Data is NOT normalized - stretching functions handle normalization
     """
     with fits.open(fits_path) as hdul:
         data = hdul[0].data.astype(np.float64)
@@ -434,14 +444,8 @@ def _load_fits(fits_path: str) -> tuple[np.ndarray, dict]:
             # Single channel, squeeze
             data = data[:, :, 0]
 
-    # Normalize to 0-1
-    data_min = np.min(data)
-    data_max = np.max(data)
-
-    if data_max > data_min:
-        data = (data - data_min) / (data_max - data_min)
-    else:
-        data = np.zeros_like(data)
+    # Don't normalize here - let the stretching functions handle it
+    # This preserves the original dynamic range for better processing
 
     return data, header
 
@@ -466,9 +470,15 @@ def _save_fits(data: np.ndarray, output_path: str, header: Optional[dict] = None
     hdu = fits.PrimaryHDU(output_data)
 
     # Add header info
+    # Exclude keywords that define data format - these are set by astropy based on actual data
+    EXCLUDED_KEYS = {
+        "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "EXTEND",
+        "BZERO", "BSCALE",  # These would corrupt float data interpretation
+        "BLANK",  # Only valid for integer data
+    }
     if header:
         for key, value in header.items():
-            if key not in ("SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "EXTEND"):
+            if key not in EXCLUDED_KEYS:
                 try:
                     hdu.header[key] = value
                 except (ValueError, TypeError):
@@ -510,6 +520,7 @@ def process_image(
     output_dir: str,
     params: Optional[ProcessingParams] = None,
     object_name: Optional[str] = None,
+    progress_callback: Optional[callable] = None,
 ) -> ProcessingResult:
     """
     Process a FITS image with stretch and enhancements.
@@ -530,17 +541,28 @@ def process_image(
         output_dir: Directory for output files
         params: Processing parameters (uses defaults if None)
         object_name: Object name for auto-classification
+        progress_callback: Optional callback function(step: str, progress: float, message: str)
 
     Returns:
         ProcessingResult with status and output paths
     """
     start_time = time.time()
 
+    def report_progress(step: str, progress: float, message: str = ""):
+        """Report progress if callback is provided."""
+        if progress_callback:
+            try:
+                progress_callback(step, progress, message)
+            except Exception as e:
+                logger.warning(f"Progress callback failed: {e}")
+
     # Default parameters
     if params is None:
         params = ProcessingParams()
 
     try:
+        report_progress("init", 0.0, "Initializing processing")
+
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
 
@@ -550,21 +572,26 @@ def process_image(
         output_preview_path = os.path.join(output_dir, f"{base_name}_preview.png")
 
         # Load FITS
+        report_progress("loading", 0.05, "Loading FITS file")
         logger.info(f"Loading FITS: {input_fits_path}")
         data, header = _load_fits(input_fits_path)
         logger.info(f"Loaded image shape: {data.shape}")
+        report_progress("loading", 0.15, f"Loaded image ({data.shape[1]}x{data.shape[0]})")
 
         # Determine target type
+        report_progress("classifying", 0.18, "Classifying target type")
         target_type = TargetType.UNKNOWN
         if params.target_type == "auto" and object_name:
             target_info = classify_from_name(object_name)
             target_type = target_info.target_type
             logger.info(f"Auto-classified {object_name} as {target_type.value}")
+            report_progress("classifying", 0.20, f"Classified as {target_type.value}")
         elif params.target_type != "auto":
             try:
                 target_type = TargetType(params.target_type)
             except ValueError:
                 target_type = TargetType.UNKNOWN
+            report_progress("classifying", 0.20, f"Using target type: {target_type.value}")
 
         # Get target-specific parameters
         target_params = TARGET_PARAMS.get(target_type, TARGET_PARAMS[TargetType.UNKNOWN])
@@ -581,15 +608,25 @@ def process_image(
 
         # 1. Background removal
         if background_removal:
+            report_progress("background", 0.25, "Removing background gradient")
             logger.info("Removing background gradient")
             processed = _remove_background(processed)
+            report_progress("background", 0.40, "Background gradient removed")
+        else:
+            report_progress("background", 0.40, "Skipping background removal")
 
         # 2. Color calibration (RGB only)
         if params.color_calibration and len(processed.shape) == 3:
+            report_progress("calibration", 0.42, "Applying color calibration")
             logger.info("Applying color calibration")
             processed = _color_calibrate(processed)
+            report_progress("calibration", 0.50, "Color calibration complete")
+        else:
+            report_progress("calibration", 0.50, "Skipping color calibration")
 
         # 3. Apply stretch
+        stretch_name = params.stretch_method.replace("_", " ").title()
+        report_progress("stretch", 0.52, f"Applying {stretch_name} stretch")
         logger.info(f"Applying {params.stretch_method} stretch")
         if params.stretch_method == "statistical":
             processed = _statistical_stretch(processed, stretch_factor)
@@ -600,27 +637,39 @@ def process_image(
         else:
             # Default to statistical
             processed = _statistical_stretch(processed, stretch_factor)
+        report_progress("stretch", 0.70, f"{stretch_name} stretch complete")
 
         # 4. Star reduction (optional)
         if star_reduction:
+            report_progress("stars", 0.72, "Reducing star brightness")
             logger.info("Reducing star brightness")
             processed = _reduce_stars(processed)
+            report_progress("stars", 0.80, "Star reduction complete")
+        else:
+            report_progress("stars", 0.80, "Skipping star reduction")
 
         # 5. Noise reduction (optional)
         if params.noise_reduction > 0:
+            report_progress("noise", 0.82, f"Applying noise reduction ({int(params.noise_reduction * 100)}%)")
             logger.info(f"Applying noise reduction: {params.noise_reduction}")
             processed = _apply_noise_reduction(processed, params.noise_reduction)
+            report_progress("noise", 0.88, "Noise reduction complete")
+        else:
+            report_progress("noise", 0.88, "Skipping noise reduction")
 
         # Ensure output is in valid range
         processed = np.clip(processed, 0, 1)
 
         # Save outputs
+        report_progress("saving", 0.90, "Saving processed FITS")
         logger.info(f"Saving processed FITS: {output_fits_path}")
         _save_fits(processed, output_fits_path, header)
 
+        report_progress("saving", 0.95, "Generating preview image")
         logger.info(f"Saving preview PNG: {output_preview_path}")
         _save_preview(processed, output_preview_path)
 
+        report_progress("complete", 1.0, "Processing complete")
         processing_time = time.time() - start_time
         logger.info(f"Processing completed in {processing_time:.2f}s")
 
@@ -647,6 +696,7 @@ def process_image_from_dict(
     output_dir: str,
     params_dict: Optional[dict] = None,
     object_name: Optional[str] = None,
+    progress_callback: Optional[callable] = None,
 ) -> dict:
     """
     Process image with parameters from dictionary.
@@ -658,6 +708,7 @@ def process_image_from_dict(
         output_dir: Directory for output files
         params_dict: Processing parameters as dictionary
         object_name: Object name for auto-classification
+        progress_callback: Optional callback function(step: str, progress: float, message: str)
 
     Returns:
         Dictionary with processing results
@@ -680,5 +731,5 @@ def process_image_from_dict(
         if "noiseReduction" in params_dict:
             params.noise_reduction = float(params_dict["noiseReduction"])
 
-    result = process_image(input_fits_path, output_dir, params, object_name)
+    result = process_image(input_fits_path, output_dir, params, object_name, progress_callback)
     return result.to_dict()
