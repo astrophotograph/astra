@@ -9,6 +9,8 @@ dependencies = [
     "skyfield>=1.52",
     "numpy>=1.26",
     "starplot",
+    "pillow>=12.1.0",
+    "scipy>=1.16.3",
 ]
 
 [project.optional-dependencies]

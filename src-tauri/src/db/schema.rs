@@ -1,20 +1,49 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
-    users (id) {
+    astro_objects (id) {
         id -> Text,
-        email -> Nullable<Text>,
-        name -> Nullable<Text>,
-        image -> Nullable<Text>,
-        username -> Nullable<Text>,
-        first_name -> Nullable<Text>,
-        last_name -> Nullable<Text>,
-        summary -> Nullable<Text>,
-        bio -> Nullable<Text>,
-        description -> Nullable<Text>,
+        name -> Text,
+        display_name -> Text,
+        object_type -> Nullable<Text>,
+        seq -> Nullable<Integer>,
+        aliases -> Nullable<Text>,
+        notes -> Nullable<Text>,
         metadata -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    astronomy_todos (id) {
+        id -> Text,
+        user_id -> Text,
+        name -> Text,
+        ra -> Text,
+        dec -> Text,
+        magnitude -> Text,
+        size -> Text,
+        object_type -> Nullable<Text>,
+        added_at -> Text,
+        completed -> Bool,
+        completed_at -> Nullable<Text>,
+        goal_time -> Nullable<Text>,
+        notes -> Nullable<Text>,
+        flagged -> Bool,
+        last_updated -> Nullable<Text>,
+        created_at -> Timestamp,
+        updated_at -> Timestamp,
+        tags -> Nullable<Text>,
+    }
+}
+
+diesel::table! {
+    collection_images (id) {
+        id -> Text,
+        collection_id -> Text,
+        image_id -> Text,
+        created_at -> Timestamp,
     }
 }
 
@@ -54,29 +83,7 @@ diesel::table! {
         created_at -> Timestamp,
         updated_at -> Timestamp,
         thumbnail -> Nullable<Text>,
-    }
-}
-
-diesel::table! {
-    astronomy_todos (id) {
-        id -> Text,
-        user_id -> Text,
-        name -> Text,
-        ra -> Text,
-        dec -> Text,
-        magnitude -> Text,
-        size -> Text,
-        object_type -> Nullable<Text>,
-        added_at -> Text,
-        completed -> Bool,
-        completed_at -> Nullable<Text>,
-        goal_time -> Nullable<Text>,
-        notes -> Nullable<Text>,
-        flagged -> Bool,
-        last_updated -> Nullable<Text>,
-        created_at -> Timestamp,
-        updated_at -> Timestamp,
-        tags -> Nullable<Text>,
+        fits_url -> Nullable<Text>,
     }
 }
 
@@ -97,17 +104,13 @@ diesel::table! {
 }
 
 diesel::table! {
-    astro_objects (id) {
+    scanned_directories (id) {
         id -> Text,
-        name -> Text,
-        display_name -> Text,
-        object_type -> Nullable<Text>,
-        seq -> Nullable<Integer>,
-        aliases -> Nullable<Text>,
-        notes -> Nullable<Text>,
-        metadata -> Nullable<Text>,
-        created_at -> Timestamp,
-        updated_at -> Timestamp,
+        user_id -> Text,
+        path -> Text,
+        fs_modified_at -> BigInt,
+        last_scanned_at -> Text,
+        image_count -> Integer,
     }
 }
 
@@ -121,41 +124,39 @@ diesel::table! {
 }
 
 diesel::table! {
-    collection_images (id) {
+    users (id) {
         id -> Text,
-        collection_id -> Text,
-        image_id -> Text,
+        email -> Nullable<Text>,
+        name -> Nullable<Text>,
+        image -> Nullable<Text>,
+        username -> Nullable<Text>,
+        first_name -> Nullable<Text>,
+        last_name -> Nullable<Text>,
+        summary -> Nullable<Text>,
+        bio -> Nullable<Text>,
+        description -> Nullable<Text>,
+        metadata -> Nullable<Text>,
         created_at -> Timestamp,
+        updated_at -> Timestamp,
     }
 }
 
-diesel::table! {
-    scanned_directories (id) {
-        id -> Text,
-        user_id -> Text,
-        path -> Text,
-        fs_modified_at -> BigInt,
-        last_scanned_at -> Text,
-        image_count -> Integer,
-    }
-}
-
-diesel::joinable!(collections -> users (user_id));
-diesel::joinable!(images -> users (user_id));
-diesel::joinable!(images -> collections (collection_id));
 diesel::joinable!(astronomy_todos -> users (user_id));
-diesel::joinable!(observation_schedules -> users (user_id));
 diesel::joinable!(collection_images -> collections (collection_id));
 diesel::joinable!(collection_images -> images (image_id));
+diesel::joinable!(collections -> users (user_id));
+diesel::joinable!(images -> collections (collection_id));
+diesel::joinable!(images -> users (user_id));
+diesel::joinable!(observation_schedules -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
-    users,
+    astro_objects,
+    astronomy_todos,
+    collection_images,
     collections,
     images,
-    astronomy_todos,
     observation_schedules,
-    astro_objects,
-    simbad_cache,
-    collection_images,
     scanned_directories,
+    simbad_cache,
+    users,
 );

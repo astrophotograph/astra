@@ -19,6 +19,8 @@ dependencies = [
     { name = "astropy" },
     { name = "astroquery" },
     { name = "numpy" },
+    { name = "pillow" },
+    { name = "scipy" },
     { name = "skyfield" },
     { name = "starplot" },
 ]
@@ -38,8 +40,10 @@ requires-dist = [
     { name = "astroquery", specifier = ">=0.4" },
     { name = "erewhon-astro", marker = "extra == 'platesolve'", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "pillow", specifier = ">=12.1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "scipy", specifier = ">=1.16.3" },
     { name = "skyfield", specifier = ">=1.52" },
     { name = "starplot" },
 ]

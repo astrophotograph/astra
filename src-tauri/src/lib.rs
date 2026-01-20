@@ -136,6 +136,10 @@ pub fn run() {
             // Skymap commands
             commands::generate_skymap,
             commands::generate_wide_skymap,
+            // Image processing commands
+            commands::process_fits_image,
+            commands::classify_target_type,
+            commands::get_processing_defaults,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,6 +7,7 @@ pub mod simbad;
 pub mod altitude;
 pub mod plate_solve;
 pub mod skymap;
+pub mod image_process;
 
 use pyo3::prelude::*;
 use std::path::PathBuf;

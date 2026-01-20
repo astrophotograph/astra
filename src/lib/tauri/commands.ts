@@ -120,6 +120,7 @@ export interface Image {
   created_at: string;
   updated_at: string;
   thumbnail: string | null;
+  fits_url: string | null;
 }
 
 export interface CreateImageInput {
@@ -737,4 +738,99 @@ export const skymapApi = {
    */
   generateWide: (centerRa: number, centerDec: number) =>
     invoke<SkymapResponse>("generate_wide_skymap", { centerRa, centerDec }),
+};
+
+// =============================================================================
+// Image Processing Types
+// =============================================================================
+
+export interface ProcessImageInput {
+  /** Image ID to process */
+  id: string;
+  /** Target type override (optional, defaults to "auto") */
+  targetType?: string;
+  /** Stretch method (optional, defaults to "statistical") */
+  stretchMethod?: string;
+  /** Stretch factor (optional, default based on target type) */
+  stretchFactor?: number;
+  /** Whether to remove background (optional, defaults to true) */
+  backgroundRemoval?: boolean;
+  /** Whether to reduce star brightness (optional, defaults to false) */
+  starReduction?: boolean;
+  /** Whether to apply color calibration (optional, defaults to true) */
+  colorCalibration?: boolean;
+  /** Noise reduction strength 0-1 (optional, defaults to 0) */
+  noiseReduction?: number;
+}
+
+export interface ProcessingResult {
+  success: boolean;
+  outputFitsPath: string;
+  outputPreviewPath: string;
+  targetType: string;
+  processingParams: Record<string, unknown>;
+  processingTime: number;
+  errorMessage?: string;
+}
+
+export interface ProcessImageResponse extends ProcessingResult {}
+
+export interface TargetInfo {
+  targetType: string;
+  objectName: string;
+  confidence: number;
+  simbadType?: string;
+}
+
+export interface ProcessingParams {
+  targetType: string;
+  stretchMethod: string;
+  stretchFactor: number;
+  backgroundRemoval: boolean;
+  starReduction: boolean;
+  colorCalibration: boolean;
+  noiseReduction: number;
+}
+
+// Target type enum for UI
+export const TARGET_TYPES = [
+  { value: "auto", label: "Auto-detect" },
+  { value: "emission_nebula", label: "Emission Nebula" },
+  { value: "reflection_nebula", label: "Reflection Nebula" },
+  { value: "planetary_nebula", label: "Planetary Nebula" },
+  { value: "galaxy", label: "Galaxy" },
+  { value: "globular_cluster", label: "Globular Cluster" },
+  { value: "open_cluster", label: "Open Cluster" },
+  { value: "star_field", label: "Star Field" },
+] as const;
+
+// Stretch method enum for UI
+export const STRETCH_METHODS = [
+  { value: "statistical", label: "Statistical (Recommended)" },
+  { value: "arcsinh", label: "Arcsinh" },
+  { value: "log", label: "Logarithmic" },
+] as const;
+
+// =============================================================================
+// Image Processing Commands
+// =============================================================================
+
+export const imageProcessApi = {
+  /**
+   * Process a FITS image with stretch and enhancements
+   */
+  process: (input: ProcessImageInput) =>
+    invoke<ProcessImageResponse>("process_fits_image", { input }),
+
+  /**
+   * Classify a target from its object name
+   */
+  classifyTarget: (objectName: string) =>
+    invoke<TargetInfo>("classify_target_type", { objectName }),
+
+  /**
+   * Get default processing parameters for a target type
+   */
+  getDefaults: (targetType: string) =>
+    invoke<ProcessingParams>("get_processing_defaults", { targetType }),
 };

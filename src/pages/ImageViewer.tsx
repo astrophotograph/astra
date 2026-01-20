@@ -6,7 +6,8 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { marked } from "marked";
-import { imageApi, plateSolveApi, skymapApi, type CatalogObject } from "@/lib/tauri/commands";
+import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
+import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,6 +40,7 @@ import {
   Star,
   Tag,
   Trash2,
+  Wand2,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useImage, useUpdateImage, useDeleteImage } from "@/hooks/use-images";
@@ -97,6 +99,7 @@ export default function ImageViewerPage() {
   const [skymapImage, setSkymapImage] = useState<string | null>(null);
   const [isLoadingSkymap, setIsLoadingSkymap] = useState(false);
   const [skymapExpanded, setSkymapExpanded] = useState(false);
+  const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
 
   const { data: image, isLoading, error, refetch } = useImage(id || "");
   const updateImage = useUpdateImage();
@@ -463,6 +466,20 @@ export default function ImageViewerPage() {
                 Plate Solve
               </>
             )}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setProcessingDialogOpen(true)}
+            disabled={!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')}
+            title={
+              !image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')
+                ? "No FITS file available for processing"
+                : "Process image with stretch and enhancements"
+            }
+          >
+            <Wand2 className="w-4 h-4 mr-2" />
+            Process
           </Button>
           {!isEditing && (
             <Button variant="outline" size="sm" onClick={handleStartEdit}>
@@ -971,6 +988,18 @@ export default function ImageViewerPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Processing Dialog */}
+      <ProcessingDialog
+        open={processingDialogOpen}
+        onOpenChange={setProcessingDialogOpen}
+        imageId={image?.id || ""}
+        objectName={image?.summary || undefined}
+        onProcess={(_result: ProcessImageResponse) => {
+          // Refresh the image data to get updated metadata
+          refetch();
+        }}
+      />
     </div>
   );
 }

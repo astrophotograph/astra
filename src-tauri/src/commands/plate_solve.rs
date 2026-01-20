@@ -157,19 +157,10 @@ pub async fn plate_solve_image(
 
         // Update the image in database
         let update = UpdateImage {
-            collection_id: None,
-            filename: None,
-            url: None,
-            summary: None,
-            description: None,
-            content_type: None,
-            favorite: None,
-            tags: None,
-            visibility: None,
             location: Some(location),
             annotations: annotations_json,
             metadata: new_metadata,
-            thumbnail: None,
+            ..Default::default()
         };
 
         if let Err(e) = repository::update_image(&mut conn, &input.id, &update) {
@@ -204,19 +195,8 @@ pub async fn plate_solve_image(
 
         // Update the image in database with failed flag
         let update = UpdateImage {
-            collection_id: None,
-            filename: None,
-            url: None,
-            summary: None,
-            description: None,
-            content_type: None,
-            favorite: None,
-            tags: None,
-            visibility: None,
-            location: None,
-            annotations: None,
             metadata: new_metadata,
-            thumbnail: None,
+            ..Default::default()
         };
 
         if let Err(e) = repository::update_image(&mut conn, &input.id, &update) {

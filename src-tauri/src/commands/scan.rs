@@ -928,11 +928,17 @@ pub async fn bulk_scan_directory(
                 continue;
             };
 
-            // Build URL
+            // Build URL (prefer JPEG for display, fallback to FITS)
             let url = processed.discovered
                 .jpeg_path
                 .as_ref()
                 .or(processed.discovered.fits_path.as_ref())
+                .map(|p| p.to_string_lossy().to_string());
+
+            // Store FITS path separately for processing
+            let fits_url = processed.discovered
+                .fits_path
+                .as_ref()
                 .map(|p| p.to_string_lossy().to_string());
 
         // Determine session date and get/create collection
@@ -1113,6 +1119,7 @@ pub async fn bulk_scan_directory(
             annotations: None,
             metadata: metadata_json,
             thumbnail: processed.thumbnail,
+            fits_url,
         };
 
         // Insert image

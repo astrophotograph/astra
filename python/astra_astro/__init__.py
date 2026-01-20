@@ -1,7 +1,8 @@
 """Astra Astronomy Utilities.
 
 This module provides astronomy-related utilities for the Astra observation log,
-including SIMBAD object lookups, altitude calculations, and plate solving.
+including SIMBAD object lookups, altitude calculations, plate solving, and
+image processing.
 """
 
 from astra_astro.simbad import lookup_object, SimbadResult
@@ -24,6 +25,18 @@ from astra_astro.skymap import (
     generate_skymap,
     generate_wide_skymap,
 )
+from astra_astro.target_classify import (
+    classify_target,
+    classify_from_name,
+    TargetType,
+    TargetInfo,
+)
+from astra_astro.image_process import (
+    process_image,
+    process_image_from_dict,
+    ProcessingParams,
+    ProcessingResult,
+)
 
 __all__ = [
     # SIMBAD
@@ -44,6 +57,16 @@ __all__ = [
     # Skymap
     "generate_skymap",
     "generate_wide_skymap",
+    # Target classification
+    "classify_target",
+    "classify_from_name",
+    "TargetType",
+    "TargetInfo",
+    # Image processing
+    "process_image",
+    "process_image_from_dict",
+    "ProcessingParams",
+    "ProcessingResult",
 ]
 
 __version__ = "0.1.0"

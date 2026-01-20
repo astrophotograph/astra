@@ -97,6 +97,7 @@ pub fn create_image(
         annotations: input.annotations,
         metadata: input.metadata,
         thumbnail: input.thumbnail,
+        fits_url: None,
     };
 
     repository::create_image(&mut conn, &new_image)
@@ -124,6 +125,7 @@ pub fn update_image(
         annotations: input.annotations,
         metadata: input.metadata,
         thumbnail: input.thumbnail,
+        fits_url: None,
     };
 
     repository::update_image(&mut conn, &input.id, &update)
