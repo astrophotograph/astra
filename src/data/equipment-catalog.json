@@ -1,0 +1,885 @@
+{
+  "telescopes": [
+    {
+      "brand": "Apertura",
+      "model": "75Q",
+      "name": "Apertura 75Q Quintuplet",
+      "aperture": 75,
+      "focalLength": 405,
+      "type": "Quintuplet Petzval APO"
+    },
+    {
+      "brand": "Apertura",
+      "model": "6\" Classic Cassegrain",
+      "name": "Apertura 6\" Classic Cassegrain",
+      "aperture": 152,
+      "focalLength": 1800,
+      "type": "Classical Cassegrain"
+    },
+    {
+      "brand": "Apertura",
+      "model": "AD8",
+      "name": "Apertura AD8 Dobsonian",
+      "aperture": 203,
+      "focalLength": 1200,
+      "type": "Dobsonian Reflector"
+    },
+    {
+      "brand": "Apertura",
+      "model": "AD10",
+      "name": "Apertura AD10 Dobsonian",
+      "aperture": 254,
+      "focalLength": 1250,
+      "type": "Dobsonian Reflector"
+    },
+    {
+      "brand": "Apertura",
+      "model": "AD12",
+      "name": "Apertura AD12 Dobsonian",
+      "aperture": 305,
+      "focalLength": 1500,
+      "type": "Dobsonian Reflector"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Evostar 72ED",
+      "name": "Sky-Watcher Evostar 72ED",
+      "aperture": 72,
+      "focalLength": 420,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Evostar 80ED",
+      "name": "Sky-Watcher Evostar 80ED",
+      "aperture": 80,
+      "focalLength": 600,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Esprit 80ED",
+      "name": "Sky-Watcher Esprit 80ED",
+      "aperture": 80,
+      "focalLength": 400,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Esprit 100ED",
+      "name": "Sky-Watcher Esprit 100ED",
+      "aperture": 100,
+      "focalLength": 550,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Esprit 120ED",
+      "name": "Sky-Watcher Esprit 120ED",
+      "aperture": 120,
+      "focalLength": 840,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Esprit 150ED",
+      "name": "Sky-Watcher Esprit 150ED",
+      "aperture": 150,
+      "focalLength": 1050,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Quattro 150P",
+      "name": "Sky-Watcher Quattro 150P",
+      "aperture": 150,
+      "focalLength": 600,
+      "type": "Imaging Newtonian"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Quattro 200P",
+      "name": "Sky-Watcher Quattro 200P",
+      "aperture": 200,
+      "focalLength": 800,
+      "type": "Imaging Newtonian"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Quattro 250P",
+      "name": "Sky-Watcher Quattro 250P",
+      "aperture": 254,
+      "focalLength": 1000,
+      "type": "Imaging Newtonian"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Virtuoso GTi 150P",
+      "name": "Sky-Watcher Virtuoso GTi 150P",
+      "aperture": 150,
+      "focalLength": 750,
+      "type": "GoTo Tabletop Newtonian"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Classic 200P",
+      "name": "Sky-Watcher Classic 200P Dobsonian",
+      "aperture": 200,
+      "focalLength": 1200,
+      "type": "Dobsonian Reflector"
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Starquest 102R",
+      "name": "Sky-Watcher Starquest 102R",
+      "aperture": 102,
+      "focalLength": 500,
+      "type": "Short-tube Refractor"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV503 70ED",
+      "name": "Svbony SV503 70ED",
+      "aperture": 70,
+      "focalLength": 420,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV503 80ED",
+      "name": "Svbony SV503 80ED",
+      "aperture": 80,
+      "focalLength": 560,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV503 102ED",
+      "name": "Svbony SV503 102ED",
+      "aperture": 102,
+      "focalLength": 714,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV550 80APO",
+      "name": "Svbony SV550 80mm APO",
+      "aperture": 80,
+      "focalLength": 480,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV550 122APO",
+      "name": "Svbony SV550 122mm APO",
+      "aperture": 122,
+      "focalLength": 900,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "William Optics",
+      "model": "RedCat 51",
+      "name": "William Optics RedCat 51",
+      "aperture": 51,
+      "focalLength": 250,
+      "type": "Petzval APO"
+    },
+    {
+      "brand": "William Optics",
+      "model": "RedCat 71",
+      "name": "William Optics RedCat 71",
+      "aperture": 71,
+      "focalLength": 350,
+      "type": "Petzval APO"
+    },
+    {
+      "brand": "William Optics",
+      "model": "SpaceCat 51",
+      "name": "William Optics SpaceCat 51",
+      "aperture": 51,
+      "focalLength": 250,
+      "type": "Petzval APO"
+    },
+    {
+      "brand": "William Optics",
+      "model": "ZenithStar 61",
+      "name": "William Optics ZenithStar 61 II",
+      "aperture": 61,
+      "focalLength": 360,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "William Optics",
+      "model": "ZenithStar 73",
+      "name": "William Optics ZenithStar 73",
+      "aperture": 73,
+      "focalLength": 430,
+      "type": "ED Doublet Refractor"
+    },
+    {
+      "brand": "William Optics",
+      "model": "GT81",
+      "name": "William Optics GT81",
+      "aperture": 81,
+      "focalLength": 478,
+      "type": "Triplet APO"
+    },
+    {
+      "brand": "ZWO",
+      "model": "Seestar S50",
+      "name": "ZWO Seestar S50",
+      "aperture": 50,
+      "focalLength": 250,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "ZWO",
+      "model": "Seestar S30",
+      "name": "ZWO Seestar S30",
+      "aperture": 30,
+      "focalLength": 150,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "ZWO",
+      "model": "Seestar S30 Pro",
+      "name": "ZWO Seestar S30 Pro",
+      "aperture": 30,
+      "focalLength": 160,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Vaonis",
+      "model": "Vespera",
+      "name": "Vaonis Vespera",
+      "aperture": 50,
+      "focalLength": 200,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Vaonis",
+      "model": "Vespera II",
+      "name": "Vaonis Vespera II",
+      "aperture": 50,
+      "focalLength": 250,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Vaonis",
+      "model": "Stellina",
+      "name": "Vaonis Stellina",
+      "aperture": 80,
+      "focalLength": 400,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Unistellar",
+      "model": "eQuinox 2",
+      "name": "Unistellar eQuinox 2",
+      "aperture": 114,
+      "focalLength": 450,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Unistellar",
+      "model": "eVscope 2",
+      "name": "Unistellar eVscope 2",
+      "aperture": 114,
+      "focalLength": 450,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Unistellar",
+      "model": "Odyssey",
+      "name": "Unistellar Odyssey",
+      "aperture": 85,
+      "focalLength": 320,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Unistellar",
+      "model": "Odyssey Pro",
+      "name": "Unistellar Odyssey Pro",
+      "aperture": 85,
+      "focalLength": 320,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Dwarf Lab",
+      "model": "Dwarf II",
+      "name": "Dwarf Lab Dwarf II",
+      "aperture": 24,
+      "focalLength": 100,
+      "type": "Smart Telescope"
+    },
+    {
+      "brand": "Dwarf Lab",
+      "model": "Dwarf 3",
+      "name": "Dwarf Lab Dwarf 3",
+      "aperture": 35,
+      "focalLength": 150,
+      "type": "Smart Telescope"
+    }
+  ],
+  "cameras": [
+    {
+      "brand": "ZWO",
+      "model": "ASI2600MC Pro",
+      "name": "ZWO ASI2600MC Pro",
+      "sensorWidth": 23.5,
+      "sensorHeight": 15.7,
+      "pixelSize": 3.76,
+      "resolution": "6248 x 4176"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI2600MM Pro",
+      "name": "ZWO ASI2600MM Pro",
+      "sensorWidth": 23.5,
+      "sensorHeight": 15.7,
+      "pixelSize": 3.76,
+      "resolution": "6248 x 4176"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI294MC Pro",
+      "name": "ZWO ASI294MC Pro",
+      "sensorWidth": 23.2,
+      "sensorHeight": 15.5,
+      "pixelSize": 4.63,
+      "resolution": "4144 x 2822"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI294MM Pro",
+      "name": "ZWO ASI294MM Pro",
+      "sensorWidth": 23.2,
+      "sensorHeight": 15.5,
+      "pixelSize": 4.63,
+      "resolution": "4144 x 2822"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI533MC Pro",
+      "name": "ZWO ASI533MC Pro",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI533MM Pro",
+      "name": "ZWO ASI533MM Pro",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI183MC Pro",
+      "name": "ZWO ASI183MC Pro",
+      "sensorWidth": 13.2,
+      "sensorHeight": 8.8,
+      "pixelSize": 2.4,
+      "resolution": "5496 x 3672"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI183MM Pro",
+      "name": "ZWO ASI183MM Pro",
+      "sensorWidth": 13.2,
+      "sensorHeight": 8.8,
+      "pixelSize": 2.4,
+      "resolution": "5496 x 3672"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI071MC Pro",
+      "name": "ZWO ASI071MC Pro",
+      "sensorWidth": 23.6,
+      "sensorHeight": 15.6,
+      "pixelSize": 4.78,
+      "resolution": "4944 x 3284"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI585MC",
+      "name": "ZWO ASI585MC",
+      "sensorWidth": 12.84,
+      "sensorHeight": 9.63,
+      "pixelSize": 2.9,
+      "resolution": "4432 x 3320"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI462MC",
+      "name": "ZWO ASI462MC",
+      "sensorWidth": 5.6,
+      "sensorHeight": 3.2,
+      "pixelSize": 2.9,
+      "resolution": "1936 x 1096"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI678MC",
+      "name": "ZWO ASI678MC",
+      "sensorWidth": 9.5,
+      "sensorHeight": 5.4,
+      "pixelSize": 2.0,
+      "resolution": "4800 x 2700"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI120MM Mini",
+      "name": "ZWO ASI120MM Mini",
+      "sensorWidth": 4.8,
+      "sensorHeight": 3.6,
+      "pixelSize": 3.75,
+      "resolution": "1280 x 960"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI290MM Mini",
+      "name": "ZWO ASI290MM Mini",
+      "sensorWidth": 5.6,
+      "sensorHeight": 3.2,
+      "pixelSize": 2.9,
+      "resolution": "1936 x 1096"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI220MM Mini",
+      "name": "ZWO ASI220MM Mini",
+      "sensorWidth": 5.8,
+      "sensorHeight": 3.3,
+      "pixelSize": 3.0,
+      "resolution": "1936 x 1096"
+    },
+    {
+      "brand": "ZWO",
+      "model": "ASI6200MC Pro",
+      "name": "ZWO ASI6200MC Pro",
+      "sensorWidth": 36.0,
+      "sensorHeight": 24.0,
+      "pixelSize": 3.76,
+      "resolution": "9576 x 6388"
+    },
+    {
+      "brand": "Player One",
+      "model": "Poseidon-C Pro",
+      "name": "Player One Poseidon-C Pro",
+      "sensorWidth": 23.5,
+      "sensorHeight": 15.7,
+      "pixelSize": 3.76,
+      "resolution": "6248 x 4176"
+    },
+    {
+      "brand": "Player One",
+      "model": "Poseidon-M Pro",
+      "name": "Player One Poseidon-M Pro",
+      "sensorWidth": 23.5,
+      "sensorHeight": 15.7,
+      "pixelSize": 3.76,
+      "resolution": "6248 x 4176"
+    },
+    {
+      "brand": "Player One",
+      "model": "Apollo-M Pro",
+      "name": "Player One Apollo-M Pro",
+      "sensorWidth": 23.2,
+      "sensorHeight": 15.5,
+      "pixelSize": 4.63,
+      "resolution": "4144 x 2822"
+    },
+    {
+      "brand": "Player One",
+      "model": "Ares-C Pro",
+      "name": "Player One Ares-C Pro",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "Player One",
+      "model": "Ares-M Pro",
+      "name": "Player One Ares-M Pro",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "Player One",
+      "model": "Neptune-C II",
+      "name": "Player One Neptune-C II",
+      "sensorWidth": 8.3,
+      "sensorHeight": 5.3,
+      "pixelSize": 2.9,
+      "resolution": "2848 x 1842"
+    },
+    {
+      "brand": "Player One",
+      "model": "Mars-C II",
+      "name": "Player One Mars-C II",
+      "sensorWidth": 5.6,
+      "sensorHeight": 3.2,
+      "pixelSize": 2.9,
+      "resolution": "1944 x 1096"
+    },
+    {
+      "brand": "Player One",
+      "model": "Uranus-C Pro",
+      "name": "Player One Uranus-C Pro",
+      "sensorWidth": 12.84,
+      "sensorHeight": 9.63,
+      "pixelSize": 2.9,
+      "resolution": "4432 x 3320"
+    },
+    {
+      "brand": "Player One",
+      "model": "Saturn-C II",
+      "name": "Player One Saturn-C II",
+      "sensorWidth": 23.6,
+      "sensorHeight": 15.6,
+      "pixelSize": 5.86,
+      "resolution": "4032 x 2688"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY600M/C",
+      "name": "QHY600M/C",
+      "sensorWidth": 36.0,
+      "sensorHeight": 24.0,
+      "pixelSize": 3.76,
+      "resolution": "9576 x 6388"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY268M/C",
+      "name": "QHY268M/C",
+      "sensorWidth": 23.5,
+      "sensorHeight": 15.7,
+      "pixelSize": 3.76,
+      "resolution": "6280 x 4210"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY294M/C Pro",
+      "name": "QHY294M/C Pro",
+      "sensorWidth": 23.2,
+      "sensorHeight": 15.5,
+      "pixelSize": 4.63,
+      "resolution": "4144 x 2822"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY533M/C",
+      "name": "QHY533M/C",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY183M/C",
+      "name": "QHY183M/C",
+      "sensorWidth": 13.2,
+      "sensorHeight": 8.8,
+      "pixelSize": 2.4,
+      "resolution": "5544 x 3684"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY5III462C",
+      "name": "QHY5III462C",
+      "sensorWidth": 5.6,
+      "sensorHeight": 3.2,
+      "pixelSize": 2.9,
+      "resolution": "1920 x 1080"
+    },
+    {
+      "brand": "QHY",
+      "model": "QHY5III678C",
+      "name": "QHY5III678C",
+      "sensorWidth": 9.5,
+      "sensorHeight": 5.4,
+      "pixelSize": 2.0,
+      "resolution": "4800 x 2700"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV705C",
+      "name": "Svbony SV705C",
+      "sensorWidth": 12.84,
+      "sensorHeight": 9.63,
+      "pixelSize": 2.9,
+      "resolution": "4432 x 3320"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV505C",
+      "name": "Svbony SV505C",
+      "sensorWidth": 8.3,
+      "sensorHeight": 4.7,
+      "pixelSize": 2.9,
+      "resolution": "2880 x 1616"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV305",
+      "name": "Svbony SV305",
+      "sensorWidth": 6.46,
+      "sensorHeight": 4.85,
+      "pixelSize": 2.9,
+      "resolution": "2048 x 1536"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV405CC",
+      "name": "Svbony SV405CC",
+      "sensorWidth": 11.31,
+      "sensorHeight": 11.31,
+      "pixelSize": 3.76,
+      "resolution": "3008 x 3008"
+    },
+    {
+      "brand": "Svbony",
+      "model": "SV605MC",
+      "name": "Svbony SV605MC",
+      "sensorWidth": 13.2,
+      "sensorHeight": 8.8,
+      "pixelSize": 2.4,
+      "resolution": "5496 x 3672"
+    }
+  ],
+  "mounts": [
+    {
+      "brand": "ZWO",
+      "model": "AM3",
+      "name": "ZWO AM3",
+      "type": "EQ",
+      "payload": 13
+    },
+    {
+      "brand": "ZWO",
+      "model": "AM5",
+      "name": "ZWO AM5",
+      "type": "EQ",
+      "payload": 20
+    },
+    {
+      "brand": "ZWO",
+      "model": "AM5N",
+      "name": "ZWO AM5N",
+      "type": "EQ",
+      "payload": 20
+    },
+    {
+      "brand": "iOptron",
+      "model": "CEM26",
+      "name": "iOptron CEM26",
+      "type": "EQ",
+      "payload": 12
+    },
+    {
+      "brand": "iOptron",
+      "model": "CEM40",
+      "name": "iOptron CEM40",
+      "type": "EQ",
+      "payload": 18
+    },
+    {
+      "brand": "iOptron",
+      "model": "CEM70",
+      "name": "iOptron CEM70",
+      "type": "EQ",
+      "payload": 31
+    },
+    {
+      "brand": "iOptron",
+      "model": "GEM28",
+      "name": "iOptron GEM28",
+      "type": "EQ",
+      "payload": 13
+    },
+    {
+      "brand": "iOptron",
+      "model": "GEM45",
+      "name": "iOptron GEM45",
+      "type": "EQ",
+      "payload": 20
+    },
+    {
+      "brand": "iOptron",
+      "model": "SkyGuider Pro",
+      "name": "iOptron SkyGuider Pro",
+      "type": "Tracker",
+      "payload": 5
+    },
+    {
+      "brand": "iOptron",
+      "model": "SkyTracker Pro",
+      "name": "iOptron SkyTracker Pro",
+      "type": "Tracker",
+      "payload": 3
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "EQ6-R Pro",
+      "name": "Sky-Watcher EQ6-R Pro",
+      "type": "EQ",
+      "payload": 20
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "EQ6-R Pro FS",
+      "name": "Sky-Watcher EQ6-R Pro FS",
+      "type": "EQ",
+      "payload": 20
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "AZ-GTi",
+      "name": "Sky-Watcher AZ-GTi",
+      "type": "Alt-Az",
+      "payload": 5
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Star Adventurer 2i",
+      "name": "Sky-Watcher Star Adventurer 2i",
+      "type": "Tracker",
+      "payload": 5
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "Star Adventurer GTi",
+      "name": "Sky-Watcher Star Adventurer GTi",
+      "type": "EQ",
+      "payload": 5
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "HEQ5 Pro",
+      "name": "Sky-Watcher HEQ5 Pro",
+      "type": "EQ",
+      "payload": 15
+    },
+    {
+      "brand": "Sky-Watcher",
+      "model": "EQM-35 Pro",
+      "name": "Sky-Watcher EQM-35 Pro",
+      "type": "EQ",
+      "payload": 10
+    },
+    {
+      "brand": "Celestron",
+      "model": "CGX",
+      "name": "Celestron CGX",
+      "type": "EQ",
+      "payload": 25
+    },
+    {
+      "brand": "Celestron",
+      "model": "CGX-L",
+      "name": "Celestron CGX-L",
+      "type": "EQ",
+      "payload": 34
+    },
+    {
+      "brand": "Celestron",
+      "model": "AVX",
+      "name": "Celestron Advanced VX",
+      "type": "EQ",
+      "payload": 14
+    },
+    {
+      "brand": "Rainbow Astro",
+      "model": "RST-135",
+      "name": "Rainbow Astro RST-135",
+      "type": "EQ",
+      "payload": 15
+    },
+    {
+      "brand": "Rainbow Astro",
+      "model": "RST-150H",
+      "name": "Rainbow Astro RST-150H",
+      "type": "EQ",
+      "payload": 18
+    },
+    {
+      "brand": "Rainbow Astro",
+      "model": "RST-300",
+      "name": "Rainbow Astro RST-300",
+      "type": "EQ",
+      "payload": 35
+    },
+    {
+      "brand": "Pegasus Astro",
+      "model": "NYX-101",
+      "name": "Pegasus Astro NYX-101",
+      "type": "EQ",
+      "payload": 15
+    },
+    {
+      "brand": "Pegasus Astro",
+      "model": "NYX-201",
+      "name": "Pegasus Astro NYX-201",
+      "type": "EQ",
+      "payload": 25
+    },
+    {
+      "brand": "Losmandy",
+      "model": "GM811G",
+      "name": "Losmandy GM811G",
+      "type": "EQ",
+      "payload": 27
+    },
+    {
+      "brand": "Losmandy",
+      "model": "G11",
+      "name": "Losmandy G11",
+      "type": "EQ",
+      "payload": 27
+    },
+    {
+      "brand": "Losmandy",
+      "model": "Titan",
+      "name": "Losmandy Titan",
+      "type": "EQ",
+      "payload": 68
+    },
+    {
+      "brand": "Takahashi",
+      "model": "EM-200 Temma2",
+      "name": "Takahashi EM-200 Temma2",
+      "type": "EQ",
+      "payload": 16
+    },
+    {
+      "brand": "Takahashi",
+      "model": "EM-400 Temma2Z",
+      "name": "Takahashi EM-400 Temma2Z",
+      "type": "EQ",
+      "payload": 35
+    },
+    {
+      "brand": "Juwei",
+      "model": "17",
+      "name": "Juwei 17 Harmonic",
+      "type": "EQ Harmonic",
+      "payload": 13
+    },
+    {
+      "brand": "Teseek",
+      "model": "14",
+      "name": "Teseek 14 Harmonic",
+      "type": "EQ Harmonic",
+      "payload": 10
+    }
+  ]
+}
