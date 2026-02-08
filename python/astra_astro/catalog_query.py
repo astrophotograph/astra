@@ -5,15 +5,15 @@ LDN, LBN, Sharpless, Abell, PGC, bright stars) for objects within a given
 sky region using VizieR and SIMBAD.
 """
 
-from dataclasses import dataclass, field
-from typing import Optional
 import math
+from dataclasses import dataclass
+from typing import Optional
 
+import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
-from astroquery.vizier import Vizier
 from astroquery.simbad import Simbad
-import numpy as np
+from astroquery.vizier import Vizier
 
 
 @dataclass
@@ -23,8 +23,8 @@ class CatalogObject:
     name: str
     catalog: str
     object_type: str
-    ra: float           # degrees
-    dec: float          # degrees
+    ra: float  # degrees
+    dec: float  # degrees
     magnitude: Optional[float] = None
     size: Optional[str] = None  # formatted size string
     size_arcmin: Optional[float] = None  # size in arcminutes
@@ -77,7 +77,7 @@ def _parse_sexagesimal_ra(ra_str: str) -> Optional[float]:
             minutes = float(parts[1])
             seconds = float(parts[2]) if len(parts) > 2 else 0.0
             # Convert to decimal degrees: hours * 15 + minutes * 15/60 + seconds * 15/3600
-            return hours * 15 + minutes * 0.25 + seconds * (15/3600)
+            return hours * 15 + minutes * 0.25 + seconds * (15 / 3600)
         return None
     except (ValueError, TypeError):
         return None
@@ -91,10 +91,10 @@ def _parse_sexagesimal_dec(dec_str: str) -> Optional[float]:
         dec_str = str(dec_str).strip()
         # Handle sign
         sign = 1
-        if dec_str.startswith('-'):
+        if dec_str.startswith("-"):
             sign = -1
             dec_str = dec_str[1:]
-        elif dec_str.startswith('+'):
+        elif dec_str.startswith("+"):
             dec_str = dec_str[1:]
 
         parts = dec_str.split()
@@ -102,7 +102,7 @@ def _parse_sexagesimal_dec(dec_str: str) -> Optional[float]:
             degrees = float(parts[0])
             arcmin = float(parts[1])
             arcsec = float(parts[2]) if len(parts) > 2 else 0.0
-            return sign * (degrees + arcmin/60 + arcsec/3600)
+            return sign * (degrees + arcmin / 60 + arcsec / 3600)
         elif len(parts) == 1:
             return sign * float(parts[0])
         return None
@@ -119,7 +119,7 @@ def _format_size(size_arcmin: Optional[float]) -> Optional[str]:
     elif size_arcmin >= 1:
         return f"{size_arcmin:.1f}'"
     else:
-        return f"{size_arcmin * 60:.0f}\""
+        return f'{size_arcmin * 60:.0f}"'
 
 
 def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list[CatalogObject]:
@@ -218,16 +218,18 @@ def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list
                         if size_arcmin is not None:
                             break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog=catalog,
-                    object_type=obj_type,
-                    ra=ra,
-                    dec=dec,
-                    magnitude=mag,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog=catalog,
+                        object_type=obj_type,
+                        ra=ra,
+                        dec=dec,
+                        magnitude=mag,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"NGC/IC query error: {e}")
 
@@ -239,7 +241,7 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
     objects = []
 
     try:
-        coord = SkyCoord(ra=center_ra, dec=center_dec, unit="deg")
+        SkyCoord(ra=center_ra, dec=center_dec, unit="deg")
 
         # Query SIMBAD for Messier objects in region using simpler TAP query
         simbad = Simbad()
@@ -250,7 +252,8 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
         FROM basic
         JOIN ident ON basic.oid = ident.oidref
         WHERE ident.id LIKE 'M %' OR ident.id LIKE 'M%'
-        AND CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {center_ra}, {center_dec}, {radius_deg})) = 1
+        AND CONTAINS(POINT('ICRS', ra, dec),
+            CIRCLE('ICRS', {center_ra}, {center_dec}, {radius_deg})) = 1
         """
 
         result = simbad.query_tap(query)
@@ -263,7 +266,8 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
                 messier_num = None
                 # Try to find M number in the identifier
                 import re
-                m_match = re.search(r'\bM\s*(\d+)\b', main_id)
+
+                m_match = re.search(r"\bM\s*(\d+)\b", main_id)
                 if m_match:
                     messier_num = m_match.group(1)
 
@@ -281,16 +285,18 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
                 size_arcsec = _safe_float(row["galdim_majaxis"])
                 size_arcmin = size_arcsec / 60 if size_arcsec else None
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="Messier",
-                    object_type=obj_type,
-                    ra=ra,
-                    dec=dec,
-                    magnitude=None,  # Skip magnitude for now
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="Messier",
+                        object_type=obj_type,
+                        ra=ra,
+                        dec=dec,
+                        magnitude=None,  # Skip magnitude for now
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"Messier query error: {e}")
 
@@ -349,15 +355,17 @@ def query_barnard(center_ra: float, center_dec: float, radius_deg: float) -> lis
                         if size_arcmin is not None:
                             break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="Barnard",
-                    object_type="Dark Nebula",
-                    ra=ra,
-                    dec=dec,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="Barnard",
+                        object_type="Dark Nebula",
+                        ra=ra,
+                        dec=dec,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"Barnard query error: {e}")
 
@@ -435,15 +443,17 @@ def query_ldn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                             break
                 size_arcmin = math.sqrt(area) * 60 if area else None
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="LDN",
-                    object_type="Dark Nebula",
-                    ra=ra,
-                    dec=dec,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="LDN",
+                        object_type="Dark Nebula",
+                        ra=ra,
+                        dec=dec,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"LDN query error: {e}")
 
@@ -480,7 +490,12 @@ def query_lbn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                 if "Seq" in col_names:
                     seq_num = _safe_float(row["Seq"])
 
-                display_name = f"LBN {lbn_num}" if lbn_num else f"LBN {int(seq_num)}" if seq_num else None
+                if lbn_num:
+                    display_name = f"LBN {lbn_num}"
+                elif seq_num:
+                    display_name = f"LBN {int(seq_num)}"
+                else:
+                    display_name = None
                 if not display_name:
                     continue
 
@@ -526,15 +541,17 @@ def query_lbn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                             break
                 size_arcmin = math.sqrt(area) * 60 if area else None
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="LBN",
-                    object_type="Bright Nebula",
-                    ra=ra,
-                    dec=dec,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="LBN",
+                        object_type="Bright Nebula",
+                        ra=ra,
+                        dec=dec,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"LBN query error: {e}")
 
@@ -593,15 +610,17 @@ def query_sharpless(center_ra: float, center_dec: float, radius_deg: float) -> l
                         if size_arcmin is not None:
                             break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="Sharpless",
-                    object_type="HII Region",
-                    ra=ra,
-                    dec=dec,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="Sharpless",
+                        object_type="HII Region",
+                        ra=ra,
+                        dec=dec,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"Sharpless query error: {e}")
 
@@ -660,14 +679,16 @@ def query_abell(center_ra: float, center_dec: float, radius_deg: float) -> list[
                         if mag is not None:
                             break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="Abell",
-                    object_type="Galaxy Cluster",
-                    ra=ra,
-                    dec=dec,
-                    magnitude=mag,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="Abell",
+                        object_type="Galaxy Cluster",
+                        ra=ra,
+                        dec=dec,
+                        magnitude=mag,
+                    )
+                )
     except Exception as e:
         print(f"Abell query error: {e}")
 
@@ -731,7 +752,7 @@ def query_pgc(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                 if "logD25" in col_names:
                     log_d25 = _safe_float(row["logD25"])
                     if log_d25 is not None:
-                        size_arcmin = (10 ** log_d25) * 0.1
+                        size_arcmin = (10**log_d25) * 0.1
 
                 # Get morphological type
                 morph_type = "Galaxy"
@@ -740,24 +761,27 @@ def query_pgc(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                         morph_type = str(row[type_col]).strip() or "Galaxy"
                         break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="PGC",
-                    object_type=morph_type,
-                    ra=ra,
-                    dec=dec,
-                    magnitude=mag,
-                    size=_format_size(size_arcmin),
-                    size_arcmin=size_arcmin,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="PGC",
+                        object_type=morph_type,
+                        ra=ra,
+                        dec=dec,
+                        magnitude=mag,
+                        size=_format_size(size_arcmin),
+                        size_arcmin=size_arcmin,
+                    )
+                )
     except Exception as e:
         print(f"PGC query error: {e}")
 
     return objects
 
 
-def query_bright_stars(center_ra: float, center_dec: float, radius_deg: float,
-                       mag_limit: float = 6.0) -> list[CatalogObject]:
+def query_bright_stars(
+    center_ra: float, center_dec: float, radius_deg: float, mag_limit: float = 6.0
+) -> list[CatalogObject]:
     """Query bright stars from Yale Bright Star Catalog (V/50)."""
     objects = []
 
@@ -770,7 +794,7 @@ def query_bright_stars(center_ra: float, center_dec: float, radius_deg: float,
             coord,
             radius=radius_deg * u.deg,
             catalog="V/50",
-            column_filters={"Vmag": f"<{mag_limit}"}
+            column_filters={"Vmag": f"<{mag_limit}"},
         )
 
         if result and len(result) > 0:
@@ -830,23 +854,31 @@ def query_bright_stars(center_ra: float, center_dec: float, radius_deg: float,
                         sp_type = str(row[sp_col]).strip() or "Star"
                         break
 
-                objects.append(CatalogObject(
-                    name=display_name,
-                    catalog="Bright Stars",
-                    object_type=f"Star ({sp_type})" if sp_type != "Star" else "Star",
-                    ra=ra,
-                    dec=dec,
-                    magnitude=mag,
-                    common_name=common_name,
-                ))
+                objects.append(
+                    CatalogObject(
+                        name=display_name,
+                        catalog="Bright Stars",
+                        object_type=f"Star ({sp_type})" if sp_type != "Star" else "Star",
+                        ra=ra,
+                        dec=dec,
+                        magnitude=mag,
+                        common_name=common_name,
+                    )
+                )
     except Exception as e:
         print(f"Bright stars query error: {e}")
 
     return objects
 
 
-def _is_in_fov(obj_ra: float, obj_dec: float, center_ra: float, center_dec: float,
-               width_deg: float, height_deg: float) -> bool:
+def _is_in_fov(
+    obj_ra: float,
+    obj_dec: float,
+    center_ra: float,
+    center_dec: float,
+    width_deg: float,
+    height_deg: float,
+) -> bool:
     """Check if an object is within the rectangular field of view."""
     # Calculate RA difference
     ra_diff = obj_ra - center_ra
@@ -907,8 +939,18 @@ def query_objects_in_fov(
 
     # Default to all catalogs
     if catalogs is None:
-        catalogs = ["ngc", "ic", "messier", "barnard", "ldn", "lbn",
-                    "sharpless", "abell", "pgc", "stars"]
+        catalogs = [
+            "ngc",
+            "ic",
+            "messier",
+            "barnard",
+            "ldn",
+            "lbn",
+            "sharpless",
+            "abell",
+            "pgc",
+            "stars",
+        ]
 
     catalog_lower = [c.lower() for c in catalogs]
 
@@ -949,10 +991,19 @@ def query_objects_in_fov(
             ra_diff = abs(obj.ra - existing.ra) * math.cos(math.radians(obj.dec))
             dec_diff = abs(obj.dec - existing.dec)
             sep_deg = math.sqrt(ra_diff**2 + dec_diff**2)
-            if sep_deg < 1/60:  # 1 arcmin
+            if sep_deg < 1 / 60:  # 1 arcmin
                 # Keep the one with more specific catalog (Messier > NGC > IC > PGC)
-                priority = {"Messier": 0, "NGC": 1, "IC": 2, "Barnard": 3,
-                           "LDN": 4, "LBN": 5, "Sharpless": 6, "Abell": 7, "PGC": 8}
+                priority = {
+                    "Messier": 0,
+                    "NGC": 1,
+                    "IC": 2,
+                    "Barnard": 3,
+                    "LDN": 4,
+                    "LBN": 5,
+                    "Sharpless": 6,
+                    "Abell": 7,
+                    "PGC": 8,
+                }
                 if priority.get(obj.catalog, 99) < priority.get(existing.catalog, 99):
                     unique_objects.remove(existing)
                     unique_objects.append(obj)
@@ -963,16 +1014,26 @@ def query_objects_in_fov(
 
     # Filter to only objects actually within the rectangular FOV
     fov_objects = [
-        obj for obj in unique_objects
+        obj
+        for obj in unique_objects
         if _is_in_fov(obj.ra, obj.dec, center_ra, center_dec, width_deg, height_deg)
     ]
 
     # Sort by magnitude (brightest first), then by catalog priority
     def sort_key(obj):
         mag = obj.magnitude if obj.magnitude is not None else 99
-        priority = {"Messier": 0, "NGC": 1, "IC": 2, "Barnard": 3,
-                   "LDN": 4, "LBN": 5, "Sharpless": 6, "Abell": 7,
-                   "PGC": 8, "Bright Stars": 9}
+        priority = {
+            "Messier": 0,
+            "NGC": 1,
+            "IC": 2,
+            "Barnard": 3,
+            "LDN": 4,
+            "LBN": 5,
+            "Sharpless": 6,
+            "Abell": 7,
+            "PGC": 8,
+            "Bright Stars": 9,
+        }
         return (priority.get(obj.catalog, 99), mag)
 
     fov_objects.sort(key=sort_key)

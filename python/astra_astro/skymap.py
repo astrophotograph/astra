@@ -10,10 +10,10 @@ from typing import Optional
 
 try:
     from starplot import MapPlot
-    from starplot.projections import Stereographic, Mollweide
-    from starplot.styles import PlotStyle, PolygonStyle, LabelStyle, extensions
-    from starplot.data.stars import _ as star_
     from starplot.data.dsos import _ as dso_
+    from starplot.data.stars import _ as star_
+    from starplot.projections import Mollweide, Stereographic
+    from starplot.styles import PlotStyle, PolygonStyle, extensions
 
     STARPLOT_AVAILABLE = True
 except ImportError:

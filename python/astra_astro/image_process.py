@@ -37,7 +37,7 @@ class ProcessingParams:
     star_reduction: bool = False  # Reduce star brightness for nebulae
     color_calibration: bool = True
     noise_reduction: float = 0.0  # 0-1 strength
-    contrast: float = 1.3  # Contrast adjustment (1.0=none, 1.3=Seestar-like, 1.5=moderate, 2.0=strong)
+    contrast: float = 1.3  # 1.0=none, 1.3=Seestar-like, 1.5=moderate, 2.0=strong
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -178,9 +178,7 @@ def _calculate_mtf_balance(median: float, target: float) -> float:
     return np.clip(m, 0.0001, 0.9999)
 
 
-def _statistical_stretch(
-    data: np.ndarray, target_median: float = 0.15
-) -> np.ndarray:
+def _statistical_stretch(data: np.ndarray, target_median: float = 0.15) -> np.ndarray:
     """
     Apply statistical stretch to image data.
 
@@ -194,12 +192,14 @@ def _statistical_stretch(
     Returns:
         Stretched image data (0-1 range)
     """
-    logger.debug(f"Statistical stretch: input median={np.median(data):.6f}, "
-                 f"min={np.min(data):.6f}, max={np.max(data):.6f}")
+    logger.debug(
+        f"Statistical stretch: input median={np.median(data):.6f}, "
+        f"min={np.min(data):.6f}, max={np.max(data):.6f}"
+    )
 
     # Use percentile-based clipping to preserve dynamic range
-    black_point = np.percentile(data, 0.5)    # Clip shadows at 0.5th percentile
-    white_point = np.percentile(data, 99.9)   # Clip highlights at 99.9th percentile
+    black_point = np.percentile(data, 0.5)  # Clip shadows at 0.5th percentile
+    white_point = np.percentile(data, 99.9)  # Clip highlights at 99.9th percentile
 
     logger.debug(f"Percentile clip: black={black_point:.4f}, white={white_point:.4f}")
 
@@ -313,9 +313,7 @@ def _remove_background(data: np.ndarray, sigma: float = 50.0) -> np.ndarray:
     if len(data.shape) == 3:
         background = np.zeros_like(data)
         for i in range(data.shape[2]):
-            background[:, :, i] = ndimage.median_filter(
-                data[:, :, i], size=int(sigma * 2)
-            )
+            background[:, :, i] = ndimage.median_filter(data[:, :, i], size=int(sigma * 2))
     else:
         background = ndimage.median_filter(data, size=int(sigma * 2))
 
@@ -500,8 +498,15 @@ def _save_fits(data: np.ndarray, output_path: str, header: Optional[dict] = None
     # Add header info
     # Exclude keywords that define data format - these are set by astropy based on actual data
     EXCLUDED_KEYS = {
-        "SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "NAXIS3", "EXTEND",
-        "BZERO", "BSCALE",  # These would corrupt float data interpretation
+        "SIMPLE",
+        "BITPIX",
+        "NAXIS",
+        "NAXIS1",
+        "NAXIS2",
+        "NAXIS3",
+        "EXTEND",
+        "BZERO",
+        "BSCALE",  # These would corrupt float data interpretation
         "BLANK",  # Only valid for integer data
     }
     if header:
@@ -626,11 +631,17 @@ def process_image(
         target_params = TARGET_PARAMS.get(target_type, TARGET_PARAMS[TargetType.UNKNOWN])
 
         # Merge with user params
-        stretch_factor = params.stretch_factor if params.stretch_factor > 0 else target_params["stretch_factor"]
+        if params.stretch_factor > 0:
+            stretch_factor = params.stretch_factor
+        else:
+            stretch_factor = target_params["stretch_factor"]
         background_removal = params.background_removal
         star_reduction = params.star_reduction or target_params.get("star_reduction", False)
 
-        logger.info(f"Processing with: stretch={stretch_factor}, bg_removal={background_removal}, star_reduction={star_reduction}")
+        logger.info(
+            f"Processing with: stretch={stretch_factor}, "
+            f"bg_removal={background_removal}, star_reduction={star_reduction}"
+        )
 
         # Process pipeline
         processed = data.copy()
@@ -686,7 +697,8 @@ def process_image(
 
         # 5. Noise reduction (optional)
         if params.noise_reduction > 0:
-            report_progress("noise", 0.82, f"Applying noise reduction ({int(params.noise_reduction * 100)}%)")
+            nr_pct = int(params.noise_reduction * 100)
+            report_progress("noise", 0.82, f"Applying noise reduction ({nr_pct}%)")
             logger.info(f"Applying noise reduction: {params.noise_reduction}")
             processed = _apply_noise_reduction(processed, params.noise_reduction)
             report_progress("noise", 0.88, "Noise reduction complete")

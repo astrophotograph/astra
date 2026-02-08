@@ -5,22 +5,21 @@ various backends (nova.astrometry.net API, local solve-field, ASTAP).
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from astropy import units as u
-from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 from astroquery.astrometry_net import AstrometryNet
 
 
 class SolverType(Enum):
     """Available plate solving backends."""
-    NOVA = "nova"           # nova.astrometry.net API
-    LOCAL = "local"         # Local solve-field CLI
-    ASTAP = "astap"         # ASTAP solver
+
+    NOVA = "nova"  # nova.astrometry.net API
+    LOCAL = "local"  # Local solve-field CLI
+    ASTAP = "astap"  # ASTAP solver
 
 
 @dataclass
@@ -28,16 +27,16 @@ class PlateSolveResult:
     """Result from plate solving an image."""
 
     success: bool
-    center_ra: float = 0.0       # degrees
-    center_dec: float = 0.0      # degrees
-    pixel_scale: float = 0.0     # arcsec/pixel
-    rotation: float = 0.0        # degrees, North through East
-    width_deg: float = 0.0       # image width in degrees
-    height_deg: float = 0.0      # image height in degrees
-    image_width: int = 0         # pixels
-    image_height: int = 0        # pixels
+    center_ra: float = 0.0  # degrees
+    center_dec: float = 0.0  # degrees
+    pixel_scale: float = 0.0  # arcsec/pixel
+    rotation: float = 0.0  # degrees, North through East
+    width_deg: float = 0.0  # image width in degrees
+    height_deg: float = 0.0  # image height in degrees
+    image_width: int = 0  # pixels
+    image_height: int = 0  # pixels
     solver: str = ""
-    solve_time: float = 0.0      # seconds
+    solve_time: float = 0.0  # seconds
     error_message: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -71,11 +70,11 @@ def _extract_wcs_info(wcs: WCS, image_width: int, image_height: int) -> dict:
     center_dec = center_coord.dec.deg
 
     # Calculate pixel scale from CD matrix or CDELT
-    if hasattr(wcs.wcs, 'cd') and wcs.wcs.cd is not None:
+    if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
         cd = wcs.wcs.cd
         # Pixel scale is sqrt of determinant in arcsec
         pixel_scale = abs(cd[0, 0] * cd[1, 1] - cd[0, 1] * cd[1, 0]) ** 0.5 * 3600
-    elif hasattr(wcs.wcs, 'cdelt') and wcs.wcs.cdelt is not None:
+    elif hasattr(wcs.wcs, "cdelt") and wcs.wcs.cdelt is not None:
         pixel_scale = abs(wcs.wcs.cdelt[0]) * 3600  # Convert to arcsec
     else:
         pixel_scale = 0.0
@@ -83,25 +82,21 @@ def _extract_wcs_info(wcs: WCS, image_width: int, image_height: int) -> dict:
     # Calculate rotation angle
     # Rotation is typically derived from the CD matrix or CROTA2
     rotation = 0.0
-    if hasattr(wcs.wcs, 'cd') and wcs.wcs.cd is not None:
+    if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
         import math
+
         cd = wcs.wcs.cd
         # Rotation angle from CD matrix
         # This assumes standard orientation (N up, E left for standard images)
         rotation = math.degrees(math.atan2(cd[0, 1], cd[0, 0]))
         # Normalize to 0-360
         rotation = rotation % 360
-    elif hasattr(wcs.wcs, 'crota') and wcs.wcs.crota is not None:
+    elif hasattr(wcs.wcs, "crota") and wcs.wcs.crota is not None:
         rotation = wcs.wcs.crota[1] if len(wcs.wcs.crota) > 1 else 0.0
 
     # Calculate image dimensions in degrees
     # Get coordinates of corners
-    corners = [
-        (0, 0),
-        (image_width, 0),
-        (0, image_height),
-        (image_width, image_height)
-    ]
+    corners = [(0, 0), (image_width, 0), (0, image_height), (image_width, image_height)]
 
     coords = [wcs.pixel_to_world(x, y) for x, y in corners]
 
@@ -184,11 +179,7 @@ def solve_with_nova(
 
         # Submit the image
         try:
-            wcs_header = ast.solve_from_image(
-                image_path,
-                solve_timeout=timeout,
-                **solve_kwargs
-            )
+            wcs_header = ast.solve_from_image(image_path, solve_timeout=timeout, **solve_kwargs)
         except Exception as e:
             return PlateSolveResult(
                 success=False,
@@ -215,6 +206,7 @@ def solve_with_nova(
         # If dimensions not in header, try to get from image
         if image_width == 0 or image_height == 0:
             from PIL import Image
+
             with Image.open(image_path) as img:
                 image_width, image_height = img.size
 
@@ -264,17 +256,16 @@ def solve_with_local(
     Returns:
         PlateSolveResult with solution details
     """
+    import os
     import subprocess
     import tempfile
-    import os
 
     start_time = time.time()
 
     try:
         # Check if solve-field is available
         try:
-            subprocess.run(["solve-field", "--version"],
-                         capture_output=True, check=True, timeout=5)
+            subprocess.run(["solve-field", "--version"], capture_output=True, check=True, timeout=5)
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
             return PlateSolveResult(
                 success=False,
@@ -292,9 +283,12 @@ def solve_with_local(
                 "solve-field",
                 "--overwrite",
                 "--no-plots",
-                "--cpulimit", str(timeout),
-                "--dir", tmpdir,
-                "--out", "solution",
+                "--cpulimit",
+                str(timeout),
+                "--dir",
+                tmpdir,
+                "--out",
+                "solution",
             ]
 
             if scale_lower is not None and scale_upper is not None:
@@ -305,7 +299,7 @@ def solve_with_local(
             cmd.append(image_path)
 
             # Run solve-field
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
+            subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 30)
 
             # Check for WCS output file
             wcs_file = output_base + ".wcs"
@@ -319,12 +313,14 @@ def solve_with_local(
 
             # Read WCS solution
             from astropy.io import fits
+
             with fits.open(wcs_file) as hdul:
                 wcs_header = hdul[0].header
                 wcs = WCS(wcs_header)
 
             # Get image dimensions
             from PIL import Image
+
             with Image.open(image_path) as img:
                 image_width, image_height = img.size
 
@@ -381,8 +377,8 @@ def solve_with_astap(
     Returns:
         PlateSolveResult with solution details
     """
-    import subprocess
     import os
+    import subprocess
 
     start_time = time.time()
 
@@ -408,15 +404,17 @@ def solve_with_astap(
         # Build ASTAP command
         cmd = [
             astap_cmd,
-            "-f", image_path,
-            "-z", "1",  # Downsample factor
+            "-f",
+            image_path,
+            "-z",
+            "1",  # Downsample factor
         ]
 
         if scale_lower is not None:
             cmd.extend(["-s", str(scale_lower)])
 
         # Run ASTAP
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
         # ASTAP creates a .wcs file next to the input
         wcs_file = os.path.splitext(image_path)[0] + ".wcs"
@@ -431,12 +429,14 @@ def solve_with_astap(
         try:
             # Read WCS solution
             from astropy.io import fits
+
             with fits.open(wcs_file) as hdul:
                 wcs_header = hdul[0].header
                 wcs = WCS(wcs_header)
 
             # Get image dimensions
             from PIL import Image
+
             with Image.open(image_path) as img:
                 image_width, image_height = img.size
 

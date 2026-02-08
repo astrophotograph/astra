@@ -339,9 +339,7 @@ def lookup_object(object_name: str) -> Optional[dict]:
         alternative_names = []
         other_names = simbad.query_objectids(object_name)
         if other_names is not None and len(other_names) > 0:
-            alternative_names = [
-                _decode_bytes(name["id"]) for name in other_names if name["id"]
-            ]
+            alternative_names = [_decode_bytes(name["id"]) for name in other_names if name["id"]]
 
         # Create result
         main_name = _decode_bytes(obj["main_id"])

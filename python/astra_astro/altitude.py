@@ -9,8 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from skyfield import almanac
-from skyfield.api import N, W, E, S, load, wgs84
-from skyfield.positionlib import Apparent
+from skyfield.api import E, N, S, W, load, wgs84
 
 
 @dataclass
@@ -51,8 +50,24 @@ class AltitudePoint:
 
 def _azimuth_to_compass(azimuth: float) -> str:
     """Convert azimuth in degrees to compass direction."""
-    directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-                  "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    directions = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+    ]
     index = round(azimuth / 22.5) % 16
     return directions[index]
 
@@ -144,11 +159,9 @@ def calculate_altitude_data(
     ts = load.timescale()
     eph = load("de421.bsp")
     earth = eph["earth"]
-    sun = eph["sun"]
+    eph["sun"]
 
     # Create observer location
-    lat_dir = N if location.latitude >= 0 else S
-    lon_dir = E if location.longitude >= 0 else W
     observer_location = wgs84.latlon(
         abs(location.latitude) * (1 if location.latitude >= 0 else -1),
         abs(location.longitude) * (1 if location.longitude >= 0 else -1),
@@ -243,7 +256,8 @@ def get_sunset_sunrise(
 
     # Calculate for the day
     t0 = ts.from_datetime(date.replace(hour=0, minute=0, second=0, microsecond=0))
-    t1 = ts.from_datetime(date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2))
+    end_date = date.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=2)
+    t1 = ts.from_datetime(end_date)
 
     # Sunrise/sunset
     f = almanac.sunrise_sunset(eph, observer_location)
