@@ -51,7 +51,7 @@ base64 = "0.22"
 fitrs = "0.5"
 
 # Python integration
-pyo3 = { version = "0.27", features = ["auto-initialize"] }
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
 
 [features]
 default = ["custom-protocol"]
