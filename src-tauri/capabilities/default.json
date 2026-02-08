@@ -8,6 +8,8 @@
     "opener:default",
     "dialog:default",
     "fs:default",
+    "geolocation:allow-check-permissions",
+    "geolocation:allow-request-permissions",
     "geolocation:allow-get-current-position",
     "geolocation:allow-watch-position",
     {

@@ -25,7 +25,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$HOME/**", "/home/**", "/tmp/**"]
+        "scope": ["$HOME/**", "/home/**", "/Users/**", "/tmp/**"]
       }
     }
   },
@@ -39,6 +39,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "macOS": {
+      "entitlements": "./Entitlements.plist"
+    },
     "category": "Utility",
     "shortDescription": "Astronomy Observation Log",
     "longDescription": "Tracks and organizes astronomical imaging sessions. Features include observation logging, target planning, altitude calculations, and sky map integration."

@@ -439,6 +439,18 @@ export interface RestoreResult {
   message: string;
 }
 
+export interface PathPrefix {
+  prefix: string;
+  count: number;
+}
+
+export interface RemapResult {
+  success: boolean;
+  urls_updated: number;
+  fits_urls_updated: number;
+  message: string;
+}
+
 // =============================================================================
 // Backup Commands
 // =============================================================================
@@ -477,6 +489,18 @@ export const backupApi = {
    */
   import: (importPath: string) =>
     invoke<RestoreResult>("import_database", { importPath }),
+
+  /**
+   * Get common path prefixes from image URLs (for path remapping after import)
+   */
+  getPathPrefixes: () =>
+    invoke<PathPrefix[]>("get_image_path_prefixes"),
+
+  /**
+   * Remap image file paths (replace old prefix with new prefix)
+   */
+  remapPaths: (oldPrefix: string, newPrefix: string) =>
+    invoke<RemapResult>("remap_image_paths", { oldPrefix, newPrefix }),
 };
 
 export const astronomyApi = {

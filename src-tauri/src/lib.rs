@@ -126,6 +126,8 @@ pub fn run() {
             commands::delete_backup,
             commands::export_database,
             commands::import_database,
+            commands::get_image_path_prefixes,
+            commands::remap_image_paths,
             // Bulk scan commands
             commands::bulk_scan_directory,
             commands::preview_bulk_scan,

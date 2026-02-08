@@ -61,8 +61,10 @@ import {
   backupApi,
   imageApi,
   type BackupInfo,
+  type PathPrefix,
   type PopulateFitsUrlsResult,
 } from "@/lib/tauri/commands";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   parseHorizonFile,
   type HorizonProfile,
@@ -78,7 +80,11 @@ import {
 import { useLocations } from "@/contexts/LocationContext";
 import { useEquipment } from "@/contexts/EquipmentContext";
 import { MoonPhase } from "@/components/MoonPhase";
-import { getCurrentPosition } from "@tauri-apps/plugin-geolocation";
+import {
+  checkPermissions,
+  requestPermissions,
+  getCurrentPosition,
+} from "@tauri-apps/plugin-geolocation";
 
 interface AppInfo {
   name: string;
@@ -209,6 +215,14 @@ export default function AdminPage() {
   const [isPopulatingFits, setIsPopulatingFits] = useState(false);
   const [fitsPopulateResult, setFitsPopulateResult] =
     useState<PopulateFitsUrlsResult | null>(null);
+
+  // Path remapping
+  const [pathPrefixes, setPathPrefixes] = useState<PathPrefix[]>([]);
+  const [isLoadingPrefixes, setIsLoadingPrefixes] = useState(false);
+  const [remapOldPrefix, setRemapOldPrefix] = useState("");
+  const [remapNewPrefix, setRemapNewPrefix] = useState("");
+  const [isRemapping, setIsRemapping] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
   // Location management
   const {
@@ -416,6 +430,76 @@ export default function AdminPage() {
     }
   };
 
+  // Import backup from file
+  const handleImportBackup = async () => {
+    const selected = await open({
+      title: "Import Astra Backup",
+      filters: [{ name: "Database", extensions: ["db"] }],
+      multiple: false,
+      directory: false,
+    });
+
+    if (!selected) return;
+
+    setIsImporting(true);
+    try {
+      const result = await backupApi.import(selected);
+      if (result.success) {
+        toast.success(
+          "Database imported successfully. Please restart the app for changes to take effect.",
+        );
+        // Load path prefixes to offer remapping
+        loadPathPrefixes();
+      } else {
+        toast.error(result.message);
+      }
+    } catch (err) {
+      toast.error("Failed to import backup");
+      console.error(err);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  // Load path prefixes for remapping
+  const loadPathPrefixes = async () => {
+    setIsLoadingPrefixes(true);
+    try {
+      const prefixes = await backupApi.getPathPrefixes();
+      setPathPrefixes(prefixes);
+      if (prefixes.length > 0) {
+        setRemapOldPrefix(prefixes[0].prefix);
+      }
+    } catch (err) {
+      console.error("Failed to load path prefixes:", err);
+    } finally {
+      setIsLoadingPrefixes(false);
+    }
+  };
+
+  // Remap image paths
+  const handleRemapPaths = async () => {
+    if (!remapOldPrefix.trim() || !remapNewPrefix.trim()) {
+      toast.error("Both old and new path prefixes are required");
+      return;
+    }
+    setIsRemapping(true);
+    try {
+      const result = await backupApi.remapPaths(remapOldPrefix, remapNewPrefix);
+      if (result.success) {
+        toast.success(result.message);
+        loadPathPrefixes(); // Refresh prefixes
+      } else {
+        toast.error("Remap failed");
+      }
+    } catch (err) {
+      toast.error(`Failed to remap paths: ${String(err)}`);
+      console.error(err);
+    } finally {
+      setIsRemapping(false);
+    }
+  };
+
   // Open dialog to add new location
   const openAddLocationDialog = () => {
     setEditingLocationId(null);
@@ -505,6 +589,18 @@ export default function AdminPage() {
   // Get current location using Tauri geolocation plugin
   const autoDetectLocation = async () => {
     try {
+      // Check and request permissions (required on macOS)
+      let perms = await checkPermissions();
+      if (perms.location !== "granted") {
+        perms = await requestPermissions(["location"]);
+        if (perms.location === "denied") {
+          toast.error(
+            "Location permission denied. Please enable location access in System Settings.",
+          );
+          return;
+        }
+      }
+
       const position = await getCurrentPosition();
       setLocationForm((prev) => ({
         ...prev,
@@ -514,7 +610,14 @@ export default function AdminPage() {
       toast.success("Location detected");
     } catch (error) {
       console.error("Geolocation error:", error);
-      toast.error(`Location error: ${String(error)}`);
+      const msg = String(error);
+      if (msg.includes("denied") || msg.includes("permission")) {
+        toast.error(
+          "Location permission denied. Enable location access in System Settings > Privacy & Security > Location Services.",
+        );
+      } else {
+        toast.error(`Location error: ${msg}`);
+      }
     }
   };
 
@@ -1352,13 +1455,21 @@ export default function AdminPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button
                     onClick={handleCreateBackup}
                     disabled={isCreatingBackup}
                   >
                     <Download className="w-4 h-4 mr-2" />
                     {isCreatingBackup ? "Creating..." : "Create Backup"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleImportBackup}
+                    disabled={isImporting}
+                  >
+                    <FileUp className="w-4 h-4 mr-2" />
+                    {isImporting ? "Importing..." : "Import from File"}
                   </Button>
                   <Button
                     variant="outline"
@@ -1422,6 +1533,100 @@ export default function AdminPage() {
                     )}
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Path Remapping */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <MapPin className="w-5 h-5" />
+                  Remap Image Paths
+                </CardTitle>
+                <CardDescription>
+                  After importing a backup from another computer, image file
+                  paths may need updating to match this machine's directory
+                  structure.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Button
+                  variant="outline"
+                  onClick={loadPathPrefixes}
+                  disabled={isLoadingPrefixes}
+                >
+                  <RefreshCw
+                    className={`w-4 h-4 mr-2 ${isLoadingPrefixes ? "animate-spin" : ""}`}
+                  />
+                  Detect Path Prefixes
+                </Button>
+
+                {pathPrefixes.length > 0 && (
+                  <>
+                    <div className="border rounded-lg">
+                      <div className="p-3 border-b bg-muted/50">
+                        <h4 className="font-medium text-sm">
+                          Detected Prefixes
+                        </h4>
+                      </div>
+                      <div className="divide-y max-h-40 overflow-y-auto">
+                        {pathPrefixes.map((p) => (
+                          <button
+                            key={p.prefix}
+                            className={`w-full p-2 text-left hover:bg-muted/30 text-sm ${
+                              remapOldPrefix === p.prefix ? "bg-primary/10" : ""
+                            }`}
+                            onClick={() => setRemapOldPrefix(p.prefix)}
+                          >
+                            <span className="font-mono text-xs">
+                              {p.prefix}
+                            </span>
+                            <span className="text-muted-foreground ml-2">
+                              ({p.count} images)
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div>
+                        <Label htmlFor="old-prefix" className="text-sm">
+                          Old Path Prefix
+                        </Label>
+                        <Input
+                          id="old-prefix"
+                          value={remapOldPrefix}
+                          onChange={(e) => setRemapOldPrefix(e.target.value)}
+                          placeholder="/home/olduser/images"
+                          className="mt-1 font-mono text-sm"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="new-prefix" className="text-sm">
+                          New Path Prefix
+                        </Label>
+                        <Input
+                          id="new-prefix"
+                          value={remapNewPrefix}
+                          onChange={(e) => setRemapNewPrefix(e.target.value)}
+                          placeholder="/Users/newuser/images"
+                          className="mt-1 font-mono text-sm"
+                        />
+                      </div>
+                      <Button
+                        onClick={handleRemapPaths}
+                        disabled={
+                          isRemapping ||
+                          !remapOldPrefix.trim() ||
+                          !remapNewPrefix.trim()
+                        }
+                      >
+                        {isRemapping ? "Remapping..." : "Remap Paths"}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 

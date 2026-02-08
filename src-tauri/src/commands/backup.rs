@@ -5,10 +5,11 @@
 use std::fs;
 use std::path::PathBuf;
 use chrono::Local;
+use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 
-use crate::db::DbPool;
+use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupInfo {
@@ -263,4 +264,155 @@ pub fn export_database(app: AppHandle, export_path: String) -> Result<BackupResu
 #[tauri::command]
 pub fn import_database(app: AppHandle, import_path: String) -> Result<RestoreResult, String> {
     restore_backup(app, import_path)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PathPrefix {
+    pub prefix: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RemapResult {
+    pub success: bool,
+    pub urls_updated: i64,
+    pub fits_urls_updated: i64,
+    pub message: String,
+}
+
+/// Get common path prefixes from image URLs in the database.
+/// Useful after importing a backup from another computer to identify
+/// paths that need remapping.
+#[tauri::command]
+pub fn get_image_path_prefixes(state: State<'_, AppState>) -> Result<Vec<PathPrefix>, String> {
+    use crate::db::schema::images::dsl::*;
+
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+
+    // Get all non-null URL values
+    let urls_list: Vec<Option<String>> = images
+        .select(url)
+        .filter(url.is_not_null())
+        .load(&mut conn)
+        .map_err(|e| format!("Failed to query images: {}", e))?;
+
+    // Extract directory prefixes (up to 3 levels deep)
+    let mut prefix_counts: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+
+    for u in urls_list.iter().flatten() {
+        let path = PathBuf::from(u);
+        // Get the parent directory of the file, then take up to the first 3 components
+        if let Some(parent) = path.parent() {
+            let components: Vec<&str> = parent
+                .components()
+                .filter_map(|c| c.as_os_str().to_str())
+                .collect();
+            // Build prefixes at different depths
+            let mut prefix = String::new();
+            for (i, comp) in components.iter().enumerate() {
+                if i == 0 && parent.is_absolute() {
+                    prefix = format!("/{}", comp);
+                } else if i == 0 {
+                    prefix = comp.to_string();
+                } else {
+                    prefix = format!("{}/{}", prefix, comp);
+                }
+                // Record prefixes at depth 2-4 (meaningful directory levels)
+                if i >= 1 && i <= 3 {
+                    *prefix_counts.entry(prefix.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+
+    // Filter to prefixes that cover a meaningful number of images
+    let total = urls_list.len() as i64;
+    let threshold = std::cmp::max(1, total / 10); // at least 10% of images
+
+    let mut prefixes: Vec<PathPrefix> = prefix_counts
+        .into_iter()
+        .filter(|(_, count)| *count >= threshold)
+        .map(|(prefix, count)| PathPrefix { prefix, count })
+        .collect();
+
+    prefixes.sort_by(|a, b| b.count.cmp(&a.count));
+    // Keep top results
+    prefixes.truncate(20);
+
+    Ok(prefixes)
+}
+
+/// Remap image file paths in the database.
+/// Replaces old_prefix with new_prefix in both url and fits_url fields.
+/// This is needed when restoring a backup from another computer where
+/// image files are stored at a different path.
+#[tauri::command]
+pub fn remap_image_paths(
+    state: State<'_, AppState>,
+    old_prefix: String,
+    new_prefix: String,
+) -> Result<RemapResult, String> {
+    use crate::db::schema::images::dsl::*;
+
+    if old_prefix.is_empty() {
+        return Err("Old prefix cannot be empty".to_string());
+    }
+
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+
+    // Get all images with URLs that start with old_prefix
+    let matching_images: Vec<(String, Option<String>, Option<String>)> = images
+        .select((id, url, fits_url))
+        .filter(url.like(format!("{}%", old_prefix)))
+        .or_filter(fits_url.like(format!("{}%", old_prefix)))
+        .load(&mut conn)
+        .map_err(|e| format!("Failed to query images: {}", e))?;
+
+    let mut urls_updated: i64 = 0;
+    let mut fits_updated: i64 = 0;
+
+    for (img_id, img_url, img_fits) in &matching_images {
+        let mut update_url: Option<String> = None;
+        let mut update_fits: Option<String> = None;
+
+        if let Some(u) = img_url {
+            if u.starts_with(&old_prefix) {
+                update_url = Some(format!("{}{}", new_prefix, &u[old_prefix.len()..]));
+                urls_updated += 1;
+            }
+        }
+
+        if let Some(f) = img_fits {
+            if f.starts_with(&old_prefix) {
+                update_fits = Some(format!("{}{}", new_prefix, &f[old_prefix.len()..]));
+                fits_updated += 1;
+            }
+        }
+
+        if update_url.is_some() || update_fits.is_some() {
+            let target = images.filter(id.eq(img_id));
+            if let Some(new_url) = update_url {
+                diesel::update(target.clone())
+                    .set(url.eq(new_url))
+                    .execute(&mut conn)
+                    .map_err(|e| format!("Failed to update image URL: {}", e))?;
+            }
+            if let Some(new_fits) = update_fits {
+                diesel::update(target)
+                    .set(fits_url.eq(new_fits))
+                    .execute(&mut conn)
+                    .map_err(|e| format!("Failed to update FITS URL: {}", e))?;
+            }
+        }
+    }
+
+    Ok(RemapResult {
+        success: true,
+        urls_updated,
+        fits_urls_updated: fits_updated,
+        message: format!(
+            "Remapped {} image URLs and {} FITS URLs from '{}' to '{}'",
+            urls_updated, fits_updated, old_prefix, new_prefix
+        ),
+    })
 }
