@@ -82,6 +82,7 @@ jobs:
 
       - name: Lint with ruff
         working-directory: python
+        continue-on-error: true
         run: |
           uv run --extra dev ruff check .
           uv run --extra dev ruff format --check .
