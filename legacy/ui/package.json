@@ -13,7 +13,7 @@
     "scripts:help": "echo 'Available scripts:\\n  update-image-dimensions - Add width/height to existing images\\n  generate-thumbnails - Generate thumbnails for existing images\\n  generate-placeholders - Generate blur placeholder data URLs for existing images'"
   },
   "dependencies": {
-    "@clerk/nextjs": "^6.21.0",
+    "@clerk/nextjs": "^6.37.3",
     "@date-fns/tz": "^1.2.0",
     "@hookform/resolvers": "^5.1.1",
     "@neondatabase/serverless": "^1.0.1",
@@ -40,7 +40,7 @@
     "lucide-react": "^0.513.0",
     "marked": "^15.0.12",
     "nanoid": "^5.1.5",
-    "next": "15.3.3",
+    "next": "15.5.10",
     "next-themes": "^0.4.6",
     "pg": "^8.13.1",
     "pg-hstore": "^2.3.4",
