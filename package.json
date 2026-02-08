@@ -1,7 +1,7 @@
 {
   "name": "astra",
   "private": true,
-  "version": "0.1.0",
+  "version": "2026.02.0",
   "type": "module",
   "description": "Astronomy Observation Log - Tracks and organizes imaging sessions",
   "scripts": {

@@ -1,6 +1,6 @@
 [package]
 name = "astra"
-version = "0.1.0"
+version = "2026.2.0"
 description = "Astronomy Observation Log - Tracks and organizes imaging sessions"
 authors = ["erewhon"]
 license = "GPL-3.0"
