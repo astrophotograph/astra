@@ -50,7 +50,7 @@
     "sonner": "^2.0.5",
     "suncalc": "^1.9.0",
     "tailwind-merge": "^3.3.0",
-    "zod": "^3.25.58",
+    "zod": "^4.3.6",
     "zustand": "^5.0.3"
   },
   "devDependencies": {
