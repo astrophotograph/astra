@@ -41,7 +41,7 @@ import {
 } from "@/hooks/use-collections";
 import type { Collection, CreateCollectionInput } from "@/lib/tauri/commands";
 import { cn } from "@/lib/utils";
-import { MoreHorizontal, Target } from "lucide-react";
+import { MoreHorizontal, Play, Target } from "lucide-react";
 import {
   type CollectionType,
   getCollectionType,
@@ -49,6 +49,7 @@ import {
   COLLECTION_TEMPLATES,
 } from "@/lib/collection-utils";
 import TopTargetsDialog from "@/components/TopTargetsDialog";
+import SlideshowConfigDialog from "@/components/SlideshowConfigDialog";
 
 export default function CollectionsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -57,6 +58,7 @@ export default function CollectionsPage() {
   const [showArchived, setShowArchived] = useState(false);
   const [selectedType, setSelectedType] = useState<CollectionType | "all">("all");
   const [topTargetsOpen, setTopTargetsOpen] = useState(false);
+  const [slideshowDialogOpen, setSlideshowDialogOpen] = useState(false);
 
   // Form state for adding new collection
   const [newCollection, setNewCollection] = useState<CreateCollectionInput>({
@@ -218,6 +220,13 @@ export default function CollectionsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => setSlideshowDialogOpen(true)}
+          >
+            <Play className="h-4 w-4 mr-2" />
+            Slideshow
+          </Button>
           <Button
             variant="outline"
             onClick={() => setTopTargetsOpen(true)}
@@ -484,6 +493,12 @@ export default function CollectionsPage() {
         open={topTargetsOpen}
         onOpenChange={setTopTargetsOpen}
         collections={collections}
+      />
+
+      {/* Slideshow Config Dialog */}
+      <SlideshowConfigDialog
+        open={slideshowDialogOpen}
+        onOpenChange={setSlideshowDialogOpen}
       />
     </div>
   );

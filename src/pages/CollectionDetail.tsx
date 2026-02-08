@@ -44,6 +44,7 @@ import {
   Loader2,
   Map,
   MoreHorizontal,
+  Play,
   Plus,
   Square,
   Star,
@@ -66,6 +67,7 @@ import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
 import SkyMapSheet from "@/components/SkyMapSheet";
+import SlideshowConfigDialog from "@/components/SlideshowConfigDialog";
 import { getImageFootprint, type ImageFootprint } from "@/lib/sky-map-utils";
 
 // Get session date from collection metadata
@@ -109,6 +111,7 @@ export default function CollectionDetailPage() {
   const [isAddingImages, setIsAddingImages] = useState(false);
   const [collectDialogOpen, setCollectDialogOpen] = useState(false);
   const [skyMapOpen, setSkyMapOpen] = useState(false);
+  const [slideshowDialogOpen, setSlideshowDialogOpen] = useState(false);
   const [batchPlateSolveDialogOpen, setBatchPlateSolveDialogOpen] = useState(false);
   const [batchPlateSolveApiKey, setBatchPlateSolveApiKey] = useState(() => {
     return localStorage.getItem("astrometry_api_key") || "";
@@ -617,6 +620,17 @@ export default function CollectionDetailPage() {
                 <Button
                   variant="outline"
                   className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={() => setSlideshowDialogOpen(true)}
+                  title="Present images as a slideshow"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Slideshow
+                </Button>
+              )}
+              {!isCatalogCollection && collectionImages.length > 0 && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
                   onClick={() => setSelectionMode(true)}
                   title="Select images to remove"
                 >
@@ -1102,6 +1116,13 @@ export default function CollectionDetailPage() {
         onOpenChange={setSkyMapOpen}
         images={skyMapFootprints}
         title={`${collection.name} - Sky Map`}
+      />
+
+      {/* Slideshow Config Dialog */}
+      <SlideshowConfigDialog
+        open={slideshowDialogOpen}
+        onOpenChange={setSlideshowDialogOpen}
+        preselectedCollectionId={id}
       />
     </div>
   );

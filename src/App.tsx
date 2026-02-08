@@ -11,6 +11,7 @@ import Plan from "./pages/Plan";
 import Observations from "./pages/Observations";
 import Targets from "./pages/Targets";
 import ImageViewer from "./pages/ImageViewer";
+import Slideshow from "./pages/Slideshow";
 import Admin from "./pages/Admin";
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
       <EquipmentProvider>
         <div className="dark min-h-screen bg-background text-foreground">
           <Routes>
+            <Route path="/slideshow" element={<Slideshow />} />
             <Route element={<Layout />}>
               <Route path="/" element={<Home />} />
               <Route path="/todo" element={<Todo />} />
