@@ -43,6 +43,13 @@ log = "0.4"
 env_logger = "0.11"
 walkdir = "2"
 
+# HTTP client
+reqwest = { version = "0.12", features = ["rustls-tls-native-roots"] }
+
+# Crypto (for S3 signing)
+hmac = "0.12"
+hex = "0.4"
+
 # Image handling
 image = "0.25"
 base64 = "0.22"

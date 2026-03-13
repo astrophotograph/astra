@@ -913,3 +913,70 @@ export const targetApi = {
   getImages: (targetName: string) =>
     invoke<Image[]>("get_images_by_target", { targetName }),
 };
+
+// =============================================================================
+// Share Types
+// =============================================================================
+
+export interface ShareUploadConfig {
+  endpointUrl: string;
+  bucket: string;
+  region: string;
+  pathPrefix: string;
+  publicUrlBase: string;
+}
+
+export interface ConfigureShareInput {
+  endpointUrl: string;
+  bucket: string;
+  region: string;
+  pathPrefix: string;
+  publicUrlBase: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
+export interface PublishResult {
+  shareId: string;
+  publicUrl: string;
+  imagesUploaded: number;
+  thumbsUploaded: number;
+}
+
+export interface PublishStatus {
+  shareId: string;
+  publishedAt: string;
+  publicUrl: string;
+  lastSyncedAt: string;
+  uploadedImageIds: string[];
+}
+
+// =============================================================================
+// Share Commands
+// =============================================================================
+
+export const shareApi = {
+  configureUpload: (input: ConfigureShareInput) =>
+    invoke<void>("configure_share_upload", { input }),
+
+  getConfig: () =>
+    invoke<ShareUploadConfig | null>("get_share_config"),
+
+  testUpload: () =>
+    invoke<void>("test_share_upload"),
+
+  clearConfig: () =>
+    invoke<void>("clear_share_config"),
+
+  publish: (collectionId: string) =>
+    invoke<PublishResult>("publish_collection", { collectionId }),
+
+  sync: (collectionId: string) =>
+    invoke<PublishResult>("sync_collection", { collectionId }),
+
+  unpublish: (collectionId: string) =>
+    invoke<void>("unpublish_collection", { collectionId }),
+
+  getPublishStatus: (collectionId: string) =>
+    invoke<PublishStatus | null>("get_publish_status", { collectionId }),
+};

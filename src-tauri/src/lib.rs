@@ -8,6 +8,7 @@ use tauri::Manager;
 mod commands;
 mod db;
 mod python;
+mod share;
 mod state;
 
 use state::AppState;
@@ -149,6 +150,15 @@ pub fn run() {
             commands::get_targets,
             commands::search_images_by_target,
             commands::get_images_by_target,
+            // Share commands
+            commands::configure_share_upload,
+            commands::get_share_config,
+            commands::test_share_upload,
+            commands::clear_share_config,
+            commands::publish_collection,
+            commands::sync_collection,
+            commands::unpublish_collection,
+            commands::get_publish_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

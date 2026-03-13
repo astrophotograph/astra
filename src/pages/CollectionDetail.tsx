@@ -2,7 +2,7 @@
  * Collection Detail Page - View and manage a collection
  */
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
 import SunCalc from "suncalc";
@@ -38,8 +38,10 @@ import {
 import {
   CheckSquare,
   Compass,
+  ExternalLink,
   FolderDown,
   FolderOpen,
+  Globe,
   ImageIcon,
   Loader2,
   Map,
@@ -62,7 +64,7 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { imageApi, plateSolveApi, type Image } from "@/lib/tauri/commands";
+import { imageApi, plateSolveApi, shareApi, type Image, type PublishStatus } from "@/lib/tauri/commands";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -112,6 +114,9 @@ export default function CollectionDetailPage() {
   const [collectDialogOpen, setCollectDialogOpen] = useState(false);
   const [skyMapOpen, setSkyMapOpen] = useState(false);
   const [slideshowDialogOpen, setSlideshowDialogOpen] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [batchPlateSolveDialogOpen, setBatchPlateSolveDialogOpen] = useState(false);
   const [batchPlateSolveApiKey, setBatchPlateSolveApiKey] = useState(() => {
     return localStorage.getItem("astrometry_api_key") || "";
@@ -175,6 +180,56 @@ export default function CollectionDetailPage() {
       .filter((img) => img.url)
       .map((img) => img.url as string);
   }, [collectionImages]);
+
+  // Load publish status
+  useEffect(() => {
+    if (id) {
+      shareApi.getPublishStatus(id).then(setPublishStatus).catch(console.error);
+    }
+  }, [id]);
+
+  const handlePublish = async () => {
+    if (!collection) return;
+    setIsPublishing(true);
+    try {
+      const result = await shareApi.publish(collection.id);
+      toast.success(`Published! ${result.imagesUploaded} images uploaded`);
+      setPublishStatus(await shareApi.getPublishStatus(collection.id));
+    } catch (e) {
+      toast.error("Publish failed: " + e);
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  const handleSync = async () => {
+    if (!collection) return;
+    setIsSyncing(true);
+    try {
+      const result = await shareApi.sync(collection.id);
+      if (result.imagesUploaded > 0) {
+        toast.success(`Synced! ${result.imagesUploaded} new images uploaded`);
+      } else {
+        toast.success("Gallery is up to date");
+      }
+      setPublishStatus(await shareApi.getPublishStatus(collection.id));
+    } catch (e) {
+      toast.error("Sync failed: " + e);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleUnpublish = async () => {
+    if (!collection) return;
+    try {
+      await shareApi.unpublish(collection.id);
+      toast.success("Collection unpublished");
+      setPublishStatus(null);
+    } catch (e) {
+      toast.error("Unpublish failed: " + e);
+    }
+  };
 
   // Debug logging
   console.log("CollectionDetail debug:", {
@@ -626,6 +681,68 @@ export default function CollectionDetailPage() {
                   <Play className="w-4 h-4 mr-2" />
                   Slideshow
                 </Button>
+              )}
+              {/* Publish / Sync buttons */}
+              {!isCatalogCollection && collectionImages.length > 0 && !publishStatus && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  onClick={handlePublish}
+                  disabled={isPublishing}
+                  title="Publish collection to astra.gallery"
+                >
+                  {isPublishing ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Globe className="w-4 h-4 mr-2" />
+                  )}
+                  {isPublishing ? "Publishing..." : "Publish"}
+                </Button>
+              )}
+              {!isCatalogCollection && publishStatus && (
+                <>
+                  <a
+                    href={publishStatus.publicUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md border border-emerald-600 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50 transition-colors"
+                    title={publishStatus.publicUrl}
+                  >
+                    <Globe className="w-4 h-4" />
+                    Published
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                    onClick={handleSync}
+                    disabled={isSyncing}
+                    title="Sync new images to gallery"
+                  >
+                    {isSyncing ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Globe className="w-4 h-4 mr-2" />
+                    )}
+                    {isSyncing ? "Syncing..." : "Sync"}
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="icon" className="bg-transparent border-gray-600 text-white hover:bg-gray-800 w-8 h-8">
+                        <MoreHorizontal className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        className="text-red-400"
+                        onClick={handleUnpublish}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Unpublish
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
               )}
               {!isCatalogCollection && collectionImages.length > 0 && (
                 <Button

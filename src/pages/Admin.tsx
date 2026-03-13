@@ -60,9 +60,11 @@ import {
   appApi,
   backupApi,
   imageApi,
+  shareApi,
   type BackupInfo,
   type PathPrefix,
   type PopulateFitsUrlsResult,
+  type ShareUploadConfig,
 } from "@/lib/tauri/commands";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
@@ -177,6 +179,7 @@ type SettingsSection =
   | "locations"
   | "equipment"
   | "plate-solving"
+  | "sharing"
   | "database"
   | "about";
 
@@ -196,6 +199,7 @@ const SETTINGS_SECTIONS: {
     label: "Plate Solving",
     icon: <Crosshair className="w-4 h-4" />,
   },
+  { id: "sharing", label: "Sharing", icon: <Upload className="w-4 h-4" /> },
   { id: "database", label: "Database", icon: <Database className="w-4 h-4" /> },
   { id: "about", label: "About", icon: <Info className="w-4 h-4" /> },
 ];
@@ -210,6 +214,18 @@ export default function AdminPage() {
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [selectedBackup, setSelectedBackup] = useState<BackupInfo | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
+
+  // Sharing config
+  const [shareConfig, setShareConfig] = useState<ShareUploadConfig | null>(null);
+  const [shareEndpoint, setShareEndpoint] = useState("");
+  const [shareBucket, setShareBucket] = useState("");
+  const [shareRegion, setShareRegion] = useState("auto");
+  const [sharePathPrefix, setSharePathPrefix] = useState("shares/");
+  const [sharePublicUrl, setSharePublicUrl] = useState("");
+  const [shareAccessKey, setShareAccessKey] = useState("");
+  const [shareSecretKey, setShareSecretKey] = useState("");
+  const [isSavingShare, setIsSavingShare] = useState(false);
+  const [isTestingShare, setIsTestingShare] = useState(false);
 
   // FITS URL population
   const [isPopulatingFits, setIsPopulatingFits] = useState(false);
@@ -337,7 +353,76 @@ export default function AdminPage() {
   useEffect(() => {
     appApi.getInfo().then(setAppInfo).catch(console.error);
     loadBackups();
+    loadShareConfig();
   }, []);
+
+  const loadShareConfig = async () => {
+    try {
+      const cfg = await shareApi.getConfig();
+      setShareConfig(cfg);
+      if (cfg) {
+        setShareEndpoint(cfg.endpointUrl);
+        setShareBucket(cfg.bucket);
+        setShareRegion(cfg.region);
+        setSharePathPrefix(cfg.pathPrefix);
+        setSharePublicUrl(cfg.publicUrlBase);
+      }
+    } catch (e) {
+      console.error("Failed to load share config:", e);
+    }
+  };
+
+  const handleSaveShareConfig = async () => {
+    setIsSavingShare(true);
+    try {
+      await shareApi.configureUpload({
+        endpointUrl: shareEndpoint,
+        bucket: shareBucket,
+        region: shareRegion,
+        pathPrefix: sharePathPrefix,
+        publicUrlBase: sharePublicUrl,
+        accessKeyId: shareAccessKey,
+        secretAccessKey: shareSecretKey,
+      });
+      toast.success("Share configuration saved");
+      setShareAccessKey("");
+      setShareSecretKey("");
+      await loadShareConfig();
+    } catch (e) {
+      toast.error("Failed to save share config: " + e);
+    } finally {
+      setIsSavingShare(false);
+    }
+  };
+
+  const handleTestShareUpload = async () => {
+    setIsTestingShare(true);
+    try {
+      await shareApi.testUpload();
+      toast.success("Connection test passed!");
+    } catch (e) {
+      toast.error("Connection test failed: " + e);
+    } finally {
+      setIsTestingShare(false);
+    }
+  };
+
+  const handleClearShareConfig = async () => {
+    try {
+      await shareApi.clearConfig();
+      setShareConfig(null);
+      setShareEndpoint("");
+      setShareBucket("");
+      setShareRegion("auto");
+      setSharePathPrefix("shares/");
+      setSharePublicUrl("");
+      setShareAccessKey("");
+      setShareSecretKey("");
+      toast.success("Share configuration cleared");
+    } catch (e) {
+      toast.error("Failed to clear share config: " + e);
+    }
+  };
 
   // Load backups list
   const loadBackups = async () => {
@@ -1410,6 +1495,141 @@ export default function AdminPage() {
                     </p>
                   </div>
                 </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Sharing Section */}
+        {activeSection === "sharing" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Upload className="w-5 h-5" />
+                Gallery Sharing
+              </CardTitle>
+              <CardDescription>
+                Configure Cloudflare R2 storage for publishing collections to astra.gallery
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <Label htmlFor="share-endpoint">R2 Endpoint URL</Label>
+                  <Input
+                    id="share-endpoint"
+                    placeholder="https://<account-id>.r2.cloudflarestorage.com"
+                    value={shareEndpoint}
+                    onChange={(e) => setShareEndpoint(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-bucket">Bucket</Label>
+                  <Input
+                    id="share-bucket"
+                    placeholder="astra-gallery"
+                    value={shareBucket}
+                    onChange={(e) => setShareBucket(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-region">Region</Label>
+                  <Input
+                    id="share-region"
+                    placeholder="auto"
+                    value={shareRegion}
+                    onChange={(e) => setShareRegion(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-prefix">Path Prefix</Label>
+                  <Input
+                    id="share-prefix"
+                    placeholder="shares/"
+                    value={sharePathPrefix}
+                    onChange={(e) => setSharePathPrefix(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-public-url">Public URL Base</Label>
+                  <Input
+                    id="share-public-url"
+                    placeholder="https://astra.gallery"
+                    value={sharePublicUrl}
+                    onChange={(e) => setSharePublicUrl(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-access-key">Access Key ID</Label>
+                  <Input
+                    id="share-access-key"
+                    type="password"
+                    placeholder={shareConfig ? "••••••••" : "Enter access key"}
+                    value={shareAccessKey}
+                    onChange={(e) => setShareAccessKey(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="share-secret-key">Secret Access Key</Label>
+                  <Input
+                    id="share-secret-key"
+                    type="password"
+                    placeholder={shareConfig ? "••••••••" : "Enter secret key"}
+                    value={shareSecretKey}
+                    onChange={(e) => setShareSecretKey(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveShareConfig}
+                  disabled={isSavingShare || !shareEndpoint || !shareBucket}
+                >
+                  {isSavingShare ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Configuration"
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleTestShareUpload}
+                  disabled={isTestingShare || !shareConfig}
+                >
+                  {isTestingShare ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Testing...
+                    </>
+                  ) : (
+                    "Test Connection"
+                  )}
+                </Button>
+                {shareConfig && (
+                  <Button
+                    variant="outline"
+                    className="text-destructive"
+                    onClick={handleClearShareConfig}
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Clear
+                  </Button>
+                )}
+              </div>
+              {shareConfig && (
+                <p className="text-sm text-muted-foreground">
+                  Configured: {shareConfig.bucket} at {shareConfig.endpointUrl}
+                </p>
               )}
             </CardContent>
           </Card>

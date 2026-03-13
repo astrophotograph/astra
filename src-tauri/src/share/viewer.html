@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Astra Gallery</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0a0e1a;
+    color: #c8cdd8;
+    min-height: 100vh;
+  }
+
+  header {
+    padding: 2rem 2rem 1rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #e8ecf4;
+    margin-bottom: 0.25rem;
+  }
+
+  header .description {
+    color: #8891a4;
+    font-size: 0.95rem;
+    margin-bottom: 0.75rem;
+  }
+
+  header .meta {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+    color: #6b7280;
+  }
+
+  header .meta span { display: flex; align-items: center; gap: 0.35rem; }
+
+  .progress-bar {
+    margin-top: 0.75rem;
+    background: #1a1f2e;
+    border-radius: 999px;
+    height: 8px;
+    overflow: hidden;
+    max-width: 400px;
+  }
+
+  .progress-bar .fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    border-radius: 999px;
+    transition: width 0.5s ease;
+  }
+
+  .progress-label {
+    font-size: 0.85rem;
+    color: #8b5cf6;
+    margin-top: 0.25rem;
+  }
+
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 8px;
+    padding: 1rem 2rem 3rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .gallery-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    background: #111525;
+    transition: transform 0.2s;
+  }
+
+  .gallery-item:hover { transform: scale(1.02); }
+
+  .gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .gallery-item .caption {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 1.5rem 0.5rem 0.4rem;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    font-size: 0.75rem;
+    color: #d1d5db;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+
+  .gallery-item:hover .caption { opacity: 1; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .gallery-item.new { animation: fadeIn 0.5s ease forwards; }
+
+  /* Lightbox */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,0.95);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+
+  .lightbox.open { display: flex; }
+
+  .lightbox img {
+    max-width: 95vw;
+    max-height: 88vh;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+
+  .lightbox .caption {
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+    color: #9ca3af;
+    text-align: center;
+  }
+
+  .lightbox .close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: #9ca3af;
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.5rem;
+  }
+
+  .lightbox .close:hover { color: #fff; }
+
+  .lightbox .nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.1);
+    border: none;
+    color: #d1d5db;
+    font-size: 2rem;
+    cursor: pointer;
+    padding: 1rem 0.75rem;
+    border-radius: 4px;
+  }
+
+  .lightbox .nav:hover { background: rgba(255,255,255,0.2); }
+  .lightbox .nav.prev { left: 1rem; }
+  .lightbox .nav.next { right: 1rem; }
+
+  .loading-msg {
+    text-align: center;
+    padding: 4rem;
+    color: #6b7280;
+  }
+
+  .powered-by {
+    text-align: center;
+    padding: 1.5rem;
+    color: #4b5563;
+    font-size: 0.75rem;
+  }
+
+  .powered-by a { color: #6366f1; text-decoration: none; }
+  .powered-by a:hover { text-decoration: underline; }
+
+  @media (max-width: 640px) {
+    .gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px; padding: 0.5rem; }
+    header { padding: 1rem; }
+    header h1 { font-size: 1.3rem; }
+    .lightbox .nav { padding: 0.5rem; font-size: 1.5rem; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Loading...</h1>
+  <p class="description" id="description"></p>
+  <div class="meta">
+    <span id="count"></span>
+    <span id="updated"></span>
+  </div>
+  <div id="progress-container" style="display:none">
+    <div class="progress-bar"><div class="fill" id="progress-fill"></div></div>
+    <div class="progress-label" id="progress-label"></div>
+  </div>
+</header>
+
+<div class="gallery" id="gallery"></div>
+
+<div class="powered-by">Shared via <a href="https://astra.gallery">Astra</a></div>
+
+<div class="lightbox" id="lightbox">
+  <button class="close" onclick="closeLightbox()">&times;</button>
+  <button class="nav prev" onclick="navLightbox(-1)">&#8249;</button>
+  <button class="nav next" onclick="navLightbox(1)">&#8250;</button>
+  <img id="lb-img" src="" alt="">
+  <div class="caption" id="lb-caption"></div>
+</div>
+
+<script>
+(function() {
+  let manifest = null;
+  let knownIds = new Set();
+  let currentIndex = -1;
+
+  const $ = (id) => document.getElementById(id);
+
+  async function fetchManifest() {
+    try {
+      const resp = await fetch('manifest.json?t=' + Date.now());
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch { return null; }
+  }
+
+  function render(m) {
+    $('title').textContent = m.collectionName;
+    document.title = m.collectionName + ' — Astra Gallery';
+    $('description').textContent = m.collectionDescription || '';
+    $('count').textContent = m.imageCount + ' image' + (m.imageCount !== 1 ? 's' : '');
+    $('updated').textContent = 'Updated ' + new Date(m.updatedAt).toLocaleString();
+
+    // Messier progress
+    if (m.template === 'messier') {
+      $('progress-container').style.display = 'block';
+      const pct = Math.round((m.imageCount / 110) * 100);
+      $('progress-fill').style.width = pct + '%';
+      $('progress-label').textContent = m.imageCount + ' / 110 Messier objects (' + pct + '%)';
+    }
+
+    const gallery = $('gallery');
+    const newImages = m.images.filter(img => !knownIds.has(img.id));
+
+    newImages.forEach(img => {
+      knownIds.add(img.id);
+      const div = document.createElement('div');
+      div.className = 'gallery-item' + (manifest ? ' new' : '');
+      div.dataset.id = img.id;
+      div.onclick = () => openLightbox(img.id);
+
+      const imgEl = document.createElement('img');
+      imgEl.src = img.thumbPath;
+      imgEl.alt = img.summary || img.filename;
+      imgEl.loading = 'lazy';
+
+      const cap = document.createElement('div');
+      cap.className = 'caption';
+      cap.textContent = img.summary || img.filename;
+
+      div.appendChild(imgEl);
+      div.appendChild(cap);
+      gallery.appendChild(div);
+    });
+  }
+
+  function openLightbox(id) {
+    if (!manifest) return;
+    const idx = manifest.images.findIndex(img => img.id === id);
+    if (idx < 0) return;
+    currentIndex = idx;
+    showLightboxImage();
+    $('lightbox').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function showLightboxImage() {
+    const img = manifest.images[currentIndex];
+    if (!img) return;
+    $('lb-img').src = img.imagePath;
+    $('lb-caption').textContent = img.summary || img.filename;
+  }
+
+  window.closeLightbox = function() {
+    $('lightbox').classList.remove('open');
+    document.body.style.overflow = '';
+    currentIndex = -1;
+  };
+
+  window.navLightbox = function(dir) {
+    if (!manifest || currentIndex < 0) return;
+    currentIndex = (currentIndex + dir + manifest.images.length) % manifest.images.length;
+    showLightboxImage();
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (!$('lightbox').classList.contains('open')) return;
+    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'ArrowLeft') navLightbox(-1);
+    if (e.key === 'ArrowRight') navLightbox(1);
+  });
+
+  // Initial load
+  fetchManifest().then(m => {
+    if (!m) {
+      $('title').textContent = 'Gallery Not Found';
+      return;
+    }
+    manifest = m;
+    render(m);
+  });
+
+  // Auto-refresh every 30s
+  setInterval(async () => {
+    const m = await fetchManifest();
+    if (!m) return;
+    manifest = m;
+    render(m);
+  }, 30000);
+})();
+</script>
+</body>
+</html>

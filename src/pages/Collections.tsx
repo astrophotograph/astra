@@ -41,7 +41,7 @@ import {
 } from "@/hooks/use-collections";
 import type { Collection, CreateCollectionInput } from "@/lib/tauri/commands";
 import { cn } from "@/lib/utils";
-import { MoreHorizontal, Play, Target } from "lucide-react";
+import { Globe, MoreHorizontal, Play, Target } from "lucide-react";
 import {
   type CollectionType,
   getCollectionType,
@@ -524,6 +524,13 @@ function CollectionCard({
     ? collection.tags.split(",").map((t) => t.trim()).filter(Boolean)
     : [];
   const collectionType = getCollectionType(collection.template);
+  const isPublished = (() => {
+    try {
+      if (!collection.metadata) return false;
+      const meta = JSON.parse(collection.metadata);
+      return !!meta?.share?.shareId;
+    } catch { return false; }
+  })();
 
   return (
     <Card className={cn("hover:shadow-md transition-shadow")}>
@@ -537,6 +544,12 @@ function CollectionCard({
               >
                 {collectionType.charAt(0).toUpperCase() + collectionType.slice(1)}
               </Badge>
+              {isPublished && (
+                <Badge variant="outline" className="text-xs border-emerald-600 text-emerald-400">
+                  <Globe className="w-3 h-3 mr-1" />
+                  Published
+                </Badge>
+              )}
             </div>
             <Link to={`/collections/${collection.id}`}>
               <CardTitle className="text-lg hover:underline">
