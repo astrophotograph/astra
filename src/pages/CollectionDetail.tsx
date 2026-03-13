@@ -64,7 +64,7 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { imageApi, plateSolveApi, shareApi, type Image, type PublishStatus } from "@/lib/tauri/commands";
+import { authApi, imageApi, plateSolveApi, shareApi, type Image, type PublishStatus } from "@/lib/tauri/commands";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -192,7 +192,11 @@ export default function CollectionDetailPage() {
     if (!collection) return;
     setIsPublishing(true);
     try {
-      const result = await shareApi.publish(collection.id);
+      // Use astra.gallery if signed in, otherwise fall back to self-hosted S3
+      const session = await authApi.getSession();
+      const result = session
+        ? await shareApi.publishGallery(collection.id)
+        : await shareApi.publish(collection.id);
       toast.success(`Published! ${result.imagesUploaded} images uploaded`);
       setPublishStatus(await shareApi.getPublishStatus(collection.id));
     } catch (e) {
@@ -206,7 +210,11 @@ export default function CollectionDetailPage() {
     if (!collection) return;
     setIsSyncing(true);
     try {
-      const result = await shareApi.sync(collection.id);
+      // Use astra.gallery if signed in, otherwise fall back to self-hosted S3
+      const session = await authApi.getSession();
+      const result = session
+        ? await shareApi.publishGallery(collection.id)
+        : await shareApi.sync(collection.id);
       if (result.imagesUploaded > 0) {
         toast.success(`Synced! ${result.imagesUploaded} new images uploaded`);
       } else {
@@ -892,6 +900,7 @@ export default function CollectionDetailPage() {
         <CatalogCollectionView
           collection={collection}
           allImages={allImages}
+          collectionImages={collectionImages}
           allCollections={allCollections}
         />
       ) : collectionImages.length === 0 ? (

@@ -110,6 +110,31 @@ pub fn public_url(config: &ShareUploadConfig, share_id: &str) -> String {
     format!("{}/{}{}", base, prefix, share_id)
 }
 
+/// Upload a file to a presigned URL (for astra.gallery authenticated uploads).
+pub async fn upload_file_presigned(
+    presigned_url: &str,
+    body: &[u8],
+    content_type: &str,
+) -> Result<(), String> {
+    log::info!("Presigned upload to: {}", &presigned_url[..presigned_url.len().min(120)]);
+    let client = reqwest::Client::new();
+    let response = client
+        .put(presigned_url)
+        .header("Content-Type", content_type)
+        .body(body.to_vec())
+        .send()
+        .await
+        .map_err(|e| format!("Presigned upload failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("Presigned upload failed ({}): {}", status, body));
+    }
+
+    Ok(())
+}
+
 fn normalize_prefix(prefix: &str) -> String {
     if prefix.is_empty() {
         return String::new();

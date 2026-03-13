@@ -44,7 +44,7 @@ env_logger = "0.11"
 walkdir = "2"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["rustls-tls-native-roots"] }
+reqwest = { version = "0.12", features = ["rustls-tls-native-roots", "json"] }
 
 # Crypto (for S3 signing)
 hmac = "0.12"
@@ -53,6 +53,10 @@ hex = "0.4"
 # Image handling
 image = "0.25"
 base64 = "0.22"
+
+# OAuth callback server
+tiny_http = "0.12"
+open = "5"
 
 # FITS file parsing
 fitrs = "0.5"

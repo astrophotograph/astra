@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::db::repository;
-use crate::share::{config, credentials, manifest, upload, viewer};
+use crate::share::{auth, config, credentials, manifest, upload, viewer};
 use crate::state::AppState;
 
 // ============================================================================
@@ -566,4 +566,228 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
         "svg" => "image/svg+xml",
         _ => "application/octet-stream",
     }
+}
+
+// ============================================================================
+// Auth Commands (Clerk OAuth for astra.gallery)
+// ============================================================================
+
+#[tauri::command]
+pub async fn clerk_sign_in(app: AppHandle) -> Result<auth::AuthSession, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let clerk_publishable_key = std::env::var("CLERK_PUBLISHABLE_KEY")
+        .map_err(|_| "CLERK_PUBLISHABLE_KEY environment variable not set".to_string())?;
+
+    let session = auth::sign_in(&clerk_publishable_key).await?;
+    auth::save_session(&data_dir, &session)?;
+
+    Ok(session)
+}
+
+#[tauri::command]
+pub fn clerk_sign_out(app: AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    auth::delete_session(&data_dir)
+}
+
+#[tauri::command]
+pub fn get_auth_session(app: AppHandle) -> Result<Option<auth::AuthSession>, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    auth::load_session(&data_dir)
+}
+
+// ============================================================================
+// Dual-mode Publish (astra.gallery or self-hosted S3)
+// ============================================================================
+
+/// Presigned URL response from the Worker API.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresignResponse {
+    share_id: String,
+    uploads: Vec<PresignUpload>,
+    public_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresignUpload {
+    key: String,
+    presigned_url: String,
+    expires_at: String,
+}
+
+/// Publish a collection via astra.gallery (presigned URLs).
+#[tauri::command]
+pub async fn publish_collection_gallery(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    collection_id: String,
+) -> Result<PublishResult, String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let session = auth::load_session(&data_dir)?
+        .ok_or("Not signed in to astra.gallery. Sign in first.")?;
+
+    // Load collection and images
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Collection not found")?;
+    let images = repository::get_images_in_collection(&mut conn, &collection_id)
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+
+    // Generate or reuse share_id
+    let existing_status = get_publish_status_from_metadata(&collection.metadata);
+    let share_id = existing_status
+        .map(|s| s.share_id)
+        .unwrap_or_else(|| generate_share_id());
+
+    // Build file list for presign request
+    let collection_slug = slugify(&collection.name);
+    let mut files_to_upload: Vec<(String, String, Vec<u8>)> = Vec::new(); // (key, content_type, data)
+    let mut manifest_images = Vec::new();
+    let mut uploaded_ids = Vec::new();
+
+    for image in &images {
+        let Some(file_path) = &image.url else { continue };
+        let path = std::path::Path::new(file_path);
+        if !path.exists() {
+            log::warn!("Skipping missing file: {}", file_path);
+            continue;
+        }
+
+        let file_data = std::fs::read(path)
+            .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
+        let content_type = mime_for_path(path);
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
+
+        // Full image
+        let image_key = format!("images/{}.{}", image.id, ext);
+        files_to_upload.push((image_key.clone(), content_type.to_string(), file_data.clone()));
+
+        // Thumbnail
+        let thumb_data = generate_thumbnail(&file_data)?;
+        let thumb_key = format!("thumbs/{}.jpg", image.id);
+        files_to_upload.push((thumb_key.clone(), "image/jpeg".to_string(), thumb_data));
+
+        manifest_images.push(manifest::ManifestImage {
+            id: image.id.clone(),
+            filename: image.filename.clone(),
+            summary: image.summary.clone(),
+            content_type: content_type.to_string(),
+            image_path: image_key,
+            thumb_path: thumb_key,
+            created_at: image.created_at.to_string(),
+        });
+
+        uploaded_ids.push(image.id.clone());
+    }
+
+    // Build manifest
+    let share_manifest = manifest::build_manifest(
+        &collection.name,
+        collection.description.as_deref(),
+        collection.template.as_deref(),
+        manifest_images,
+    );
+    let manifest_json = serde_json::to_string_pretty(&share_manifest)
+        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
+    files_to_upload.push(("manifest.json".to_string(), "application/json".to_string(), manifest_json.into_bytes()));
+    files_to_upload.push(("index.html".to_string(), "text/html".to_string(), viewer::VIEWER_HTML.as_bytes().to_vec()));
+
+    // Request presigned URLs from Worker
+    let presign_body = serde_json::json!({
+        "shareId": share_id,
+        "collectionSlug": collection_slug,
+        "collectionName": collection.name,
+        "files": files_to_upload.iter().map(|(key, ct, data)| {
+            serde_json::json!({
+                "key": key,
+                "contentType": ct,
+                "size": data.len(),
+            })
+        }).collect::<Vec<_>>(),
+    });
+
+    let client = reqwest::Client::new();
+    let presign_resp = client
+        .post(format!("{}/api/presign", "https://astra.gallery"))
+        .header("Authorization", format!("Bearer {}", session.api_token))
+        .json(&presign_body)
+        .send()
+        .await
+        .map_err(|e| format!("Presign request failed: {}", e))?;
+
+    if !presign_resp.status().is_success() {
+        let status = presign_resp.status();
+        let body = presign_resp.text().await.unwrap_or_default();
+        return Err(format!("Presign request failed ({}): {}", status, body));
+    }
+
+    let presign: PresignResponse = presign_resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse presign response: {}", e))?;
+
+    // Upload each file to its presigned URL
+    let mut images_uploaded = 0usize;
+    let mut thumbs_uploaded = 0usize;
+
+    for (key, content_type, data) in &files_to_upload {
+        let upload_info = presign.uploads.iter().find(|u| &u.key == key)
+            .ok_or_else(|| format!("No presigned URL for {}", key))?;
+
+        upload::upload_file_presigned(&upload_info.presigned_url, data, content_type).await?;
+
+        if key.starts_with("images/") {
+            images_uploaded += 1;
+        } else if key.starts_with("thumbs/") {
+            thumbs_uploaded += 1;
+        }
+    }
+
+    // Save publish status
+    let now = chrono::Utc::now().to_rfc3339();
+    let status = PublishStatus {
+        share_id: presign.share_id.clone(),
+        published_at: now.clone(),
+        public_url: presign.public_url.clone(),
+        last_synced_at: now,
+        uploaded_image_ids: uploaded_ids,
+    };
+
+    save_publish_status(&state, &collection_id, &collection.metadata, &status)?;
+
+    Ok(PublishResult {
+        share_id: presign.share_id,
+        public_url: presign.public_url,
+        images_uploaded,
+        thumbs_uploaded,
+    })
+}
+
+fn slugify(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }

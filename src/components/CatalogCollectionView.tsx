@@ -35,6 +35,7 @@ import CatalogObjectDialog, {
 interface CatalogCollectionViewProps {
   collection: Collection;
   allImages: Image[];
+  collectionImages: Image[];
   allCollections: Collection[];
 }
 
@@ -74,8 +75,18 @@ function formatDuration(seconds: number): string {
 export default function CatalogCollectionView({
   collection,
   allImages,
+  collectionImages,
   allCollections,
 }: CatalogCollectionViewProps) {
+  // Determine if this is a scoped collection (marathon) or library-wide catalog.
+  // The oldest collection with this template is the library-wide catalog.
+  // Any additional collections with the same template are scoped (marathon mode)
+  // and only show images explicitly added to them.
+  const sameTemplateCollections = allCollections
+    .filter((c) => c.template === collection.template && c.template !== null)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const isLibraryWide = sameTemplateCollections.length <= 1 || sameTemplateCollections[0]?.id === collection.id;
+  const imagesToMatch = isLibraryWide ? allImages : collectionImages;
   const [selectedObject, setSelectedObject] = useState<CatalogEntry | null>(
     null
   );
@@ -110,8 +121,8 @@ export default function CatalogCollectionView({
       map.set(entry.id, []);
     }
 
-    // Go through all images and match them to catalog entries
-    for (const image of allImages) {
+    // Go through images and match them to catalog entries
+    for (const image of imagesToMatch) {
       if (!image.annotations) continue;
 
       let annotations: CatalogObject[] = [];
@@ -161,7 +172,7 @@ export default function CatalogCollectionView({
     }
 
     return map;
-  }, [catalog, allCatalogObjects, allImages, allCollections]);
+  }, [catalog, allCatalogObjects, imagesToMatch, allCollections]);
 
   // Compute statistics (uses all objects for total, not just current page)
   const stats = useMemo(() => {

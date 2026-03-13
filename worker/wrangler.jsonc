@@ -1,0 +1,21 @@
+{
+  "name": "astra-gallery",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-01",
+  "r2_buckets": [
+    { "binding": "GALLERY_BUCKET", "bucket_name": "astra-gallery" }
+  ],
+  "kv_namespaces": [
+    { "binding": "GALLERY_KV", "id": "3fc397117b7f4ab78a0d4708b413d779" }
+  ],
+  "routes": [
+    { "pattern": "astra.gallery", "custom_domain": true }
+  ],
+  // Secrets (set via `wrangler secret put`):
+  //   CLERK_SECRET_KEY - Clerk secret for JWT verification
+  //   CLERK_PUBLISHABLE_KEY - Clerk publishable key
+  //   API_TOKEN_SECRET - HMAC secret for signing API tokens
+  //   R2_ACCESS_KEY_ID - R2 API token access key (for presigned URLs)
+  //   R2_SECRET_ACCESS_KEY - R2 API token secret key (for presigned URLs)
+  //   R2_ENDPOINT - R2 S3-compatible endpoint URL
+}

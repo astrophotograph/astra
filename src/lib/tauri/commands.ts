@@ -915,6 +915,30 @@ export const targetApi = {
 };
 
 // =============================================================================
+// Auth Types (astra.gallery)
+// =============================================================================
+
+export interface AuthSession {
+  userId: string;
+  username: string;
+  displayName: string | null;
+  apiToken: string;
+  expiresAt: string;
+}
+
+// =============================================================================
+// Auth Commands (astra.gallery)
+// =============================================================================
+
+export const authApi = {
+  signIn: () => invoke<AuthSession>("clerk_sign_in"),
+
+  signOut: () => invoke<void>("clerk_sign_out"),
+
+  getSession: () => invoke<AuthSession | null>("get_auth_session"),
+};
+
+// =============================================================================
 // Share Types
 // =============================================================================
 
@@ -979,4 +1003,7 @@ export const shareApi = {
 
   getPublishStatus: (collectionId: string) =>
     invoke<PublishStatus | null>("get_publish_status", { collectionId }),
+
+  publishGallery: (collectionId: string) =>
+    invoke<PublishResult>("publish_collection_gallery", { collectionId }),
 };

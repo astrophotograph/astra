@@ -1,5 +1,6 @@
 //! Sharing module for publishing collections to Cloudflare R2.
 
+pub mod auth;
 pub mod config;
 pub mod credentials;
 pub mod manifest;

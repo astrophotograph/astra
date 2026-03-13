@@ -1,5 +1,8 @@
 /node_modules
 .envrc
+worker/node_modules/*
+worker/.dev.vars
+worker/.wrangler/
 
 legacy/ui/backups
 legacy/ui/logs

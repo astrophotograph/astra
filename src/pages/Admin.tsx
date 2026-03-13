@@ -61,6 +61,8 @@ import {
   backupApi,
   imageApi,
   shareApi,
+  authApi,
+  type AuthSession,
   type BackupInfo,
   type PathPrefix,
   type PopulateFitsUrlsResult,
@@ -216,6 +218,9 @@ export default function AdminPage() {
   const [isRestoring, setIsRestoring] = useState(false);
 
   // Sharing config
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [showAdvancedShare, setShowAdvancedShare] = useState(false);
   const [shareConfig, setShareConfig] = useState<ShareUploadConfig | null>(null);
   const [shareEndpoint, setShareEndpoint] = useState("");
   const [shareBucket, setShareBucket] = useState("");
@@ -354,7 +359,40 @@ export default function AdminPage() {
     appApi.getInfo().then(setAppInfo).catch(console.error);
     loadBackups();
     loadShareConfig();
+    loadAuthSession();
   }, []);
+
+  const loadAuthSession = async () => {
+    try {
+      const session = await authApi.getSession();
+      setAuthSession(session);
+    } catch (e) {
+      console.error("Failed to load auth session:", e);
+    }
+  };
+
+  const handleSignIn = async () => {
+    setIsSigningIn(true);
+    try {
+      const session = await authApi.signIn();
+      setAuthSession(session);
+      toast.success(`Signed in as @${session.username}`);
+    } catch (e) {
+      toast.error("Sign in failed: " + e);
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await authApi.signOut();
+      setAuthSession(null);
+      toast.success("Signed out of astra.gallery");
+    } catch (e) {
+      toast.error("Sign out failed: " + e);
+    }
+  };
 
   const loadShareConfig = async () => {
     try {
@@ -1502,137 +1540,197 @@ export default function AdminPage() {
 
         {/* Sharing Section */}
         {activeSection === "sharing" && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Upload className="w-5 h-5" />
-                Gallery Sharing
-              </CardTitle>
-              <CardDescription>
-                Configure Cloudflare R2 storage for publishing collections to astra.gallery
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2">
-                  <Label htmlFor="share-endpoint">R2 Endpoint URL</Label>
-                  <Input
-                    id="share-endpoint"
-                    placeholder="https://<account-id>.r2.cloudflarestorage.com"
-                    value={shareEndpoint}
-                    onChange={(e) => setShareEndpoint(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-bucket">Bucket</Label>
-                  <Input
-                    id="share-bucket"
-                    placeholder="astra-gallery"
-                    value={shareBucket}
-                    onChange={(e) => setShareBucket(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-region">Region</Label>
-                  <Input
-                    id="share-region"
-                    placeholder="auto"
-                    value={shareRegion}
-                    onChange={(e) => setShareRegion(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-prefix">Path Prefix</Label>
-                  <Input
-                    id="share-prefix"
-                    placeholder="shares/"
-                    value={sharePathPrefix}
-                    onChange={(e) => setSharePathPrefix(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-public-url">Public URL Base</Label>
-                  <Input
-                    id="share-public-url"
-                    placeholder="https://astra.gallery"
-                    value={sharePublicUrl}
-                    onChange={(e) => setSharePublicUrl(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-access-key">Access Key ID</Label>
-                  <Input
-                    id="share-access-key"
-                    type="password"
-                    placeholder={shareConfig ? "••••••••" : "Enter access key"}
-                    value={shareAccessKey}
-                    onChange={(e) => setShareAccessKey(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="share-secret-key">Secret Access Key</Label>
-                  <Input
-                    id="share-secret-key"
-                    type="password"
-                    placeholder={shareConfig ? "••••••••" : "Enter secret key"}
-                    value={shareSecretKey}
-                    onChange={(e) => setShareSecretKey(e.target.value)}
-                    className="mt-1"
-                  />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <Button
-                  onClick={handleSaveShareConfig}
-                  disabled={isSavingShare || !shareEndpoint || !shareBucket}
-                >
-                  {isSavingShare ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    "Save Configuration"
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleTestShareUpload}
-                  disabled={isTestingShare || !shareConfig}
-                >
-                  {isTestingShare ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                      Testing...
-                    </>
-                  ) : (
-                    "Test Connection"
-                  )}
-                </Button>
-                {shareConfig && (
-                  <Button
-                    variant="outline"
-                    className="text-destructive"
-                    onClick={handleClearShareConfig}
-                  >
-                    <Trash2 className="w-4 h-4 mr-2" />
-                    Clear
-                  </Button>
+          <div className="space-y-6">
+            {/* astra.gallery Sign In */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Upload className="w-5 h-5" />
+                  astra.gallery
+                </CardTitle>
+                <CardDescription>
+                  Sign in to publish collections directly to astra.gallery
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {authSession ? (
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">
+                        Signed in as <span className="text-primary">@{authSession.username}</span>
+                      </p>
+                      {authSession.displayName && (
+                        <p className="text-sm text-muted-foreground">{authSession.displayName}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Token expires {new Date(authSession.expiresAt).toLocaleString()}
+                      </p>
+                    </div>
+                    <Button variant="outline" onClick={handleSignOut}>
+                      Sign Out
+                    </Button>
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      Sign in to publish your collections as galleries at astra.gallery/@username. No manual credential configuration needed.
+                    </p>
+                    <Button onClick={handleSignIn} disabled={isSigningIn}>
+                      {isSigningIn ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          Signing in...
+                        </>
+                      ) : (
+                        "Sign In to astra.gallery"
+                      )}
+                    </Button>
+                  </div>
                 )}
-              </div>
-              {shareConfig && (
-                <p className="text-sm text-muted-foreground">
-                  Configured: {shareConfig.bucket} at {shareConfig.endpointUrl}
-                </p>
+              </CardContent>
+            </Card>
+
+            {/* Advanced / Self-hosted S3 Config */}
+            <Card>
+              <CardHeader
+                className="cursor-pointer"
+                onClick={() => setShowAdvancedShare(!showAdvancedShare)}
+              >
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Wrench className="w-4 h-4" />
+                  Advanced / Self-hosted
+                  <span className="text-xs text-muted-foreground ml-auto">
+                    {showAdvancedShare ? "▾" : "▸"}
+                  </span>
+                </CardTitle>
+                <CardDescription>
+                  Configure your own S3-compatible storage for self-hosted gallery sharing
+                </CardDescription>
+              </CardHeader>
+              {showAdvancedShare && (
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <Label htmlFor="share-endpoint">R2 Endpoint URL</Label>
+                      <Input
+                        id="share-endpoint"
+                        placeholder="https://<account-id>.r2.cloudflarestorage.com"
+                        value={shareEndpoint}
+                        onChange={(e) => setShareEndpoint(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-bucket">Bucket</Label>
+                      <Input
+                        id="share-bucket"
+                        placeholder="astra-gallery"
+                        value={shareBucket}
+                        onChange={(e) => setShareBucket(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-region">Region</Label>
+                      <Input
+                        id="share-region"
+                        placeholder="auto"
+                        value={shareRegion}
+                        onChange={(e) => setShareRegion(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-prefix">Path Prefix</Label>
+                      <Input
+                        id="share-prefix"
+                        placeholder="shares/"
+                        value={sharePathPrefix}
+                        onChange={(e) => setSharePathPrefix(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-public-url">Public URL Base</Label>
+                      <Input
+                        id="share-public-url"
+                        placeholder="https://astra.gallery"
+                        value={sharePublicUrl}
+                        onChange={(e) => setSharePublicUrl(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-access-key">Access Key ID</Label>
+                      <Input
+                        id="share-access-key"
+                        type="password"
+                        placeholder={shareConfig ? "••••••••" : "Enter access key"}
+                        value={shareAccessKey}
+                        onChange={(e) => setShareAccessKey(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="share-secret-key">Secret Access Key</Label>
+                      <Input
+                        id="share-secret-key"
+                        type="password"
+                        placeholder={shareConfig ? "••••••••" : "Enter secret key"}
+                        value={shareSecretKey}
+                        onChange={(e) => setShareSecretKey(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={handleSaveShareConfig}
+                      disabled={isSavingShare || !shareEndpoint || !shareBucket}
+                    >
+                      {isSavingShare ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        "Save Configuration"
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleTestShareUpload}
+                      disabled={isTestingShare || !shareConfig}
+                    >
+                      {isTestingShare ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          Testing...
+                        </>
+                      ) : (
+                        "Test Connection"
+                      )}
+                    </Button>
+                    {shareConfig && (
+                      <Button
+                        variant="outline"
+                        className="text-destructive"
+                        onClick={handleClearShareConfig}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Clear
+                      </Button>
+                    )}
+                  </div>
+                  {shareConfig && (
+                    <p className="text-sm text-muted-foreground">
+                      Configured: {shareConfig.bucket} at {shareConfig.endpointUrl}
+                    </p>
+                  )}
+                </CardContent>
               )}
-            </CardContent>
-          </Card>
+            </Card>
+          </div>
         )}
 
         {/* Database Section */}

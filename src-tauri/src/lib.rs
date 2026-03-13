@@ -159,6 +159,12 @@ pub fn run() {
             commands::sync_collection,
             commands::unpublish_collection,
             commands::get_publish_status,
+            // Auth commands (astra.gallery)
+            commands::clerk_sign_in,
+            commands::clerk_sign_out,
+            commands::get_auth_session,
+            // Gallery publish (authenticated)
+            commands::publish_collection_gallery,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
