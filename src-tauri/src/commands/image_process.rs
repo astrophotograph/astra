@@ -433,3 +433,80 @@ pub fn get_processing_defaults(target_type: String) -> Result<ProcessingParams, 
     params.target_type = target_type;
     Ok(params)
 }
+
+/// Regenerate preview JPEG and thumbnail for a FITS image
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RegenerateResult {
+    pub preview_path: String,
+    pub thumbnail: String,
+}
+
+#[tauri::command]
+pub async fn regenerate_preview(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<RegenerateResult, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = repository::get_image_by_id(&mut conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", id))?;
+
+    // Find the FITS file
+    let fits_path = image
+        .fits_url
+        .as_ref()
+        .or_else(|| {
+            image.url.as_ref().filter(|u| {
+                let lower = u.to_lowercase();
+                lower.ends_with(".fit") || lower.ends_with(".fits")
+            })
+        })
+        .ok_or("No FITS file available for this image")?
+        .clone();
+
+    let fits_file = Path::new(&fits_path);
+    if !fits_file.exists() {
+        return Err(format!("FITS file not found: {}", fits_path));
+    }
+
+    // Generate preview via Python
+    let preview_dir = fits_file.parent().unwrap_or(Path::new("/tmp"));
+    let preview_path = preview_dir.join(format!(
+        "{}_preview.jpg",
+        fits_file.file_stem().unwrap_or_default().to_string_lossy()
+    ));
+    let preview_path_str = preview_path.to_string_lossy().to_string();
+
+    let output = tokio::task::spawn_blocking({
+        let fits = fits_path.clone();
+        let out = preview_path_str.clone();
+        move || image_process::quick_preview(&fits, &out)
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))?
+    .map_err(|e| format!("Preview generation failed: {}", e))?;
+
+    // Generate thumbnail from the preview
+    let thumb = tokio::task::spawn_blocking({
+        let path = output.clone();
+        move || generate_thumbnail(Path::new(&path))
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))?
+    .map_err(|e| format!("Thumbnail generation failed: {}", e))?;
+
+    // Update the image record
+    let update = UpdateImage {
+        url: Some(output.clone()),
+        thumbnail: Some(thumb.clone()),
+        ..Default::default()
+    };
+    repository::update_image(&mut conn, &id, &update)
+        .map_err(|e| format!("Failed to update image: {}", e))?;
+
+    Ok(RegenerateResult {
+        preview_path: output,
+        thumbnail: thumb,
+    })
+}

@@ -146,6 +146,7 @@ pub fn run() {
             commands::process_fits_image,
             commands::classify_target_type,
             commands::get_processing_defaults,
+            commands::regenerate_preview,
             // Target browser commands
             commands::get_targets,
             commands::search_images_by_target,
@@ -165,6 +166,11 @@ pub fn run() {
             commands::get_auth_session,
             // Gallery publish (authenticated)
             commands::publish_collection_gallery,
+            // Auto-import commands
+            commands::start_auto_import,
+            commands::stop_auto_import,
+            commands::get_auto_import_status,
+            commands::scan_auto_import_now,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

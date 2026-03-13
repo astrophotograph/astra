@@ -57,6 +57,12 @@ export default function Layout() {
               Collections
             </Link>
             <Link
+              to="/images"
+              className="text-sm text-gray-300 hover:text-white transition-colors"
+            >
+              Images
+            </Link>
+            <Link
               to="/targets"
               className="text-sm text-gray-300 hover:text-white transition-colors"
             >

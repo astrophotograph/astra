@@ -442,3 +442,51 @@ pub fn classify_target(object_name: &str) -> Result<TargetInfo, String> {
         })
     })
 }
+
+/// Generate a quick preview JPEG/PNG from a FITS file using Python's statistical stretch.
+/// This produces a much better result than the pure-Rust percentile stretch.
+pub fn quick_preview(input_fits_path: &str, output_path: &str) -> Result<String, String> {
+    Python::with_gil(|py| {
+        let astra_astro = py
+            .import("astra_astro")
+            .map_err(|e| format!("Failed to import astra_astro: {}", e))?;
+
+        let image_process = astra_astro
+            .getattr("image_process")
+            .map_err(|e| format!("Failed to get image_process module: {}", e))?;
+
+        let result = image_process
+            .call_method1("quick_preview", (input_fits_path, output_path))
+            .map_err(|e| format!("Quick preview failed: {}", e))?;
+
+        let dict: &Bound<'_, PyDict> = result
+            .downcast()
+            .map_err(|e| format!("Expected dict result: {}", e))?;
+
+        let success: bool = dict
+            .get_item("success")
+            .map_err(|e| format!("Missing success: {}", e))?
+            .ok_or("Missing success field")?
+            .extract()
+            .map_err(|e| format!("Invalid success: {}", e))?;
+
+        if !success {
+            let error: String = dict
+                .get_item("error")
+                .ok()
+                .flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_else(|| "Unknown error".to_string());
+            return Err(format!("Quick preview failed: {}", error));
+        }
+
+        let output: String = dict
+            .get_item("outputPath")
+            .map_err(|e| format!("Missing outputPath: {}", e))?
+            .ok_or("Missing outputPath field")?
+            .extract()
+            .map_err(|e| format!("Invalid outputPath: {}", e))?;
+
+        Ok(output)
+    })
+}

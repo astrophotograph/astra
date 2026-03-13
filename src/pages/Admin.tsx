@@ -55,19 +55,26 @@ import {
   Eye,
   EyeOff,
   Wrench,
+  FolderSearch,
+  X,
+  FolderPlus,
 } from "lucide-react";
 import {
   appApi,
+  autoImportApi,
   backupApi,
   imageApi,
   shareApi,
   authApi,
   type AuthSession,
+  type AutoImportConfig,
+  type AutoImportStatus,
   type BackupInfo,
   type PathPrefix,
   type PopulateFitsUrlsResult,
   type ShareUploadConfig,
 } from "@/lib/tauri/commands";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   parseHorizonFile,
@@ -181,6 +188,7 @@ type SettingsSection =
   | "locations"
   | "equipment"
   | "plate-solving"
+  | "auto-import"
   | "sharing"
   | "database"
   | "about";
@@ -200,6 +208,11 @@ const SETTINGS_SECTIONS: {
     id: "plate-solving",
     label: "Plate Solving",
     icon: <Crosshair className="w-4 h-4" />,
+  },
+  {
+    id: "auto-import",
+    label: "Auto-Import",
+    icon: <FolderSearch className="w-4 h-4" />,
   },
   { id: "sharing", label: "Sharing", icon: <Upload className="w-4 h-4" /> },
   { id: "database", label: "Database", icon: <Database className="w-4 h-4" /> },
@@ -342,6 +355,23 @@ export default function AdminPage() {
       .slice(0, 8);
   }, [mountSearch]);
 
+  // Auto-import settings
+  const [autoImportConfig, setAutoImportConfig] = useState<AutoImportConfig>(
+    () => {
+      const saved = localStorage.getItem("auto_import_config");
+      if (saved) {
+        try {
+          return JSON.parse(saved);
+        } catch {
+          // ignore
+        }
+      }
+      return { watchFolders: [], pollIntervalSecs: 300, enabled: false, plateSolve: false };
+    },
+  );
+  const [autoImportStatus, setAutoImportStatus] =
+    useState<AutoImportStatus | null>(null);
+
   // Plate solving settings
   const [plateSolveSolver, setPlateSolveSolver] = useState(
     () => localStorage.getItem("plate_solve_solver") || "nova",
@@ -360,7 +390,31 @@ export default function AdminPage() {
     loadBackups();
     loadShareConfig();
     loadAuthSession();
+    autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
   }, []);
+
+  // Poll auto-import status and listen for events
+  useEffect(() => {
+    // Listen for backend events
+    const unlisten = listen<AutoImportStatus>(
+      "auto-import-status",
+      (event) => {
+        setAutoImportStatus(event.payload);
+      },
+    );
+
+    // Poll every 5 seconds when enabled
+    const interval = setInterval(() => {
+      if (autoImportConfig.enabled) {
+        autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
+      }
+    }, 5000);
+
+    return () => {
+      unlisten.then((fn) => fn());
+      clearInterval(interval);
+    };
+  }, [autoImportConfig.enabled]);
 
   const loadAuthSession = async () => {
     try {
@@ -391,6 +445,88 @@ export default function AdminPage() {
       toast.success("Signed out of astra.gallery");
     } catch (e) {
       toast.error("Sign out failed: " + e);
+    }
+  };
+
+  // Auto-import handlers
+  const saveAutoImportConfig = (config: AutoImportConfig) => {
+    setAutoImportConfig(config);
+    localStorage.setItem("auto_import_config", JSON.stringify(config));
+  };
+
+  // Build config with plate solve settings from localStorage
+  const buildFullConfig = (base: AutoImportConfig): AutoImportConfig => ({
+    ...base,
+    plateSolveSolver: plateSolveSolver || undefined,
+    plateSolveApiKey: astrometryApiKey || undefined,
+    plateSolveApiUrl: localAstrometryUrl || undefined,
+  });
+
+  const handleToggleAutoImport = async () => {
+    const newEnabled = !autoImportConfig.enabled;
+    const newConfig = { ...autoImportConfig, enabled: newEnabled };
+    saveAutoImportConfig(newConfig);
+
+    try {
+      if (newEnabled) {
+        await autoImportApi.start(buildFullConfig(newConfig));
+        toast.success("Auto-import started");
+      } else {
+        await autoImportApi.stop();
+        toast.success("Auto-import stopped");
+      }
+      const status = await autoImportApi.getStatus();
+      setAutoImportStatus(status);
+    } catch (e) {
+      toast.error("Failed to toggle auto-import: " + e);
+    }
+  };
+
+  const handleAddWatchFolder = async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === "string") {
+      if (autoImportConfig.watchFolders.includes(selected)) {
+        toast.error("Folder already in watch list");
+        return;
+      }
+      const newConfig = {
+        ...autoImportConfig,
+        watchFolders: [...autoImportConfig.watchFolders, selected],
+      };
+      saveAutoImportConfig(newConfig);
+      // If auto-import is running, restart with new config
+      if (autoImportConfig.enabled) {
+        await autoImportApi.start(newConfig).catch(console.error);
+      }
+    }
+  };
+
+  const handleRemoveWatchFolder = async (folder: string) => {
+    const newConfig = {
+      ...autoImportConfig,
+      watchFolders: autoImportConfig.watchFolders.filter((f) => f !== folder),
+    };
+    saveAutoImportConfig(newConfig);
+    if (autoImportConfig.enabled) {
+      await autoImportApi.start(newConfig).catch(console.error);
+    }
+  };
+
+  const handleScanNow = async () => {
+    if (autoImportConfig.watchFolders.length === 0) {
+      toast.error("No watch folders configured");
+      return;
+    }
+    try {
+      const status = await autoImportApi.scanNow(buildFullConfig(autoImportConfig));
+      setAutoImportStatus(status);
+      if (status.lastImportCount > 0) {
+        toast.success(`Imported ${status.lastImportCount} new images`);
+      } else {
+        toast.info("No new images found");
+      }
+    } catch (e) {
+      toast.error("Scan failed: " + e);
     }
   };
 
@@ -1734,6 +1870,222 @@ export default function AdminPage() {
         )}
 
         {/* Database Section */}
+        {activeSection === "auto-import" && (
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FolderSearch className="w-5 h-5" />
+                  Auto-Import
+                </CardTitle>
+                <CardDescription>
+                  Automatically watch directories for new stacked FITS files and
+                  import them into your library.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* Enable/Disable Toggle */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-base font-medium">
+                      Enable Auto-Import
+                    </Label>
+                    <p className="text-sm text-muted-foreground">
+                      Periodically scan watch folders for new stacked images
+                    </p>
+                  </div>
+                  <Button
+                    variant={autoImportConfig.enabled ? "destructive" : "default"}
+                    onClick={handleToggleAutoImport}
+                  >
+                    {autoImportConfig.enabled ? "Stop" : "Start"}
+                  </Button>
+                </div>
+
+                {/* Watch Folders */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-base font-medium">
+                      Watch Folders
+                    </Label>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleAddWatchFolder}
+                    >
+                      <FolderPlus className="w-4 h-4 mr-2" />
+                      Add Folder
+                    </Button>
+                  </div>
+                  {autoImportConfig.watchFolders.length === 0 ? (
+                    <div className="text-sm text-muted-foreground border rounded-lg p-4 text-center">
+                      No watch folders configured. Add a folder to start
+                      auto-importing.
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {autoImportConfig.watchFolders.map((folder) => (
+                        <div
+                          key={folder}
+                          className="flex items-center justify-between border rounded-lg p-3"
+                        >
+                          <span className="text-sm font-mono break-all">
+                            {folder}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveWatchFolder(folder)}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Plate Solve on Import */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-base font-medium">Plate Solve on Import</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Automatically plate solve new images using {plateSolveSolver} solver
+                    </p>
+                  </div>
+                  <Button
+                    variant={autoImportConfig.plateSolve ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => {
+                      const newConfig = { ...autoImportConfig, plateSolve: !autoImportConfig.plateSolve };
+                      saveAutoImportConfig(newConfig);
+                    }}
+                  >
+                    {autoImportConfig.plateSolve ? "Enabled" : "Disabled"}
+                  </Button>
+                </div>
+
+                {/* Poll Interval */}
+                <div className="space-y-2">
+                  <Label className="text-base font-medium">Poll Interval</Label>
+                  <Select
+                    value={String(autoImportConfig.pollIntervalSecs)}
+                    onValueChange={(val) => {
+                      const newConfig = {
+                        ...autoImportConfig,
+                        pollIntervalSecs: Number(val),
+                      };
+                      saveAutoImportConfig(newConfig);
+                      if (autoImportConfig.enabled) {
+                        autoImportApi.start(newConfig).catch(console.error);
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="60">Every 1 minute</SelectItem>
+                      <SelectItem value="120">Every 2 minutes</SelectItem>
+                      <SelectItem value="300">Every 5 minutes</SelectItem>
+                      <SelectItem value="600">Every 10 minutes</SelectItem>
+                      <SelectItem value="1800">Every 30 minutes</SelectItem>
+                      <SelectItem value="3600">Every hour</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Scan Now Button */}
+                <div>
+                  <Button
+                    variant="outline"
+                    onClick={handleScanNow}
+                    disabled={
+                      autoImportStatus?.isScanning ||
+                      autoImportConfig.watchFolders.length === 0
+                    }
+                  >
+                    <RefreshCw
+                      className={`w-4 h-4 mr-2 ${autoImportStatus?.isScanning ? "animate-spin" : ""}`}
+                    />
+                    {autoImportStatus?.isScanning
+                      ? "Scanning..."
+                      : "Scan Now"}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Status Card */}
+            {autoImportStatus && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Import Status</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <Label className="text-muted-foreground">Status</Label>
+                      <p>
+                        {autoImportStatus.isScanning ? (
+                          <Badge variant="default">Scanning</Badge>
+                        ) : autoImportStatus.enabled ? (
+                          <Badge variant="secondary">Watching</Badge>
+                        ) : (
+                          <Badge variant="outline">Stopped</Badge>
+                        )}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">
+                        Total Imported
+                      </Label>
+                      <p className="font-medium">
+                        {autoImportStatus.totalImported}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">
+                        Last Scan
+                      </Label>
+                      <p>
+                        {autoImportStatus.lastScanTime
+                          ? new Date(
+                              autoImportStatus.lastScanTime,
+                            ).toLocaleString()
+                          : "Never"}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">
+                        Last Import Count
+                      </Label>
+                      <p className="font-medium">
+                        {autoImportStatus.lastImportCount}
+                      </p>
+                    </div>
+                  </div>
+                  {autoImportStatus.errors.length > 0 && (
+                    <div className="mt-3">
+                      <Label className="text-muted-foreground">Errors</Label>
+                      <div className="mt-1 space-y-1 max-h-32 overflow-y-auto">
+                        {autoImportStatus.errors.map((error, i) => (
+                          <p
+                            key={i}
+                            className="text-sm text-destructive break-all"
+                          >
+                            {error}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
+
         {activeSection === "database" && (
           <div className="space-y-6">
             {/* Database Info */}

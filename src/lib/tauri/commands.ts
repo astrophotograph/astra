@@ -296,6 +296,9 @@ export const imageApi = {
 
   ensureFitsUrl: (id: string) =>
     invoke<string | null>("ensure_fits_url", { id }),
+
+  regeneratePreview: (id: string) =>
+    invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id }),
 };
 
 export const collectionImageApi = {
@@ -936,6 +939,45 @@ export const authApi = {
   signOut: () => invoke<void>("clerk_sign_out"),
 
   getSession: () => invoke<AuthSession | null>("get_auth_session"),
+};
+
+// =============================================================================
+// Auto-Import Types
+// =============================================================================
+
+export interface AutoImportConfig {
+  watchFolders: string[];
+  pollIntervalSecs: number;
+  enabled: boolean;
+  plateSolve?: boolean;
+  plateSolveSolver?: string;
+  plateSolveApiKey?: string;
+  plateSolveApiUrl?: string;
+}
+
+export interface AutoImportStatus {
+  enabled: boolean;
+  lastScanTime: string | null;
+  lastImportCount: number;
+  totalImported: number;
+  isScanning: boolean;
+  errors: string[];
+}
+
+// =============================================================================
+// Auto-Import Commands
+// =============================================================================
+
+export const autoImportApi = {
+  start: (config: AutoImportConfig) =>
+    invoke<void>("start_auto_import", { config }),
+
+  stop: () => invoke<void>("stop_auto_import"),
+
+  getStatus: () => invoke<AutoImportStatus>("get_auto_import_status"),
+
+  scanNow: (config: AutoImportConfig) =>
+    invoke<AutoImportStatus>("scan_auto_import_now", { config }),
 };
 
 // =============================================================================

@@ -902,6 +902,9 @@ export default function CollectionDetailPage() {
           allImages={allImages}
           collectionImages={collectionImages}
           allCollections={allCollections}
+          onImagesChanged={() => {
+            queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
+          }}
         />
       ) : collectionImages.length === 0 ? (
         <div className="text-center py-12 bg-slate-800 rounded-lg">

@@ -6,6 +6,12 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams, Link } from "react-router-dom";
 import { toast } from "sonner";
 import { marked } from "marked";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { Button } from "@/components/ui/button";
@@ -34,6 +40,7 @@ import {
   Loader2,
   Map,
   MapPin,
+  MoreHorizontal,
   RefreshCw,
   Save,
   Sparkles,
@@ -43,7 +50,8 @@ import {
   Wand2,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { useImage, useUpdateImage, useDeleteImage } from "@/hooks/use-images";
+import { useQueryClient } from "@tanstack/react-query";
+import { useImage, useUpdateImage, useDeleteImage, imageKeys } from "@/hooks/use-images";
 import { useEquipment } from "@/contexts/EquipmentContext";
 
 // Calculate focal length from pixel size and pixel scale
@@ -84,6 +92,8 @@ export default function ImageViewerPage() {
   const [editTags, setEditTags] = useState("");
   const [editLocation, setEditLocation] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [imageVersion, setImageVersion] = useState(0);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = useState(false);
   const [plateSolveDialogOpen, setPlateSolveDialogOpen] = useState(false);
@@ -91,9 +101,16 @@ export default function ImageViewerPage() {
   const [plateSolveApiKey, setPlateSolveApiKey] = useState(() => {
     return localStorage.getItem("astrometry_api_key") || "";
   });
+  const [plateSolveSolver] = useState(() => {
+    return localStorage.getItem("plate_solve_solver") || "nova";
+  });
+  const [localAstrometryUrl] = useState(() => {
+    return localStorage.getItem("local_astrometry_url") || "";
+  });
   const [catalogObjects, setCatalogObjects] = useState<CatalogObject[]>([]);
   const [objectsExpanded, setObjectsExpanded] = useState(false);
   const [showObjectOverlay, setShowObjectOverlay] = useState(false);
+  const [magLimit, setMagLimit] = useState(15);
   const [imageContainerSize, setImageContainerSize] = useState({ width: 0, height: 0 });
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const [skymapImage, setSkymapImage] = useState<string | null>(null);
@@ -101,6 +118,7 @@ export default function ImageViewerPage() {
   const [skymapExpanded, setSkymapExpanded] = useState(false);
   const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
 
+  const queryClient = useQueryClient();
   const { data: image, isLoading, error, refetch } = useImage(id || "");
   const updateImage = useUpdateImage();
   const deleteImage = useDeleteImage();
@@ -135,7 +153,7 @@ export default function ImageViewerPage() {
           setIsLoadingImage(false);
         });
     }
-  }, [image?.id, image?.thumbnail]);
+  }, [image?.id, image?.thumbnail, imageVersion]);
 
   // Parse markdown description - must be before any early returns
   const descriptionHtml = useMemo(() => {
@@ -285,26 +303,25 @@ export default function ImageViewerPage() {
   const handlePlateSolve = async () => {
     if (!image) return;
 
-    if (!plateSolveApiKey) {
+    if (plateSolveSolver === "nova" && !plateSolveApiKey) {
       toast.error("Please enter an Astrometry.net API key");
       return;
     }
 
     // Save API key to localStorage
-    localStorage.setItem("astrometry_api_key", plateSolveApiKey);
+    if (plateSolveApiKey) {
+      localStorage.setItem("astrometry_api_key", plateSolveApiKey);
+    }
 
     setIsPlateSolving(true);
     setPlateSolveDialogOpen(false);
 
-    // Get local API URL from localStorage if set
-    const localApiUrl = localStorage.getItem("local_astrometry_url") || undefined;
-
     try {
       const result = await plateSolveApi.solve({
         id: image.id,
-        solver: "nova",
-        apiKey: plateSolveApiKey,
-        apiUrl: localApiUrl,
+        solver: plateSolveSolver,
+        apiKey: plateSolveApiKey || undefined,
+        apiUrl: localAstrometryUrl || undefined,
         queryCatalogs: true,
         timeout: 300,
       });
@@ -384,6 +401,25 @@ export default function ImageViewerPage() {
   };
 
   // Delete image
+  const handleRegeneratePreview = async () => {
+    if (!image) return;
+    setIsRegenerating(true);
+    toast.info("Regenerating preview...");
+    try {
+      await imageApi.regeneratePreview(image.id);
+      toast.success("Preview regenerated");
+      // Refetch image record and force reload of image data
+      await refetch();
+      setImageVersion((v) => v + 1);
+      // Invalidate the images list so thumbnails update in grid views
+      queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+    } catch (e) {
+      toast.error("Failed to regenerate preview: " + e);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!image) return;
 
@@ -452,7 +488,14 @@ export default function ImageViewerPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setPlateSolveDialogOpen(true)}
+            onClick={() => {
+              // Skip dialog if we already have what we need
+              if (plateSolveSolver !== "nova" || plateSolveApiKey) {
+                handlePlateSolve();
+              } else {
+                setPlateSolveDialogOpen(true);
+              }
+            }}
             disabled={isPlateSolving}
           >
             {isPlateSolving ? (
@@ -487,39 +530,46 @@ export default function ImageViewerPage() {
               Edit
             </Button>
           )}
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setDeleteDialogOpen(true)}
-          >
-            <Trash2 className="w-4 h-4" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm">
+                <MoreHorizontal className="w-4 h-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={handleRegeneratePreview}
+                disabled={isRegenerating || (!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits'))}
+              >
+                {isRegenerating ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                )}
+                Regenerate Preview
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => setDeleteDialogOpen(true)}
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete Image
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Image Display */}
         <div className="lg:col-span-2 space-y-2">
-          {/* Overlay toggle - only show if plate solved */}
-          {plateSolveInfo && catalogObjects.length > 0 && (
-            <div className="flex items-center gap-2">
-              <Switch
-                id="object-overlay"
-                checked={showObjectOverlay}
-                onCheckedChange={setShowObjectOverlay}
-              />
-              <Label htmlFor="object-overlay" className="flex items-center gap-2 cursor-pointer">
-                {showObjectOverlay ? (
-                  <Eye className="w-4 h-4" />
-                ) : (
-                  <EyeOff className="w-4 h-4" />
-                )}
-                Show object markers
-              </Label>
-            </div>
-          )}
-
           <div ref={imageContainerRef} className="rounded-lg overflow-hidden bg-muted relative">
+            {isRegenerating && (
+              <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
+                <p className="text-sm text-white">Regenerating preview...</p>
+              </div>
+            )}
             {isLoadingImage ? (
               <div className="aspect-video flex items-center justify-center">
                 <p className="text-muted-foreground">Loading image...</p>
@@ -548,7 +598,7 @@ export default function ImageViewerPage() {
                     height={imageContainerSize.height}
                     viewBox={`0 0 ${imageContainerSize.width} ${imageContainerSize.height}`}
                   >
-                    {catalogObjects.map((obj, idx) => {
+                    {catalogObjects.filter((obj) => !obj.magnitude || obj.magnitude <= magLimit + 2).map((obj, idx) => {
                       const pos = calculateObjectPosition(obj.ra, obj.dec);
                       if (!pos) return null;
 
@@ -562,8 +612,17 @@ export default function ImageViewerPage() {
                         radius = Math.max(20, Math.min(imageContainerSize.width / 2, (obj.sizeArcmin * pixelsPerArcmin) / 2));
                       }
 
+                      // Calculate opacity: full at magLimit, fade to 0 over next 2 magnitudes
+                      const mag = obj.magnitude ?? 0;
+                      const fadeStart = magLimit;
+                      const fadeEnd = magLimit + 2;
+                      const opacity = mag <= fadeStart
+                        ? 0.85
+                        : Math.max(0.05, 0.85 * (1 - (mag - fadeStart) / (fadeEnd - fadeStart)));
+                      const showLabel = mag <= fadeStart;
+
                       return (
-                        <g key={`${obj.name}-${idx}`}>
+                        <g key={`${obj.name}-${idx}`} opacity={opacity}>
                           {/* Circle marker */}
                           <circle
                             cx={pos.x}
@@ -572,7 +631,6 @@ export default function ImageViewerPage() {
                             fill="none"
                             stroke="#6366f1"
                             strokeWidth="1.5"
-                            opacity="0.85"
                           />
                           {/* Small dots at cardinal points on circle */}
                           {[0, 90, 180, 270].map((angle) => {
@@ -584,24 +642,25 @@ export default function ImageViewerPage() {
                                 cy={pos.y + radius * Math.sin(rad)}
                                 r={2}
                                 fill="#6366f1"
-                                opacity="0.85"
                               />
                             );
                           })}
-                          {/* Object name label - positioned below the circle */}
-                          <text
-                            x={pos.x}
-                            y={pos.y + radius + 16}
-                            textAnchor="middle"
-                            fill="#6366f1"
-                            fontSize="14"
-                            fontWeight="500"
-                            style={{
-                              textShadow: "0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.9)",
-                            }}
-                          >
-                            {obj.commonName || obj.name}
-                          </text>
+                          {/* Object name label - only shown above magnitude limit */}
+                          {showLabel && (
+                            <text
+                              x={pos.x}
+                              y={pos.y + radius + 16}
+                              textAnchor="middle"
+                              fill="#6366f1"
+                              fontSize="14"
+                              fontWeight="500"
+                              style={{
+                                textShadow: "0 1px 3px rgba(0,0,0,0.9), 0 0 6px rgba(0,0,0,0.9)",
+                              }}
+                            >
+                              {obj.commonName || obj.name}
+                            </text>
+                          )}
                         </g>
                       );
                     })}
@@ -682,9 +741,128 @@ export default function ImageViewerPage() {
                 </>
               ) : (
                 <>
-                  <div>
-                    <Label className="text-muted-foreground">Filename</Label>
-                    <p className="font-mono text-sm break-all">{image.filename}</p>
+                  {/* === TOP: Capture Info === */}
+                  {image.metadata && (() => {
+                    try {
+                      const meta = JSON.parse(image.metadata);
+                      const parseFitsVal = (v: unknown): string | null => {
+                        if (v == null) return null;
+                        const s = String(v);
+                        let m = s.match(/CharacterString\("([^"]*)"\)/);
+                        if (m) return m[1].trim();
+                        m = s.match(/RealFloatingNumber\(([\d.eE+-]+)\)/);
+                        if (m) return m[1];
+                        m = s.match(/IntegerNumber\((\d+)\)/);
+                        if (m) return m[1];
+                        if (s !== "None" && !s.startsWith("Some(")) return s;
+                        return null;
+                      };
+                      const instrument = parseFitsVal(meta.INSTRUME || meta.instrume);
+                      const telescope = parseFitsVal(meta.TELESCOP || meta.telescop);
+                      const filter = parseFitsVal(meta.FILTER || meta.filter);
+                      const exposure = parseFitsVal(meta.EXPTIME || meta.EXPOSURE || meta.exptime || meta.exposure);
+                      const gain = parseFitsVal(meta.GAIN || meta.gain);
+                      const stackCount = parseFitsVal(meta.STACKCNT || meta.NCOMBINE || meta.stackcnt || meta.ncombine);
+                      const hasInfo = instrument || telescope || filter || exposure || gain || stackCount;
+                      if (!hasInfo) return null;
+                      return (
+                        <div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <ImageIcon className="w-4 h-4 text-muted-foreground" />
+                            <Label className="text-muted-foreground">Capture Info</Label>
+                          </div>
+                          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                            {instrument && (<><span className="text-muted-foreground">Camera</span><span>{instrument}</span></>)}
+                            {telescope && (<><span className="text-muted-foreground">Telescope</span><span>{telescope}</span></>)}
+                            {filter && (<><span className="text-muted-foreground">Filter</span><span>{filter}</span></>)}
+                            {exposure && (<><span className="text-muted-foreground">Exposure</span><span>{Number(exposure).toFixed(1)}s</span></>)}
+                            {gain && (<><span className="text-muted-foreground">Gain</span><span>{gain}</span></>)}
+                            {stackCount && (<><span className="text-muted-foreground">Stacked</span><span>{stackCount} frames</span></>)}
+                          </div>
+                        </div>
+                      );
+                    } catch { return null; }
+                  })()}
+
+                  {/* === Object Overlay Controls === */}
+                  {plateSolveInfo && catalogObjects.length > 0 && (
+                    <div className="pt-4 border-t space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label htmlFor="object-overlay" className="flex items-center gap-2 cursor-pointer text-sm">
+                          {showObjectOverlay ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                          Object Markers
+                        </Label>
+                        <Switch id="object-overlay" checked={showObjectOverlay} onCheckedChange={setShowObjectOverlay} />
+                      </div>
+                      {showObjectOverlay && (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>Magnitude limit</span>
+                            <span>&#8804; {magLimit} ({catalogObjects.filter((o) => !o.magnitude || o.magnitude <= magLimit).length} labeled, {catalogObjects.filter((o) => !o.magnitude || o.magnitude <= magLimit + 2).length} visible)</span>
+                          </div>
+                          <input type="range" min={3} max={20} step={0.5} value={magLimit} onChange={(e) => setMagLimit(Number(e.target.value))} className="w-full accent-indigo-500" />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* === Sky Map === */}
+                  {plateSolveInfo && (
+                    <div className="pt-4 border-t">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
+                        onClick={() => {
+                          setSkymapExpanded(!skymapExpanded);
+                          if (!skymapExpanded && !skymapImage && !isLoadingSkymap) {
+                            loadSkymap();
+                          }
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Map className="w-4 h-4 text-muted-foreground" />
+                          <Label className="text-muted-foreground cursor-pointer">Sky Map</Label>
+                        </div>
+                        <ChevronDown className={`w-4 h-4 transition-transform ${skymapExpanded ? "rotate-180" : ""}`} />
+                      </Button>
+                      {skymapExpanded && (
+                        <div className="mt-2">
+                          {isLoadingSkymap ? (
+                            <div className="flex items-center justify-center py-8">
+                              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+                              <span className="ml-2 text-sm text-muted-foreground">Generating skymap...</span>
+                            </div>
+                          ) : skymapImage ? (
+                            <div className="rounded-lg overflow-hidden border border-border">
+                              <img src={skymapImage} alt="Sky map showing image location" className="w-full h-auto" />
+                              <div className="p-2 bg-muted/30 text-xs text-muted-foreground flex items-center justify-between">
+                                <span>Teal marker shows image center</span>
+                                <Button variant="ghost" size="sm" onClick={() => { setSkymapImage(null); loadSkymap(); }} className="h-6 px-2">
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Regenerate
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-2 py-4">
+                              <p className="text-sm text-muted-foreground">Click to generate sky map</p>
+                              <Button variant="outline" size="sm" onClick={loadSkymap} disabled={isLoadingSkymap}>
+                                <Map className="w-4 h-4 mr-2" />
+                                Generate
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* === Details === */}
+                  <div className="pt-4 border-t">
+                    <div>
+                      <Label className="text-muted-foreground">Filename</Label>
+                      <p className="font-mono text-sm break-all">{image.filename}</p>
+                    </div>
                   </div>
 
                   {image.summary && (
@@ -746,7 +924,7 @@ export default function ImageViewerPage() {
                     </div>
                   )}
 
-                  {/* Plate Solve Results */}
+                  {/* === Plate Solve Results === */}
                   {plateSolveInfo && (
                     <div className="pt-4 border-t">
                       <div className="flex items-center gap-2 mb-3">
@@ -801,7 +979,7 @@ export default function ImageViewerPage() {
                     </div>
                   )}
 
-                  {/* Catalog Objects */}
+                  {/* === Catalog Objects === */}
                   {catalogObjects.length > 0 && (
                     <div className="pt-4 border-t">
                       <Button
@@ -837,76 +1015,6 @@ export default function ImageViewerPage() {
                               )}
                             </div>
                           ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Sky Map */}
-                  {plateSolveInfo && (
-                    <div className="pt-4 border-t">
-                      <Button
-                        variant="ghost"
-                        className="w-full justify-between p-0 h-auto hover:bg-transparent"
-                        onClick={() => {
-                          setSkymapExpanded(!skymapExpanded);
-                          if (!skymapExpanded && !skymapImage && !isLoadingSkymap) {
-                            loadSkymap();
-                          }
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Map className="w-4 h-4 text-muted-foreground" />
-                          <Label className="text-muted-foreground cursor-pointer">
-                            Sky Map
-                          </Label>
-                        </div>
-                        <ChevronDown className={`w-4 h-4 transition-transform ${skymapExpanded ? "rotate-180" : ""}`} />
-                      </Button>
-                      {skymapExpanded && (
-                        <div className="mt-2">
-                          {isLoadingSkymap ? (
-                            <div className="flex items-center justify-center py-8">
-                              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
-                              <span className="ml-2 text-sm text-muted-foreground">Generating skymap...</span>
-                            </div>
-                          ) : skymapImage ? (
-                            <div className="rounded-lg overflow-hidden border border-border">
-                              <img
-                                src={skymapImage}
-                                alt="Sky map showing image location"
-                                className="w-full h-auto"
-                              />
-                              <div className="p-2 bg-muted/30 text-xs text-muted-foreground flex items-center justify-between">
-                                <span>Teal marker shows image center • Rectangle shows FOV</span>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    setSkymapImage(null);
-                                    loadSkymap();
-                                  }}
-                                  className="h-6 px-2"
-                                >
-                                  <RefreshCw className="w-3 h-3 mr-1" />
-                                  Regenerate
-                                </Button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col items-center gap-2 py-4">
-                              <p className="text-sm text-muted-foreground">Click to generate sky map</p>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={loadSkymap}
-                                disabled={isLoadingSkymap}
-                              >
-                                <Map className="w-4 h-4 mr-2" />
-                                Generate
-                              </Button>
-                            </div>
-                          )}
                         </div>
                       )}
                     </div>
@@ -981,7 +1089,7 @@ export default function ImageViewerPage() {
             <Button variant="outline" onClick={() => setPlateSolveDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handlePlateSolve} disabled={!plateSolveApiKey}>
+            <Button onClick={handlePlateSolve} disabled={plateSolveSolver === "nova" && !plateSolveApiKey}>
               <Compass className="w-4 h-4 mr-2" />
               Start Plate Solve
             </Button>

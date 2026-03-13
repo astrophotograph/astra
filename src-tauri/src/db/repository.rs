@@ -156,6 +156,19 @@ pub fn get_all_image_urls(
         .map(|urls| urls.into_iter().flatten().collect())
 }
 
+/// Get all FITS URLs for a user (for efficient duplicate checking during auto-import)
+pub fn get_all_fits_urls(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> QueryResult<Vec<String>> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::fits_url.is_not_null())
+        .select(images::fits_url)
+        .load::<Option<String>>(conn)
+        .map(|v| v.into_iter().flatten().collect())
+}
+
 /// Get all collection-image mappings for efficient duplicate checking
 pub fn get_all_collection_image_pairs(
     conn: &mut SqliteConnection,

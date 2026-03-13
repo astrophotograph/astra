@@ -4,10 +4,12 @@
  * Shows a grid of all catalog objects with indicators for which ones have images.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import {
   Select,
@@ -16,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Check, ChevronLeft, ChevronRight, Clock, ImageIcon, Search } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Clock, ImageIcon, RefreshCw, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getCatalog,
@@ -25,18 +27,24 @@ import {
   type CatalogEntry,
 } from "@/lib/catalogs";
 import { NGC_TO_MESSIER } from "@/lib/models";
-import type { Collection, Image, CatalogObject } from "@/lib/tauri/commands";
+import { collectionApi, imageApi, type Collection, type Image, type CatalogObject } from "@/lib/tauri/commands";
 import CatalogObjectDialog, {
   type ImageWithMeta,
   extractEquipment,
   extractExposureSeconds,
 } from "./CatalogObjectDialog";
 
+interface DateFilter {
+  start: string; // ISO date "YYYY-MM-DD"
+  end: string;
+}
+
 interface CatalogCollectionViewProps {
   collection: Collection;
   allImages: Image[];
   collectionImages: Image[];
   allCollections: Collection[];
+  onImagesChanged?: () => void;
 }
 
 type SortField = "number" | "exposure" | "type" | "constellation";
@@ -77,23 +85,15 @@ export default function CatalogCollectionView({
   allImages,
   collectionImages,
   allCollections,
+  onImagesChanged,
 }: CatalogCollectionViewProps) {
   // Determine if this is a scoped collection (marathon) or library-wide catalog.
-  // The oldest collection with this template is the library-wide catalog.
-  // Any additional collections with the same template are scoped (marathon mode)
-  // and only show images explicitly added to them.
   const sameTemplateCollections = allCollections
     .filter((c) => c.template === collection.template && c.template !== null)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
   const isLibraryWide = sameTemplateCollections.length <= 1 || sameTemplateCollections[0]?.id === collection.id;
   const imagesToMatch = isLibraryWide ? allImages : collectionImages;
-  const [selectedObject, setSelectedObject] = useState<CatalogEntry | null>(
-    null
-  );
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [sortBy, setSortBy] = useState<SortField>("number");
-  const [filterMode, setFilterMode] = useState<FilterMode>("all");
+
   const [currentPage, setCurrentPage] = useState(0);
 
   // Get catalog definition (with pagination support)
@@ -108,6 +108,113 @@ export default function CatalogCollectionView({
     }
     return catalog?.objects || [];
   }, [collection.template, catalog]);
+
+  // Date filter for scoped collections
+  const savedFilter = useMemo<DateFilter | null>(() => {
+    if (!collection.metadata) return null;
+    try {
+      const meta = JSON.parse(collection.metadata);
+      return meta.dateFilter ?? null;
+    } catch { return null; }
+  }, [collection.metadata]);
+
+  const [dateStart, setDateStart] = useState(savedFilter?.start ?? "");
+  const [dateEnd, setDateEnd] = useState(savedFilter?.end ?? "");
+  const [isPopulating, setIsPopulating] = useState(false);
+
+  // Sync date inputs when saved filter changes
+  useEffect(() => {
+    if (savedFilter) {
+      setDateStart(savedFilter.start);
+      setDateEnd(savedFilter.end);
+    }
+  }, [savedFilter]);
+
+  // Save date filter to collection metadata
+  const saveDateFilter = useCallback(async (start: string, end: string) => {
+    const existingMeta = collection.metadata ? JSON.parse(collection.metadata) : {};
+    const newMeta = { ...existingMeta, dateFilter: { start, end } };
+    await collectionApi.update({
+      id: collection.id,
+      metadata: JSON.stringify(newMeta),
+    });
+  }, [collection.id, collection.metadata]);
+
+  // Auto-populate: find images in date range matching catalog, add to collection
+  const autoPopulate = useCallback(async () => {
+    if (!dateStart || !dateEnd || !catalog) return;
+
+    setIsPopulating(true);
+    try {
+      // Save the date filter
+      await saveDateFilter(dateStart, dateEnd);
+
+      const startDate = new Date(dateStart);
+      const endDate = new Date(dateEnd + "T23:59:59");
+
+      // Filter all images by date range
+      const inRange = allImages.filter((img) => {
+        const d = new Date(img.created_at);
+        return d >= startDate && d <= endDate;
+      });
+
+      // Match against catalog entries
+      const allEntries = catalog.pagination
+        ? getAllNGCEntries?.() ?? catalog.objects
+        : catalog.objects;
+
+      let added = 0;
+      const existingIds = new Set(collectionImages.map((img) => img.id));
+
+      for (const image of inRange) {
+        if (existingIds.has(image.id)) continue;
+        if (!image.annotations) continue;
+
+        let annotations: CatalogObject[] = [];
+        try {
+          annotations = typeof image.annotations === "string"
+            ? JSON.parse(image.annotations)
+            : image.annotations;
+        } catch { continue; }
+
+        // Check if any annotation matches a catalog entry
+        let matches = false;
+        for (const annotation of annotations) {
+          if (!annotation.name) continue;
+          const normalized = normalizeObjectName(annotation.name);
+          for (const entry of allEntries) {
+            if (matchesCatalogEntry(annotation.name, entry) || matchesCatalogEntry(normalized, entry)) {
+              matches = true;
+              break;
+            }
+          }
+          if (matches) break;
+        }
+
+        if (matches) {
+          await imageApi.addToCollection(image.id, collection.id);
+          added++;
+        }
+      }
+
+      if (added > 0) {
+        toast.success(`Added ${added} image${added !== 1 ? "s" : ""} matching ${catalog.name}`);
+        onImagesChanged?.();
+      } else {
+        toast.info("No new matching images found in date range");
+      }
+    } catch (e) {
+      toast.error("Auto-populate failed: " + e);
+    } finally {
+      setIsPopulating(false);
+    }
+  }, [dateStart, dateEnd, catalog, allImages, collectionImages, collection.id, saveDateFilter, onImagesChanged]);
+
+  const [selectedObject, setSelectedObject] = useState<CatalogEntry | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortField>("number");
+  const [filterMode, setFilterMode] = useState<FilterMode>("all");
 
   // Build a map of catalog objects to their images
   // For NGC, we match against all entries but only display current page
@@ -320,6 +427,63 @@ export default function CatalogCollectionView({
           <Progress value={completionPercent} className="h-2" />
         </div>
       </div>
+
+      {/* Date Filter (scoped collections only) */}
+      {!isLibraryWide && (
+        <div className="bg-slate-800/50 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarDays className="w-4 h-4 text-slate-400" />
+            <span className="text-sm font-medium text-slate-300">Date Filter</span>
+            {savedFilter && (
+              <Badge variant="outline" className="text-xs">
+                Active
+              </Badge>
+            )}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label className="text-xs text-slate-400">Start Date</Label>
+              <Input
+                type="date"
+                value={dateStart}
+                onChange={(e) => setDateStart(e.target.value)}
+                className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-slate-400">End Date</Label>
+              <Input
+                type="date"
+                value={dateEnd}
+                onChange={(e) => setDateEnd(e.target.value)}
+                className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1"
+              />
+            </div>
+            <Button
+              onClick={autoPopulate}
+              disabled={isPopulating || !dateStart || !dateEnd}
+              size="sm"
+            >
+              {isPopulating ? (
+                <>
+                  <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                  Scanning...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3 h-3 mr-1" />
+                  {savedFilter ? "Refresh" : "Find Images"}
+                </>
+              )}
+            </Button>
+            {collectionImages.length > 0 && (
+              <span className="text-xs text-slate-400">
+                {collectionImages.length} image{collectionImages.length !== 1 ? "s" : ""} in collection
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3">

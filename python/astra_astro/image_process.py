@@ -548,6 +548,49 @@ def _save_preview(data: np.ndarray, output_path: str) -> None:
     img.save(output_path, "PNG")
 
 
+def quick_preview(input_fits_path: str, output_path: str) -> dict:
+    """
+    Generate a quick preview JPEG/PNG from a FITS file.
+
+    Uses processinator's MTF (Midtone Transfer Function) stretch for
+    high-quality results with minimal processing time.
+
+    Args:
+        input_fits_path: Path to input FITS file
+        output_path: Output path (extension determines format: .jpg, .png)
+
+    Returns:
+        Dictionary with success status and output path
+    """
+    try:
+        start_time = time.time()
+        from processinator import fits_to_image, StretchAlgorithm
+
+        # Determine format from extension
+        ext = Path(output_path).suffix.lower()
+        fmt = "JPEG" if ext in (".jpg", ".jpeg") else "PNG"
+
+        fits_to_image(
+            input_fits_path,
+            output_path=output_path,
+            algorithm=StretchAlgorithm.MTF,
+            output_format=fmt,
+        )
+
+        return {
+            "success": True,
+            "outputPath": output_path,
+            "processingTime": time.time() - start_time,
+        }
+    except Exception as e:
+        logger.exception(f"Quick preview failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "processingTime": 0,
+        }
+
+
 def process_image(
     input_fits_path: str,
     output_dir: str,

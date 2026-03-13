@@ -1,6 +1,7 @@
 //! Tauri command handlers for Astra
 
 pub mod astronomy;
+pub mod auto_import;
 pub mod backup;
 pub mod collections;
 pub mod image_process;
@@ -15,6 +16,7 @@ pub mod todos;
 
 // Re-export all commands
 pub use astronomy::*;
+pub use auto_import::*;
 pub use backup::*;
 pub use collections::*;
 pub use image_process::*;

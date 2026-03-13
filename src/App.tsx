@@ -11,6 +11,7 @@ import Plan from "./pages/Plan";
 import Observations from "./pages/Observations";
 import Targets from "./pages/Targets";
 import ImageViewer from "./pages/ImageViewer";
+import Images from "./pages/Images";
 import Slideshow from "./pages/Slideshow";
 import Admin from "./pages/Admin";
 
@@ -27,6 +28,7 @@ function App() {
               <Route path="/collections" element={<Collections />} />
               <Route path="/plan" element={<Plan />} />
               <Route path="/observations" element={<Observations />} />
+              <Route path="/images" element={<Images />} />
               <Route path="/targets" element={<Targets />} />
               <Route path="/settings" element={<Admin />} />
               <Route path="/i/:id" element={<ImageViewer />} />

@@ -39,12 +39,12 @@ const BATCH_SIZE: usize = 100;
 const SCAN_PROGRESS_INTERVAL: usize = 50;
 
 /// Maximum thumbnail dimension (width or height)
-const THUMBNAIL_SIZE: u32 = 300;
+pub const THUMBNAIL_SIZE: u32 = 300;
 /// JPEG quality for thumbnails (0-100)
-const THUMBNAIL_QUALITY: u8 = 80;
+pub const THUMBNAIL_QUALITY: u8 = 80;
 
 /// Generate a base64-encoded JPEG thumbnail from an image file
-fn generate_thumbnail(image_path: &Path) -> Result<String, String> {
+pub fn generate_thumbnail(image_path: &Path) -> Result<String, String> {
     // Load the image
     let img = image::open(image_path)
         .map_err(|e| format!("Failed to open image: {}", e))?;
@@ -71,6 +71,125 @@ fn generate_thumbnail(image_path: &Path) -> Result<String, String> {
     let base64_data = BASE64.encode(buffer.into_inner());
 
     // Return as data URL
+    Ok(format!("data:image/jpeg;base64,{}", base64_data))
+}
+
+/// Generate a thumbnail from FITS pixel data using a simple percentile stretch.
+/// This is used when no JPEG companion file exists (e.g., ASI Air stacked files).
+pub fn generate_fits_thumbnail(fits_path: &Path) -> Result<String, String> {
+    use fitrs::Fits;
+
+    let fits = Fits::open(fits_path)
+        .map_err(|e| format!("Failed to open FITS: {}", e))?;
+
+    let hdu = fits.into_iter().next()
+        .ok_or("No HDU in FITS file")?;
+
+    // Read pixel data as f64 values
+    let (width, height, pixels) = match hdu.read_data() {
+        fitrs::FitsData::FloatingPoint32(data) => {
+            let shape = &data.shape;
+            let w = shape[shape.len() - 1];
+            let h = shape[shape.len() - 2];
+            let pixels: Vec<f64> = data.data.iter().map(|&x| x as f64).collect();
+            (w, h, pixels)
+        }
+        fitrs::FitsData::FloatingPoint64(data) => {
+            let shape = &data.shape;
+            let w = shape[shape.len() - 1];
+            let h = shape[shape.len() - 2];
+            (w, h, data.data.clone())
+        }
+        fitrs::FitsData::IntegersI32(data) => {
+            let shape = &data.shape;
+            let w = shape[shape.len() - 1];
+            let h = shape[shape.len() - 2];
+            let pixels: Vec<f64> = data.data.iter().map(|x| x.unwrap_or(0) as f64).collect();
+            (w, h, pixels)
+        }
+        fitrs::FitsData::IntegersU32(data) => {
+            let shape = &data.shape;
+            let w = shape[shape.len() - 1];
+            let h = shape[shape.len() - 2];
+            let pixels: Vec<f64> = data.data.iter().map(|x| x.unwrap_or(0) as f64).collect();
+            (w, h, pixels)
+        }
+        _ => return Err("Unsupported FITS pixel format".to_string()),
+    };
+
+    if pixels.is_empty() {
+        return Err("No pixel data in FITS".to_string());
+    }
+
+    // Determine if this is RGB (3 channels) or mono
+    let is_color = pixels.len() == width * height * 3;
+    let channel_size = width * height;
+
+    // Simple percentile stretch
+    let stretch_channel = |data: &[f64]| -> Vec<u8> {
+        let mut sorted: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        if sorted.is_empty() {
+            return vec![128u8; data.len()];
+        }
+
+        let lo = sorted[(sorted.len() as f64 * 0.01) as usize];
+        let hi = sorted[(sorted.len() as f64 * 0.995) as usize];
+        let range = hi - lo;
+
+        if range <= 0.0 {
+            return vec![128u8; data.len()];
+        }
+
+        data.iter().map(|&v| {
+            let normalized = ((v - lo) / range).clamp(0.0, 1.0);
+            (normalized * 255.0) as u8
+        }).collect()
+    };
+
+    let rgb_data: Vec<u8> = if is_color {
+        let r = stretch_channel(&pixels[0..channel_size]);
+        let g = stretch_channel(&pixels[channel_size..channel_size * 2]);
+        let b = stretch_channel(&pixels[channel_size * 2..channel_size * 3]);
+
+        let mut rgb = Vec::with_capacity(channel_size * 3);
+        for i in 0..channel_size {
+            rgb.push(r[i]);
+            rgb.push(g[i]);
+            rgb.push(b[i]);
+        }
+        rgb
+    } else {
+        // Mono -- create grayscale RGB
+        let gray = stretch_channel(&pixels[0..channel_size]);
+        let mut rgb = Vec::with_capacity(channel_size * 3);
+        for &v in &gray {
+            rgb.push(v);
+            rgb.push(v);
+            rgb.push(v);
+        }
+        rgb
+    };
+
+    // Create image and resize to thumbnail
+    let img = image::RgbImage::from_raw(width as u32, height as u32, rgb_data)
+        .ok_or("Failed to create image from FITS data")?;
+    let img = image::DynamicImage::ImageRgb8(img);
+    let thumbnail = img.resize(THUMBNAIL_SIZE, THUMBNAIL_SIZE, FilterType::Lanczos3);
+    let rgb_thumb = thumbnail.to_rgb8();
+
+    // Encode as JPEG base64
+    let mut buffer = Cursor::new(Vec::new());
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, THUMBNAIL_QUALITY);
+    encoder.encode(
+        rgb_thumb.as_raw(),
+        rgb_thumb.width(),
+        rgb_thumb.height(),
+        image::ExtendedColorType::Rgb8,
+    ).map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
+
+    let base64_data = BASE64.encode(buffer.into_inner());
     Ok(format!("data:image/jpeg;base64,{}", base64_data))
 }
 
@@ -152,17 +271,17 @@ pub struct FitsMetadata {
 
 /// Represents a discovered image (potentially with both .fit and .jpg)
 #[derive(Debug, Clone)]
-struct DiscoveredImage {
+pub struct DiscoveredImage {
     /// Base name without extension
-    base_name: String,
+    pub base_name: String,
     /// Directory containing the image
-    directory: PathBuf,
+    pub directory: PathBuf,
     /// Path to FITS file if exists
-    fits_path: Option<PathBuf>,
+    pub fits_path: Option<PathBuf>,
     /// Path to JPEG file if exists
-    jpeg_path: Option<PathBuf>,
+    pub jpeg_path: Option<PathBuf>,
     /// Whether this is a stacked image
-    is_stacked: bool,
+    pub is_stacked: bool,
 }
 
 /// Result of preprocessing a single image (FITS parsing + thumbnail generation)
@@ -179,7 +298,7 @@ struct ProcessedImage {
 }
 
 /// Parse FITS header to extract metadata
-fn parse_fits_metadata(fits_path: &Path) -> Result<FitsMetadata, String> {
+pub fn parse_fits_metadata(fits_path: &Path) -> Result<FitsMetadata, String> {
     use fitrs::Fits;
 
     let fits = Fits::open(fits_path).map_err(|e| format!("Failed to parse FITS file: {}", e))?;
@@ -221,7 +340,7 @@ fn parse_fits_metadata(fits_path: &Path) -> Result<FitsMetadata, String> {
     Ok(metadata)
 }
 
-fn extract_string_value(value: &str) -> Option<String> {
+pub fn extract_string_value(value: &str) -> Option<String> {
     // Try to extract string from various fitrs debug formats
     let trimmed = value.trim();
 
@@ -275,7 +394,7 @@ fn extract_string_value(value: &str) -> Option<String> {
     }
 }
 
-fn extract_float_value(value: &str) -> Option<f64> {
+pub fn extract_float_value(value: &str) -> Option<f64> {
     let trimmed = value.trim();
 
     // Handle Some(RealFloatingNumber(...)) format
@@ -306,7 +425,7 @@ fn extract_float_value(value: &str) -> Option<f64> {
     trimmed.parse().ok()
 }
 
-fn extract_int_value(value: &str) -> Option<i32> {
+pub fn extract_int_value(value: &str) -> Option<i32> {
     let trimmed = value.trim();
 
     // Handle Some(IntegerNumber(...)) format
@@ -334,7 +453,7 @@ fn extract_int_value(value: &str) -> Option<i32> {
 
 /// Determine session date from observation timestamp
 /// Images after midnight but before noon are considered part of the previous day's session
-fn get_session_date(date_obs: &str) -> Option<NaiveDate> {
+pub fn get_session_date(date_obs: &str) -> Option<NaiveDate> {
     // Try parsing various date formats
     let datetime = if let Ok(dt) = NaiveDateTime::parse_from_str(date_obs, "%Y-%m-%dT%H:%M:%S%.f") {
         Some(dt)
@@ -357,7 +476,7 @@ fn get_session_date(date_obs: &str) -> Option<NaiveDate> {
 }
 
 /// Generate collection name from session date (one collection per night)
-fn generate_collection_name(session_date: &NaiveDate, _object_name: Option<&str>) -> String {
+pub fn generate_collection_name(session_date: &NaiveDate, _object_name: Option<&str>) -> String {
     session_date.format("%Y-%m-%d").to_string()
 }
 
@@ -521,6 +640,18 @@ async fn process_single_image(discovered: DiscoveredImage) -> ProcessedImage {
                 Ok(thumb) => processed.thumbnail = Some(thumb),
                 Err(e) => {
                     log::warn!("Failed to generate thumbnail for {}: {}", jpeg_path.display(), e);
+                }
+            }
+        }
+
+        // Fall back to FITS thumbnail if no JPEG thumbnail was generated
+        if processed.thumbnail.is_none() {
+            if let Some(fits_path) = &processed.discovered.fits_path {
+                match generate_fits_thumbnail(fits_path) {
+                    Ok(thumb) => processed.thumbnail = Some(thumb),
+                    Err(e) => {
+                        log::warn!("Failed to generate FITS thumbnail for {}: {}", fits_path.display(), e);
+                    }
                 }
             }
         }
