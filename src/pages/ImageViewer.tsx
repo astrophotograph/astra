@@ -765,6 +765,20 @@ export default function ImageViewerPage() {
                       const stackCount = parseFitsVal(meta.STACKCNT || meta.NCOMBINE || meta.stackcnt || meta.ncombine);
                       const hasInfo = instrument || telescope || filter || exposure || gain || stackCount;
                       if (!hasInfo) return null;
+
+                      // Calculate total integration time
+                      const expNum = exposure ? Number(exposure) : 0;
+                      const frames = stackCount ? Number(stackCount) : 0;
+                      const totalSecs = expNum * frames;
+                      const formatIntegration = (secs: number) => {
+                        if (secs <= 0) return null;
+                        if (secs < 60) return `${secs.toFixed(0)} sec`;
+                        if (secs < 3600) return `${(secs / 60).toFixed(1)} min`;
+                        const h = Math.floor(secs / 3600);
+                        const m = Math.round((secs % 3600) / 60);
+                        return m > 0 ? `${h} hr ${m} min` : `${h} hr`;
+                      };
+
                       return (
                         <div>
                           <div className="flex items-center gap-2 mb-2">
@@ -775,9 +789,23 @@ export default function ImageViewerPage() {
                             {instrument && (<><span className="text-muted-foreground">Camera</span><span>{instrument}</span></>)}
                             {telescope && (<><span className="text-muted-foreground">Telescope</span><span>{telescope}</span></>)}
                             {filter && (<><span className="text-muted-foreground">Filter</span><span>{filter}</span></>)}
-                            {exposure && (<><span className="text-muted-foreground">Exposure</span><span>{Number(exposure).toFixed(1)}s</span></>)}
+                            {(exposure || stackCount) && (
+                              <>
+                                <span className="text-muted-foreground">Exposure</span>
+                                <span>
+                                  {exposure ? `${Number(exposure).toFixed(1)}s` : ""}
+                                  {exposure && stackCount ? " \u00d7 " : ""}
+                                  {stackCount ? `${stackCount} frames` : ""}
+                                </span>
+                              </>
+                            )}
                             {gain && (<><span className="text-muted-foreground">Gain</span><span>{gain}</span></>)}
-                            {stackCount && (<><span className="text-muted-foreground">Stacked</span><span>{stackCount} frames</span></>)}
+                            {totalSecs > 0 && (
+                              <>
+                                <span className="text-muted-foreground">Integration</span>
+                                <span>{formatIntegration(totalSecs)}</span>
+                              </>
+                            )}
                           </div>
                         </div>
                       );
@@ -884,9 +912,38 @@ export default function ImageViewerPage() {
 
                   <div className="flex items-center gap-2">
                     <Calendar className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-sm">
-                      {new Date(image.created_at).toLocaleString()}
-                    </span>
+                    <div className="text-sm">
+                      {(() => {
+                        // Try to get DATE-OBS from FITS metadata
+                        if (image.metadata) {
+                          try {
+                            const meta = JSON.parse(image.metadata);
+                            const raw = meta["DATE-OBS"] || meta["date-obs"];
+                            if (raw) {
+                              const m = String(raw).match(/CharacterString\("([^"]*)"\)/);
+                              const dateStr = m ? m[1] : (String(raw) !== "None" ? String(raw) : null);
+                              if (dateStr) {
+                                const d = new Date(dateStr);
+                                if (!isNaN(d.getTime())) {
+                                  return (
+                                    <>
+                                      <div>{d.toLocaleString()}</div>
+                                      <div className="text-xs text-muted-foreground">Observed</div>
+                                    </>
+                                  );
+                                }
+                              }
+                            }
+                          } catch { /* ignore */ }
+                        }
+                        return (
+                          <>
+                            <div>{new Date(image.created_at).toLocaleString()}</div>
+                            <div className="text-xs text-muted-foreground">Imported</div>
+                          </>
+                        );
+                      })()}
+                    </div>
                   </div>
 
                   {image.location && (
