@@ -297,8 +297,8 @@ export const imageApi = {
   ensureFitsUrl: (id: string) =>
     invoke<string | null>("ensure_fits_url", { id }),
 
-  regeneratePreview: (id: string) =>
-    invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id }),
+  regeneratePreview: (id: string, bgPercent?: number, sigma?: number) =>
+    invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id, bgPercent, sigma }),
 };
 
 export const collectionImageApi = {
@@ -953,6 +953,8 @@ export interface AutoImportConfig {
   plateSolveSolver?: string;
   plateSolveApiKey?: string;
   plateSolveApiUrl?: string;
+  stretchBgPercent?: number;
+  stretchSigma?: number;
 }
 
 export interface AutoImportStatus {

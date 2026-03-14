@@ -152,9 +152,28 @@ export default function CatalogCollectionView({
       const startDate = new Date(dateStart);
       const endDate = new Date(dateEnd + "T23:59:59");
 
-      // Filter all images by date range
+      // Extract observation date from FITS DATE-OBS metadata, fall back to created_at
+      const getObsDate = (img: Image): Date => {
+        if (img.metadata) {
+          try {
+            const meta = JSON.parse(img.metadata);
+            const raw = meta["DATE-OBS"] || meta["date-obs"];
+            if (raw) {
+              const m = String(raw).match(/CharacterString\("([^"]*)"\)/);
+              const dateStr = m ? m[1] : (String(raw) !== "None" ? String(raw) : null);
+              if (dateStr) {
+                const d = new Date(dateStr);
+                if (!isNaN(d.getTime())) return d;
+              }
+            }
+          } catch { /* ignore */ }
+        }
+        return new Date(img.created_at);
+      };
+
+      // Filter all images by observation date range
       const inRange = allImages.filter((img) => {
-        const d = new Date(img.created_at);
+        const d = getObsDate(img);
         return d >= startDate && d <= endDate;
       });
 
@@ -163,11 +182,9 @@ export default function CatalogCollectionView({
         ? getAllNGCEntries?.() ?? catalog.objects
         : catalog.objects;
 
-      let added = 0;
-      const existingIds = new Set(collectionImages.map((img) => img.id));
-
+      // Build set of image IDs that should be in the collection
+      const inRangeIds = new Set<string>();
       for (const image of inRange) {
-        if (existingIds.has(image.id)) continue;
         if (!image.annotations) continue;
 
         let annotations: CatalogObject[] = [];
@@ -177,7 +194,6 @@ export default function CatalogCollectionView({
             : image.annotations;
         } catch { continue; }
 
-        // Check if any annotation matches a catalog entry
         let matches = false;
         for (const annotation of annotations) {
           if (!annotation.name) continue;
@@ -192,16 +208,37 @@ export default function CatalogCollectionView({
         }
 
         if (matches) {
-          await imageApi.addToCollection(image.id, collection.id);
+          inRangeIds.add(image.id);
+        }
+      }
+
+      // Add new matches
+      let added = 0;
+      const existingIds = new Set(collectionImages.map((img) => img.id));
+      for (const id of inRangeIds) {
+        if (!existingIds.has(id)) {
+          await imageApi.addToCollection(id, collection.id);
           added++;
         }
       }
 
-      if (added > 0) {
-        toast.success(`Added ${added} image${added !== 1 ? "s" : ""} matching ${catalog.name}`);
+      // Remove images that no longer match the date range
+      let removed = 0;
+      for (const img of collectionImages) {
+        if (!inRangeIds.has(img.id)) {
+          await imageApi.removeFromCollection(img.id, collection.id);
+          removed++;
+        }
+      }
+
+      const parts: string[] = [];
+      if (added > 0) parts.push(`added ${added}`);
+      if (removed > 0) parts.push(`removed ${removed}`);
+      if (parts.length > 0) {
+        toast.success(`${parts.join(", ")} image${added + removed !== 1 ? "s" : ""}`);
         onImagesChanged?.();
       } else {
-        toast.info("No new matching images found in date range");
+        toast.info("Collection is up to date");
       }
     } catch (e) {
       toast.error("Auto-populate failed: " + e);

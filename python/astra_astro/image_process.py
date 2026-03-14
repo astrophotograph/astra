@@ -548,7 +548,12 @@ def _save_preview(data: np.ndarray, output_path: str) -> None:
     img.save(output_path, "PNG")
 
 
-def quick_preview(input_fits_path: str, output_path: str) -> dict:
+def quick_preview(
+    input_fits_path: str,
+    output_path: str,
+    bg_percent: float = 0.15,
+    sigma: float = 3.0,
+) -> dict:
     """
     Generate a quick preview JPEG/PNG from a FITS file.
 
@@ -558,6 +563,8 @@ def quick_preview(input_fits_path: str, output_path: str) -> dict:
     Args:
         input_fits_path: Path to input FITS file
         output_path: Output path (extension determines format: .jpg, .png)
+        bg_percent: Target background level (0.10-0.30)
+        sigma: Sigma for shadow clipping (2.0-5.0)
 
     Returns:
         Dictionary with success status and output path
@@ -575,6 +582,8 @@ def quick_preview(input_fits_path: str, output_path: str) -> dict:
             output_path=output_path,
             algorithm=StretchAlgorithm.MTF,
             output_format=fmt,
+            bg_percent=bg_percent,
+            sigma=sigma,
         )
 
         return {

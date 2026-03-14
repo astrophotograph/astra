@@ -446,6 +446,8 @@ pub struct RegenerateResult {
 pub async fn regenerate_preview(
     state: State<'_, AppState>,
     id: String,
+    bg_percent: Option<f64>,
+    sigma: Option<f64>,
 ) -> Result<RegenerateResult, String> {
     let mut conn = state.db.get().map_err(|e| e.to_string())?;
     let image = repository::get_image_by_id(&mut conn, &id)
@@ -481,7 +483,7 @@ pub async fn regenerate_preview(
     let output = tokio::task::spawn_blocking({
         let fits = fits_path.clone();
         let out = preview_path_str.clone();
-        move || image_process::quick_preview(&fits, &out)
+        move || image_process::quick_preview(&fits, &out, bg_percent, sigma)
     })
     .await
     .map_err(|e| format!("Task panicked: {}", e))?

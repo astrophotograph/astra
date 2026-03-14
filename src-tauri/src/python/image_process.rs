@@ -443,9 +443,13 @@ pub fn classify_target(object_name: &str) -> Result<TargetInfo, String> {
     })
 }
 
-/// Generate a quick preview JPEG/PNG from a FITS file using Python's statistical stretch.
-/// This produces a much better result than the pure-Rust percentile stretch.
-pub fn quick_preview(input_fits_path: &str, output_path: &str) -> Result<String, String> {
+/// Generate a quick preview JPEG/PNG from a FITS file using Python's MTF stretch.
+pub fn quick_preview(
+    input_fits_path: &str,
+    output_path: &str,
+    bg_percent: Option<f64>,
+    sigma: Option<f64>,
+) -> Result<String, String> {
     Python::with_gil(|py| {
         let astra_astro = py
             .import("astra_astro")
@@ -456,7 +460,15 @@ pub fn quick_preview(input_fits_path: &str, output_path: &str) -> Result<String,
             .map_err(|e| format!("Failed to get image_process module: {}", e))?;
 
         let result = image_process
-            .call_method1("quick_preview", (input_fits_path, output_path))
+            .call_method1(
+                "quick_preview",
+                (
+                    input_fits_path,
+                    output_path,
+                    bg_percent.unwrap_or(0.15),
+                    sigma.unwrap_or(3.0),
+                ),
+            )
             .map_err(|e| format!("Quick preview failed: {}", e))?;
 
         let dict: &Bound<'_, PyDict> = result

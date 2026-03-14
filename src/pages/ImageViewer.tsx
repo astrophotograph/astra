@@ -10,6 +10,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
@@ -400,13 +404,32 @@ export default function ImageViewerPage() {
     }
   };
 
+  // Read default stretch from auto-import config in localStorage
+  const defaultStretch = useMemo(() => {
+    try {
+      const saved = localStorage.getItem("auto_import_config");
+      if (saved) {
+        const cfg = JSON.parse(saved);
+        return { bgPercent: cfg.stretchBgPercent ?? 0.15, sigma: cfg.stretchSigma ?? 3.0 };
+      }
+    } catch { /* ignore */ }
+    return { bgPercent: 0.15, sigma: 3.0 };
+  }, []);
+
+  const STRETCH_PRESETS = [
+    { label: "10% Bg, 3 sigma", bgPercent: 0.10, sigma: 3.0 },
+    { label: "15% Bg, 3 sigma", bgPercent: 0.15, sigma: 3.0 },
+    { label: "20% Bg, 3 sigma", bgPercent: 0.20, sigma: 3.0 },
+    { label: "30% Bg, 2 sigma", bgPercent: 0.30, sigma: 2.0 },
+  ];
+
   // Delete image
-  const handleRegeneratePreview = async () => {
+  const handleRegeneratePreview = async (bgPercent?: number, sigma?: number) => {
     if (!image) return;
     setIsRegenerating(true);
     toast.info("Regenerating preview...");
     try {
-      await imageApi.regeneratePreview(image.id);
+      await imageApi.regeneratePreview(image.id, bgPercent, sigma);
       toast.success("Preview regenerated");
       // Refetch image record and force reload of image data
       await refetch();
@@ -537,17 +560,35 @@ export default function ImageViewerPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                onClick={handleRegeneratePreview}
-                disabled={isRegenerating || (!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits'))}
-              >
-                {isRegenerating ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                )}
-                Regenerate Preview
-              </DropdownMenuItem>
+              {(image?.fits_url || image?.url?.toLowerCase().endsWith('.fit') || image?.url?.toLowerCase().endsWith('.fits')) && (
+                <>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger disabled={isRegenerating}>
+                      {isRegenerating ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4 mr-2" />
+                      )}
+                      Regenerate Preview
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {STRETCH_PRESETS.map((preset) => {
+                        const isDefault = preset.bgPercent === defaultStretch.bgPercent && preset.sigma === defaultStretch.sigma;
+                        return (
+                          <DropdownMenuItem
+                            key={preset.label}
+                            onClick={() => handleRegeneratePreview(preset.bgPercent, preset.sigma)}
+                            disabled={isRegenerating}
+                          >
+                            {preset.label}{isDefault ? " *" : ""}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                </>
+              )}
               <DropdownMenuItem
                 className="text-destructive"
                 onClick={() => setDeleteDialogOpen(true)}

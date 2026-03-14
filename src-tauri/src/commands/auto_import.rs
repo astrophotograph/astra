@@ -28,6 +28,8 @@ pub struct AutoImportConfig {
     pub plate_solve_solver: Option<String>,
     pub plate_solve_api_key: Option<String>,
     pub plate_solve_api_url: Option<String>,
+    pub stretch_bg_percent: Option<f64>,
+    pub stretch_sigma: Option<f64>,
 }
 
 /// Check if a file path matches stacked image patterns
@@ -208,7 +210,7 @@ fn run_scan_cycle(
                     );
                     let preview_path_str = preview_path.to_string_lossy().to_string();
 
-                    match py_image::quick_preview(&fits_path_str, &preview_path_str) {
+                    match py_image::quick_preview(&fits_path_str, &preview_path_str, config.stretch_bg_percent, config.stretch_sigma) {
                         Ok(output_path) => {
                             log::info!("Generated preview: {}", output_path);
                             // Update the image URL to point to the preview JPEG

@@ -1945,6 +1945,32 @@ export default function AdminPage() {
                   )}
                 </div>
 
+                {/* Stretch Preset */}
+                <div className="space-y-2">
+                  <Label className="text-base font-medium">Stretch Preset</Label>
+                  <p className="text-sm text-muted-foreground">
+                    MTF stretch parameters for preview generation
+                  </p>
+                  <Select
+                    value={`${autoImportConfig.stretchBgPercent ?? 0.15}:${autoImportConfig.stretchSigma ?? 3.0}`}
+                    onValueChange={(val) => {
+                      const [bg, sig] = val.split(":").map(Number);
+                      const newConfig = { ...autoImportConfig, stretchBgPercent: bg, stretchSigma: sig };
+                      saveAutoImportConfig(newConfig);
+                    }}
+                  >
+                    <SelectTrigger className="w-64">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0.1:3">10% Bg, 3 sigma — darker</SelectItem>
+                      <SelectItem value="0.15:3">15% Bg, 3 sigma — default</SelectItem>
+                      <SelectItem value="0.2:3">20% Bg, 3 sigma — brighter</SelectItem>
+                      <SelectItem value="0.3:2">30% Bg, 2 sigma — most detail</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
                 {/* Plate Solve on Import */}
                 <div className="flex items-center justify-between">
                   <div>
