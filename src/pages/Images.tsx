@@ -3,9 +3,10 @@
  * Supports multi-select for batch operations (regenerate preview, plate solve)
  */
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,6 +68,29 @@ export default function Images() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
+
+  // Refresh when auto-import adds new images
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten = listen("auto-import-status", (event: any) => {
+      if (!cancelled && event.payload?.lastImportCount > 0) {
+        queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+      }
+    });
+
+    // Also poll periodically as fallback (every 10s)
+    const interval = setInterval(() => {
+      if (!cancelled) {
+        queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+      }
+    }, 10000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      unlisten.then((fn) => fn());
+    };
+  }, [queryClient]);
 
   // Sort by created_at descending, filter by search
   const filtered = useMemo(() => {

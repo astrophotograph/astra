@@ -14,6 +14,10 @@ pub struct ShareManifest {
     pub image_count: usize,
     pub updated_at: String,
     pub images: Vec<ManifestImage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_range_start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_range_end: Option<String>,
 }
 
 /// An image entry in the manifest.
@@ -27,6 +31,8 @@ pub struct ManifestImage {
     pub image_path: String,
     pub thumb_path: String,
     pub created_at: String,
+    #[serde(default)]
+    pub favorite: bool,
     /// Catalog object IDs matched from annotations (e.g., ["M31", "M32"])
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub catalog_ids: Vec<String>,
@@ -38,6 +44,7 @@ pub fn build_manifest(
     collection_description: Option<&str>,
     template: Option<&str>,
     images: Vec<ManifestImage>,
+    date_range: Option<(&str, &str)>,
 ) -> ShareManifest {
     ShareManifest {
         version: 1,
@@ -47,5 +54,7 @@ pub fn build_manifest(
         image_count: images.len(),
         updated_at: Utc::now().to_rfc3339(),
         images,
+        date_range_start: date_range.map(|(s, _)| s.to_string()),
+        date_range_end: date_range.map(|(_, e)| e.to_string()),
     }
 }

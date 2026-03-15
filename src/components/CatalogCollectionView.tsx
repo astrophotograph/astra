@@ -4,7 +4,7 @@
  * Shows a grid of all catalog objects with indicators for which ones have images.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,7 @@ interface CatalogCollectionViewProps {
   collectionImages: Image[];
   allCollections: Collection[];
   onImagesChanged?: () => void;
+  onSyncRequested?: () => void;
 }
 
 type SortField = "number" | "exposure" | "type" | "constellation";
@@ -86,6 +87,7 @@ export default function CatalogCollectionView({
   collectionImages,
   allCollections,
   onImagesChanged,
+  onSyncRequested,
 }: CatalogCollectionViewProps) {
   // Determine if this is a scoped collection (marathon) or library-wide catalog.
   const sameTemplateCollections = allCollections
@@ -121,6 +123,8 @@ export default function CatalogCollectionView({
   const [dateStart, setDateStart] = useState(savedFilter?.start ?? "");
   const [dateEnd, setDateEnd] = useState(savedFilter?.end ?? "");
   const [isPopulating, setIsPopulating] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(false);
+  const prevImageCountRef = useRef(collectionImages.length);
 
   // Sync date inputs when saved filter changes
   useEffect(() => {
@@ -246,6 +250,26 @@ export default function CatalogCollectionView({
       setIsPopulating(false);
     }
   }, [dateStart, dateEnd, catalog, allImages, collectionImages, collection.id, saveDateFilter, onImagesChanged]);
+
+  // Auto-refresh: periodically re-populate and sync if images changed
+  useEffect(() => {
+    if (!autoRefresh || !dateStart || !dateEnd) return;
+
+    const interval = setInterval(async () => {
+      if (isPopulating) return;
+      await autoPopulate();
+    }, 30000); // every 30 seconds
+
+    return () => clearInterval(interval);
+  }, [autoRefresh, dateStart, dateEnd, isPopulating, autoPopulate]);
+
+  // Detect new images added and trigger sync
+  useEffect(() => {
+    if (autoRefresh && collectionImages.length > prevImageCountRef.current) {
+      onSyncRequested?.();
+    }
+    prevImageCountRef.current = collectionImages.length;
+  }, [collectionImages.length, autoRefresh, onSyncRequested]);
 
   const [selectedObject, setSelectedObject] = useState<CatalogEntry | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -483,7 +507,7 @@ export default function CatalogCollectionView({
               <Input
                 type="date"
                 value={dateStart}
-                onChange={(e) => setDateStart(e.target.value)}
+                onChange={(e) => { setDateStart(e.target.value); e.target.blur(); }}
                 className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1"
               />
             </div>
@@ -492,7 +516,7 @@ export default function CatalogCollectionView({
               <Input
                 type="date"
                 value={dateEnd}
-                onChange={(e) => setDateEnd(e.target.value)}
+                onChange={(e) => { setDateEnd(e.target.value); e.target.blur(); }}
                 className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1"
               />
             </div>
@@ -517,6 +541,17 @@ export default function CatalogCollectionView({
               <span className="text-xs text-slate-400">
                 {collectionImages.length} image{collectionImages.length !== 1 ? "s" : ""} in collection
               </span>
+            )}
+            {savedFilter && (
+              <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer ml-auto">
+                <input
+                  type="checkbox"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  className="accent-indigo-500"
+                />
+                Auto-refresh & sync
+              </label>
             )}
           </div>
         </div>

@@ -184,6 +184,20 @@ export default function CollectionDetailPage() {
       .map((img) => img.url as string);
   }, [collectionImages]);
 
+  // Refresh images when auto-import adds new ones
+  useEffect(() => {
+    let cancelled = false;
+    const unlisten = listen("auto-import-status", (event: any) => {
+      if (!cancelled && event.payload?.lastImportCount > 0) {
+        queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+        if (id) {
+          queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(id) });
+        }
+      }
+    });
+    return () => { cancelled = true; unlisten.then((fn) => fn()); };
+  }, [queryClient, id]);
+
   // Load publish status
   useEffect(() => {
     if (id) {
@@ -928,6 +942,11 @@ export default function CollectionDetailPage() {
           allCollections={allCollections}
           onImagesChanged={() => {
             queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
+          }}
+          onSyncRequested={() => {
+            if (!isSyncing && publishStatus) {
+              handleSync();
+            }
           }}
         />
       ) : collectionImages.length === 0 ? (

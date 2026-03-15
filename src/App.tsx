@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { LocationProvider } from "./contexts/LocationContext";
 import { EquipmentProvider } from "./contexts/EquipmentContext";
+import { autoImportApi, type AutoImportConfig } from "./lib/tauri/commands";
 import Layout from "./components/Layout";
 import Home from "./pages/Home";
 import Todo from "./pages/Todo";
@@ -16,6 +18,26 @@ import Slideshow from "./pages/Slideshow";
 import Admin from "./pages/Admin";
 
 function App() {
+  // Auto-start auto-import if it was enabled in settings
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("auto_import_config");
+      if (saved) {
+        const config: AutoImportConfig = JSON.parse(saved);
+        if (config.enabled && config.watchFolders.length > 0) {
+          // Merge plate solve settings from localStorage
+          const fullConfig: AutoImportConfig = {
+            ...config,
+            plateSolveSolver: localStorage.getItem("plate_solve_solver") || undefined,
+            plateSolveApiKey: localStorage.getItem("astrometry_api_key") || undefined,
+            plateSolveApiUrl: localStorage.getItem("local_astrometry_url") || undefined,
+          };
+          autoImportApi.start(fullConfig).catch(console.error);
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   return (
     <LocationProvider>
       <EquipmentProvider>

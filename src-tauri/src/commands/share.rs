@@ -224,6 +224,7 @@ pub async fn publish_collection(
             image_path: format!("images/{}.{}", image.id, ext),
             thumb_path: format!("thumbs/{}.jpg", image.id),
             created_at: image.created_at.to_string(),
+            favorite: image.favorite,
             catalog_ids: vec![],
         });
 
@@ -236,6 +237,7 @@ pub async fn publish_collection(
         collection.description.as_deref(),
         collection.template.as_deref(),
         manifest_images,
+        None,
     );
     let manifest_json = serde_json::to_string_pretty(&share_manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
@@ -369,6 +371,7 @@ pub async fn sync_collection(
             image_path: format!("images/{}.{}", image.id, ext),
             thumb_path: format!("thumbs/{}.jpg", image.id),
             created_at: image.created_at.to_string(),
+            favorite: image.favorite,
             catalog_ids: vec![],
         });
 
@@ -381,6 +384,7 @@ pub async fn sync_collection(
         collection.description.as_deref(),
         collection.template.as_deref(),
         manifest_images,
+        None,
     );
     let manifest_json = serde_json::to_string_pretty(&share_manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
@@ -675,44 +679,60 @@ pub async fn publish_collection_gallery(
         .map_err(|e| e.to_string())?;
     drop(conn);
 
-    // Generate or reuse share_id
+    // Generate or reuse share_id, and get previously uploaded image IDs
     let existing_status = get_publish_status_from_metadata(&collection.metadata);
     let share_id = existing_status
-        .map(|s| s.share_id)
-        .unwrap_or_else(|| generate_share_id());
+        .as_ref()
+        .map(|s| s.share_id.clone())
+        .unwrap_or_else(generate_share_id);
+    let already_uploaded: std::collections::HashSet<String> = existing_status
+        .as_ref()
+        .map(|s| s.uploaded_image_ids.iter().cloned().collect())
+        .unwrap_or_default();
 
-    // Build file list for presign request
+    // Build manifest entries for ALL images, but only upload new image files
     let collection_slug = slugify(&collection.name);
     let mut files_to_upload: Vec<(String, String, Vec<u8>)> = Vec::new(); // (key, content_type, data)
     let mut manifest_images = Vec::new();
     let mut uploaded_ids = Vec::new();
     let total_images = images.len();
+    let mut new_images = 0usize;
+    let mut skipped_images = 0usize;
 
     for (idx, image) in images.iter().enumerate() {
-        emit_progress(&app, "preparing", &format!("Preparing image {}/{}...", idx + 1, total_images), idx + 1, total_images);
-        let Some(file_path) = &image.url else { continue };
+        let Some(file_path) = &image.url else {
+            log::warn!("Skipping image with no URL: {} ({})", image.id, image.filename);
+            continue;
+        };
         let path = std::path::Path::new(file_path);
         if !path.exists() {
             log::warn!("Skipping missing file: {}", file_path);
             continue;
         }
 
-        let file_data = std::fs::read(path)
-            .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
         let content_type = mime_for_path(path);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-
-        // Full image
         let image_key = format!("images/{}.{}", image.id, ext);
-        files_to_upload.push((image_key.clone(), content_type.to_string(), file_data.clone()));
-
-        // Thumbnail
-        let thumb_data = generate_thumbnail(&file_data)?;
         let thumb_key = format!("thumbs/{}.jpg", image.id);
-        files_to_upload.push((thumb_key.clone(), "image/jpeg".to_string(), thumb_data));
 
-        // Extract catalog IDs from annotations (e.g., "M 31" -> "M31")
-        let catalog_ids = image.annotations.as_ref().map(|ann| {
+        // Only read and queue upload for images not already uploaded
+        if !already_uploaded.contains(&image.id) {
+            emit_progress(&app, "preparing", &format!("Preparing new image {}/{}...", idx + 1, total_images), idx + 1, total_images);
+
+            let file_data = std::fs::read(path)
+                .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
+
+            let thumb_data = generate_thumbnail(&file_data)?;
+
+            files_to_upload.push((image_key.clone(), content_type.to_string(), file_data));
+            files_to_upload.push((thumb_key.clone(), "image/jpeg".to_string(), thumb_data));
+            new_images += 1;
+        } else {
+            skipped_images += 1;
+        }
+
+        // Extract catalog IDs from annotations
+        let mut catalog_ids: Vec<String> = image.annotations.as_ref().map(|ann| {
             serde_json::from_str::<Vec<serde_json::Value>>(ann)
                 .unwrap_or_default()
                 .iter()
@@ -724,6 +744,31 @@ pub async fn publish_collection_gallery(
                 .collect::<Vec<_>>()
         }).unwrap_or_default();
 
+        // Also extract Messier IDs from image summary (handles cases where
+        // plate solve returns NGC numbers but summary has the Messier name)
+        if let Some(summary) = &image.summary {
+            let normalized = summary.replace(' ', "").to_uppercase();
+            // Check for M followed by 1-3 digits
+            let bytes = normalized.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if bytes[i] == b'M' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+                    let start = i;
+                    i += 1;
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    let mid = &normalized[start..i];
+                    if !catalog_ids.contains(&mid.to_string()) {
+                        catalog_ids.push(mid.to_string());
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        // Always include in manifest (even if image already uploaded)
         manifest_images.push(manifest::ManifestImage {
             id: image.id.clone(),
             filename: image.filename.clone(),
@@ -732,11 +777,25 @@ pub async fn publish_collection_gallery(
             image_path: image_key,
             thumb_path: thumb_key,
             created_at: image.created_at.to_string(),
+            favorite: image.favorite,
             catalog_ids,
         });
 
         uploaded_ids.push(image.id.clone());
     }
+
+    if skipped_images > 0 {
+        log::info!("Incremental sync: {} new images, {} already uploaded", new_images, skipped_images);
+    }
+
+    // Extract date filter from collection metadata
+    let date_range = collection.metadata.as_ref().and_then(|meta| {
+        let parsed: serde_json::Value = serde_json::from_str(meta).ok()?;
+        let df = parsed.get("dateFilter")?;
+        let start = df.get("start")?.as_str()?.to_string();
+        let end = df.get("end")?.as_str()?.to_string();
+        Some((start, end))
+    });
 
     // Build manifest
     let share_manifest = manifest::build_manifest(
@@ -744,6 +803,7 @@ pub async fn publish_collection_gallery(
         collection.description.as_deref(),
         collection.template.as_deref(),
         manifest_images,
+        date_range.as_ref().map(|(s, e)| (s.as_str(), e.as_str())),
     );
     let manifest_json = serde_json::to_string_pretty(&share_manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;

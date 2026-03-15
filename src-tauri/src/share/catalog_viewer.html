@@ -87,7 +87,7 @@
 
   .catalog-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
     gap: 6px;
     padding: 1rem 2rem 3rem;
     max-width: 1400px;
@@ -148,15 +148,116 @@
     color: #6b7280;
   }
 
-  .catalog-item .name-label {
+  .catalog-item .count-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #6366f1;
+    color: #fff;
     font-size: 0.6rem;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 8px;
+  }
+
+  /* Image picker overlay */
+  .picker {
+    position: fixed;
+    inset: 0;
+    z-index: 900;
+    background: rgba(0,0,0,0.85);
+    display: none;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .picker.open { display: flex; }
+
+  .picker-content {
+    background: #111525;
+    border-radius: 8px;
+    padding: 1.5rem;
+    max-width: 700px;
+    width: 90vw;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .picker h2 {
+    color: #e8ecf4;
+    font-size: 1.2rem;
+    margin-bottom: 0.25rem;
+  }
+
+  .picker .subtitle {
+    color: #6b7280;
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .picker-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px;
+  }
+
+  .picker-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+  }
+
+  .picker-item:hover { border-color: #6366f1; }
+
+  .picker-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .picker-item .picker-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0,0,0,0.8));
+    padding: 1.5rem 0.5rem 0.4rem;
+    font-size: 0.7rem;
+    color: #d1d5db;
+  }
+
+  .picker-item .fav-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    color: #fbbf24;
+    font-size: 0.8rem;
+  }
+
+  .picker .close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: #9ca3af;
+    font-size: 2rem;
+    cursor: pointer;
+  }
+
+  .catalog-item .name-label {
+    font-size: 1.05rem;
     color: #6b7280;
     text-align: center;
-    padding: 0 4px;
+    padding: 0 8px;
   }
 
   .catalog-item .type-label {
-    font-size: 0.55rem;
+    font-size: 0.85rem;
     color: #4b5563;
   }
 
@@ -219,11 +320,42 @@
     color: #6b7280;
   }
 
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 2rem;
+    max-width: 1400px;
+    margin: 0 auto 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .filter-btn {
+    padding: 0.35rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid #2a3040;
+    background: transparent;
+    color: #8891a4;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .filter-btn:hover { border-color: #6366f1; color: #c8cdd8; }
+  .filter-btn.active { background: #6366f1; border-color: #6366f1; color: #fff; }
+
+  .refresh-time {
+    margin-left: auto;
+    font-size: 0.75rem;
+    color: #4b5563;
+  }
+
   @media (max-width: 640px) {
-    .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; padding: 0.5rem; }
+    .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px; padding: 0.5rem; }
     header { padding: 1rem; }
     header h1 { font-size: 1.3rem; }
     .stats { gap: 1rem; }
+    .controls { padding: 0 0.5rem; }
   }
 </style>
 </head>
@@ -250,9 +382,25 @@
   <div class="updated" id="updated"></div>
 </header>
 
+<div class="controls">
+  <button class="filter-btn active" id="filter-all" onclick="setFilter('all')">All</button>
+  <button class="filter-btn" id="filter-captured" onclick="setFilter('captured')">Captured</button>
+  <button class="filter-btn" id="filter-missing" onclick="setFilter('missing')">Missing</button>
+  <span class="refresh-time" id="refresh-time"></span>
+</div>
+
 <div class="catalog-grid" id="grid"></div>
 
 <div class="powered-by">Shared via <a href="https://astra.gallery">Astra</a></div>
+
+<div class="picker" id="picker">
+  <button class="close" onclick="closePicker()">&times;</button>
+  <div class="picker-content">
+    <h2 id="picker-title"></h2>
+    <p class="subtitle" id="picker-subtitle"></p>
+    <div class="picker-grid" id="picker-grid"></div>
+  </div>
+</div>
 
 <div class="lightbox" id="lightbox">
   <button class="close" onclick="closeLightbox()">&times;</button>
@@ -377,7 +525,8 @@ var MESSIER = [
 
 (function() {
   var manifest = null;
-  var imageMap = {}; // M id -> manifest image
+  var imageMap = {}; // M id -> array of manifest images
+  var currentFilter = 'all'; // 'all', 'captured', 'missing'
 
   async function fetchManifest() {
     try {
@@ -387,21 +536,40 @@ var MESSIER = [
     } catch(e) { return null; }
   }
 
+  // Pick the best thumbnail: favorited first, then most recent
+  function bestImage(images) {
+    if (!images || images.length === 0) return null;
+    var fav = images.find(function(img) { return img.favorite; });
+    if (fav) return fav;
+    // Sort by createdAt descending, return newest
+    return images.slice().sort(function(a, b) {
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    })[0];
+  }
+
   function render(m) {
     document.getElementById('title').textContent = m.collectionName;
     document.title = m.collectionName + ' \u2014 Astra Gallery';
-    document.getElementById('description').textContent = m.collectionDescription || '';
+    var desc = m.collectionDescription || '';
+    if (m.dateRangeStart && m.dateRangeEnd) {
+      var start = new Date(m.dateRangeStart + 'T00:00:00').toLocaleDateString();
+      var end = new Date(m.dateRangeEnd + 'T00:00:00').toLocaleDateString();
+      desc = (desc ? desc + ' \u2014 ' : '') + start + ' to ' + end;
+    }
+    document.getElementById('description').textContent = desc;
     document.getElementById('updated').textContent = 'Updated ' + new Date(m.updatedAt).toLocaleString();
 
-    // Build image map from manifest using catalogIds from annotations
+    // Build image map: M id -> array of images
     imageMap = {};
     for (var i = 0; i < m.images.length; i++) {
       var img = m.images[i];
       var ids = img.catalogIds || [];
       for (var c = 0; c < ids.length; c++) {
         var cid = ids[c].toUpperCase().replace(/\s+/g, '');
-        if (!imageMap[cid]) {
-          imageMap[cid] = img;
+        if (!imageMap[cid]) imageMap[cid] = [];
+        // Avoid duplicates (same image matching multiple times)
+        if (!imageMap[cid].find(function(x) { return x.id === img.id; })) {
+          imageMap[cid].push(img);
         }
       }
     }
@@ -409,7 +577,7 @@ var MESSIER = [
     // Count captured
     var captured = 0;
     for (var j = 0; j < MESSIER.length; j++) {
-      if (imageMap[MESSIER[j].id]) captured++;
+      if (imageMap[MESSIER[j].id] && imageMap[MESSIER[j].id].length > 0) captured++;
     }
     var pct = Math.round((captured / MESSIER.length) * 100);
 
@@ -420,25 +588,50 @@ var MESSIER = [
     document.getElementById('progress-label').textContent =
       captured + ' / ' + MESSIER.length + ' Messier objects (' + pct + '%)';
 
+    // Update refresh time
+    document.getElementById('refresh-time').textContent =
+      'Last refreshed: ' + new Date().toLocaleTimeString();
+
     // Build grid
     var grid = document.getElementById('grid');
     grid.innerHTML = '';
 
     for (var k = 0; k < MESSIER.length; k++) {
       var entry = MESSIER[k];
-      var img = imageMap[entry.id];
-      var div = document.createElement('div');
-      div.className = 'catalog-item ' + (img ? 'captured' : 'missing');
+      var images = imageMap[entry.id] || [];
+      var best = bestImage(images);
 
-      if (img) {
+      // Apply filter
+      if (currentFilter === 'captured' && !best) continue;
+      if (currentFilter === 'missing' && best) continue;
+      var div = document.createElement('div');
+      div.className = 'catalog-item ' + (best ? 'captured' : 'missing');
+
+      if (best) {
         var imgEl = document.createElement('img');
-        imgEl.src = img.thumbPath;
+        imgEl.src = best.thumbPath;
         imgEl.alt = entry.id + (entry.name ? ' - ' + entry.name : '');
         imgEl.loading = 'lazy';
         div.appendChild(imgEl);
-        div.onclick = (function(image, entry) {
-          return function() { openLightbox(image, entry); };
-        })(img, entry);
+
+        // Click handler: if multiple images, show picker; otherwise lightbox
+        div.onclick = (function(imgs, ent) {
+          return function() {
+            if (imgs.length > 1) {
+              openPicker(imgs, ent);
+            } else {
+              openLightbox(imgs[0], ent);
+            }
+          };
+        })(images, entry);
+
+        // Show count badge if multiple images
+        if (images.length > 1) {
+          var badge = document.createElement('div');
+          badge.className = 'count-badge';
+          badge.textContent = images.length;
+          div.appendChild(badge);
+        }
       } else {
         var ph = document.createElement('div');
         ph.className = 'placeholder';
@@ -462,6 +655,75 @@ var MESSIER = [
     }
   }
 
+  function openPicker(images, entry) {
+    document.getElementById('picker-title').textContent =
+      entry.id + (entry.name ? ' \u2014 ' + entry.name : '');
+    document.getElementById('picker-subtitle').textContent =
+      images.length + ' image' + (images.length !== 1 ? 's' : '') + ' \u2014 ' + entry.type;
+
+    var grid = document.getElementById('picker-grid');
+    grid.innerHTML = '';
+
+    // Sort: favorited first, then by date descending
+    var sorted = images.slice().sort(function(a, b) {
+      if (a.favorite && !b.favorite) return -1;
+      if (!a.favorite && b.favorite) return 1;
+      return (b.createdAt || '').localeCompare(a.createdAt || '');
+    });
+
+    for (var i = 0; i < sorted.length; i++) {
+      var img = sorted[i];
+      var item = document.createElement('div');
+      item.className = 'picker-item';
+
+      var imgEl = document.createElement('img');
+      imgEl.src = img.thumbPath;
+      imgEl.alt = img.summary || img.filename;
+      imgEl.loading = 'lazy';
+      item.appendChild(imgEl);
+
+      var lbl = document.createElement('div');
+      lbl.className = 'picker-label';
+      lbl.textContent = img.summary || img.filename;
+      item.appendChild(lbl);
+
+      if (img.favorite) {
+        var fav = document.createElement('div');
+        fav.className = 'fav-badge';
+        fav.textContent = '\u2605';
+        item.appendChild(fav);
+      }
+
+      item.onclick = (function(image, ent) {
+        return function() {
+          closePicker();
+          openLightbox(image, ent);
+        };
+      })(img, entry);
+
+      grid.appendChild(item);
+    }
+
+    document.getElementById('picker').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  window.setFilter = function(mode) {
+    currentFilter = mode;
+    // Update button styles
+    document.querySelectorAll('.filter-btn').forEach(function(btn) {
+      btn.classList.remove('active');
+    });
+    document.getElementById('filter-' + mode).classList.add('active');
+    // Re-render with current manifest
+    if (manifest) render(manifest);
+  };
+
+  window.closePicker = function() {
+    document.getElementById('picker').classList.remove('open');
+    document.body.style.overflow = '';
+  };
+
   function openLightbox(img, entry) {
     document.getElementById('lb-img').src = img.imagePath;
     document.getElementById('lb-caption').textContent =
@@ -476,7 +738,13 @@ var MESSIER = [
   };
 
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') closeLightbox();
+    if (e.key === 'Escape') {
+      if (document.getElementById('lightbox').classList.contains('open')) {
+        closeLightbox();
+      } else if (document.getElementById('picker').classList.contains('open')) {
+        closePicker();
+      }
+    }
   });
 
   // Initial load
