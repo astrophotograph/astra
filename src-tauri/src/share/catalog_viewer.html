@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Astra Gallery</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: #0a0e1a;
+    color: #c8cdd8;
+    min-height: 100vh;
+  }
+
+  header {
+    padding: 2rem 2rem 1rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  header h1 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #e8ecf4;
+    margin-bottom: 0.25rem;
+  }
+
+  header .description {
+    color: #8891a4;
+    font-size: 0.95rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .stats {
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+
+  .stat {
+    text-align: center;
+  }
+
+  .stat-value {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #e8ecf4;
+  }
+
+  .stat-value.teal { color: #80cbc4; }
+
+  .stat-label {
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+
+  .progress-bar {
+    background: #1a1f2e;
+    border-radius: 999px;
+    height: 10px;
+    overflow: hidden;
+    max-width: 100%;
+    margin-bottom: 0.25rem;
+  }
+
+  .progress-bar .fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6);
+    border-radius: 999px;
+    transition: width 0.5s ease;
+  }
+
+  .progress-label {
+    font-size: 0.85rem;
+    color: #8b5cf6;
+    margin-bottom: 1rem;
+  }
+
+  .updated {
+    font-size: 0.8rem;
+    color: #6b7280;
+  }
+
+  .catalog-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 6px;
+    padding: 1rem 2rem 3rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .catalog-item {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #111525;
+    border: 1px solid #1e2538;
+    transition: transform 0.2s, border-color 0.2s;
+    cursor: default;
+  }
+
+  .catalog-item.captured {
+    border-color: #6366f1;
+    cursor: pointer;
+  }
+
+  .catalog-item.captured:hover {
+    transform: scale(1.03);
+    border-color: #8b5cf6;
+  }
+
+  .catalog-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .catalog-item .placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .catalog-item .id-label {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background: rgba(0,0,0,0.7);
+    color: #e8ecf4;
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 2px 5px;
+    border-radius: 3px;
+  }
+
+  .catalog-item.missing .id-label {
+    color: #6b7280;
+  }
+
+  .catalog-item .name-label {
+    font-size: 0.6rem;
+    color: #6b7280;
+    text-align: center;
+    padding: 0 4px;
+  }
+
+  .catalog-item .type-label {
+    font-size: 0.55rem;
+    color: #4b5563;
+  }
+
+  /* Lightbox */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,0.95);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+  }
+
+  .lightbox.open { display: flex; }
+
+  .lightbox img {
+    max-width: 95vw;
+    max-height: 85vh;
+    object-fit: contain;
+    border-radius: 4px;
+  }
+
+  .lightbox .caption {
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+    color: #9ca3af;
+    text-align: center;
+  }
+
+  .lightbox .close {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    background: none;
+    border: none;
+    color: #9ca3af;
+    font-size: 2rem;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0.5rem;
+  }
+
+  .lightbox .close:hover { color: #fff; }
+
+  .powered-by {
+    text-align: center;
+    padding: 1.5rem;
+    color: #4b5563;
+    font-size: 0.75rem;
+  }
+
+  .powered-by a { color: #6366f1; text-decoration: none; }
+  .powered-by a:hover { text-decoration: underline; }
+
+  .loading-msg {
+    text-align: center;
+    padding: 4rem;
+    color: #6b7280;
+  }
+
+  @media (max-width: 640px) {
+    .catalog-grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 4px; padding: 0.5rem; }
+    header { padding: 1rem; }
+    header h1 { font-size: 1.3rem; }
+    .stats { gap: 1rem; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Loading...</h1>
+  <p class="description" id="description"></p>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value" id="captured-count">0</div>
+      <div class="stat-label">captured</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="total-count">110</div>
+      <div class="stat-label">total</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value teal" id="completion">0%</div>
+      <div class="stat-label">complete</div>
+    </div>
+  </div>
+  <div class="progress-bar"><div class="fill" id="progress-fill"></div></div>
+  <div class="progress-label" id="progress-label"></div>
+  <div class="updated" id="updated"></div>
+</header>
+
+<div class="catalog-grid" id="grid"></div>
+
+<div class="powered-by">Shared via <a href="https://astra.gallery">Astra</a></div>
+
+<div class="lightbox" id="lightbox">
+  <button class="close" onclick="closeLightbox()">&times;</button>
+  <img id="lb-img" src="" alt="">
+  <div class="caption" id="lb-caption"></div>
+</div>
+
+<script>
+// Messier catalog (embedded)
+var MESSIER = [
+  {id:"M1",name:"Crab Nebula",type:"Supernova Remnant",con:"Tau"},
+  {id:"M2",name:"",type:"Globular Cluster",con:"Aqr"},
+  {id:"M3",name:"",type:"Globular Cluster",con:"CVn"},
+  {id:"M4",name:"",type:"Globular Cluster",con:"Sco"},
+  {id:"M5",name:"",type:"Globular Cluster",con:"Ser"},
+  {id:"M6",name:"Butterfly Cluster",type:"Open Cluster",con:"Sco"},
+  {id:"M7",name:"Ptolemy's Cluster",type:"Open Cluster",con:"Sco"},
+  {id:"M8",name:"Lagoon Nebula",type:"Emission Nebula",con:"Sgr"},
+  {id:"M9",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M10",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M11",name:"Wild Duck Cluster",type:"Open Cluster",con:"Sct"},
+  {id:"M12",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M13",name:"Hercules Cluster",type:"Globular Cluster",con:"Her"},
+  {id:"M14",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M15",name:"",type:"Globular Cluster",con:"Peg"},
+  {id:"M16",name:"Eagle Nebula",type:"Emission Nebula",con:"Ser"},
+  {id:"M17",name:"Omega Nebula",type:"Emission Nebula",con:"Sgr"},
+  {id:"M18",name:"",type:"Open Cluster",con:"Sgr"},
+  {id:"M19",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M20",name:"Trifid Nebula",type:"Emission Nebula",con:"Sgr"},
+  {id:"M21",name:"",type:"Open Cluster",con:"Sgr"},
+  {id:"M22",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M23",name:"",type:"Open Cluster",con:"Sgr"},
+  {id:"M24",name:"Sagittarius Star Cloud",type:"Star Cloud",con:"Sgr"},
+  {id:"M25",name:"",type:"Open Cluster",con:"Sgr"},
+  {id:"M26",name:"",type:"Open Cluster",con:"Sct"},
+  {id:"M27",name:"Dumbbell Nebula",type:"Planetary Nebula",con:"Vul"},
+  {id:"M28",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M29",name:"",type:"Open Cluster",con:"Cyg"},
+  {id:"M30",name:"",type:"Globular Cluster",con:"Cap"},
+  {id:"M31",name:"Andromeda Galaxy",type:"Spiral Galaxy",con:"And"},
+  {id:"M32",name:"",type:"Elliptical Galaxy",con:"And"},
+  {id:"M33",name:"Triangulum Galaxy",type:"Spiral Galaxy",con:"Tri"},
+  {id:"M34",name:"",type:"Open Cluster",con:"Per"},
+  {id:"M35",name:"",type:"Open Cluster",con:"Gem"},
+  {id:"M36",name:"",type:"Open Cluster",con:"Aur"},
+  {id:"M37",name:"",type:"Open Cluster",con:"Aur"},
+  {id:"M38",name:"",type:"Open Cluster",con:"Aur"},
+  {id:"M39",name:"",type:"Open Cluster",con:"Cyg"},
+  {id:"M40",name:"Winnecke 4",type:"Double Star",con:"UMa"},
+  {id:"M41",name:"",type:"Open Cluster",con:"CMa"},
+  {id:"M42",name:"Orion Nebula",type:"Emission Nebula",con:"Ori"},
+  {id:"M43",name:"De Mairan's Nebula",type:"Emission Nebula",con:"Ori"},
+  {id:"M44",name:"Beehive Cluster",type:"Open Cluster",con:"Cnc"},
+  {id:"M45",name:"Pleiades",type:"Open Cluster",con:"Tau"},
+  {id:"M46",name:"",type:"Open Cluster",con:"Pup"},
+  {id:"M47",name:"",type:"Open Cluster",con:"Pup"},
+  {id:"M48",name:"",type:"Open Cluster",con:"Hya"},
+  {id:"M49",name:"",type:"Elliptical Galaxy",con:"Vir"},
+  {id:"M50",name:"",type:"Open Cluster",con:"Mon"},
+  {id:"M51",name:"Whirlpool Galaxy",type:"Spiral Galaxy",con:"CVn"},
+  {id:"M52",name:"",type:"Open Cluster",con:"Cas"},
+  {id:"M53",name:"",type:"Globular Cluster",con:"Com"},
+  {id:"M54",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M55",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M56",name:"",type:"Globular Cluster",con:"Lyr"},
+  {id:"M57",name:"Ring Nebula",type:"Planetary Nebula",con:"Lyr"},
+  {id:"M58",name:"",type:"Barred Spiral Galaxy",con:"Vir"},
+  {id:"M59",name:"",type:"Elliptical Galaxy",con:"Vir"},
+  {id:"M60",name:"",type:"Elliptical Galaxy",con:"Vir"},
+  {id:"M61",name:"",type:"Spiral Galaxy",con:"Vir"},
+  {id:"M62",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M63",name:"Sunflower Galaxy",type:"Spiral Galaxy",con:"CVn"},
+  {id:"M64",name:"Black Eye Galaxy",type:"Spiral Galaxy",con:"Com"},
+  {id:"M65",name:"Leo Triplet",type:"Spiral Galaxy",con:"Leo"},
+  {id:"M66",name:"Leo Triplet",type:"Spiral Galaxy",con:"Leo"},
+  {id:"M67",name:"",type:"Open Cluster",con:"Cnc"},
+  {id:"M68",name:"",type:"Globular Cluster",con:"Hya"},
+  {id:"M69",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M70",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M71",name:"",type:"Globular Cluster",con:"Sge"},
+  {id:"M72",name:"",type:"Globular Cluster",con:"Aqr"},
+  {id:"M73",name:"",type:"Asterism",con:"Aqr"},
+  {id:"M74",name:"Phantom Galaxy",type:"Spiral Galaxy",con:"Psc"},
+  {id:"M75",name:"",type:"Globular Cluster",con:"Sgr"},
+  {id:"M76",name:"Little Dumbbell",type:"Planetary Nebula",con:"Per"},
+  {id:"M77",name:"Cetus A",type:"Spiral Galaxy",con:"Cet"},
+  {id:"M78",name:"",type:"Reflection Nebula",con:"Ori"},
+  {id:"M79",name:"",type:"Globular Cluster",con:"Lep"},
+  {id:"M80",name:"",type:"Globular Cluster",con:"Sco"},
+  {id:"M81",name:"Bode's Galaxy",type:"Spiral Galaxy",con:"UMa"},
+  {id:"M82",name:"Cigar Galaxy",type:"Starburst Galaxy",con:"UMa"},
+  {id:"M83",name:"Southern Pinwheel",type:"Barred Spiral Galaxy",con:"Hya"},
+  {id:"M84",name:"",type:"Lenticular Galaxy",con:"Vir"},
+  {id:"M85",name:"",type:"Lenticular Galaxy",con:"Com"},
+  {id:"M86",name:"",type:"Lenticular Galaxy",con:"Vir"},
+  {id:"M87",name:"Virgo A",type:"Elliptical Galaxy",con:"Vir"},
+  {id:"M88",name:"",type:"Spiral Galaxy",con:"Com"},
+  {id:"M89",name:"",type:"Elliptical Galaxy",con:"Vir"},
+  {id:"M90",name:"",type:"Spiral Galaxy",con:"Vir"},
+  {id:"M91",name:"",type:"Barred Spiral Galaxy",con:"Com"},
+  {id:"M92",name:"",type:"Globular Cluster",con:"Her"},
+  {id:"M93",name:"",type:"Open Cluster",con:"Pup"},
+  {id:"M94",name:"",type:"Spiral Galaxy",con:"CVn"},
+  {id:"M95",name:"",type:"Barred Spiral Galaxy",con:"Leo"},
+  {id:"M96",name:"",type:"Spiral Galaxy",con:"Leo"},
+  {id:"M97",name:"Owl Nebula",type:"Planetary Nebula",con:"UMa"},
+  {id:"M98",name:"",type:"Spiral Galaxy",con:"Com"},
+  {id:"M99",name:"",type:"Spiral Galaxy",con:"Com"},
+  {id:"M100",name:"",type:"Spiral Galaxy",con:"Com"},
+  {id:"M101",name:"Pinwheel Galaxy",type:"Spiral Galaxy",con:"UMa"},
+  {id:"M102",name:"Spindle Galaxy",type:"Lenticular Galaxy",con:"Dra"},
+  {id:"M103",name:"",type:"Open Cluster",con:"Cas"},
+  {id:"M104",name:"Sombrero Galaxy",type:"Spiral Galaxy",con:"Vir"},
+  {id:"M105",name:"",type:"Elliptical Galaxy",con:"Leo"},
+  {id:"M106",name:"",type:"Spiral Galaxy",con:"CVn"},
+  {id:"M107",name:"",type:"Globular Cluster",con:"Oph"},
+  {id:"M108",name:"",type:"Barred Spiral Galaxy",con:"UMa"},
+  {id:"M109",name:"",type:"Barred Spiral Galaxy",con:"UMa"},
+  {id:"M110",name:"",type:"Elliptical Galaxy",con:"And"}
+];
+
+(function() {
+  var manifest = null;
+  var imageMap = {}; // M id -> manifest image
+
+  async function fetchManifest() {
+    try {
+      var resp = await fetch('manifest.json?t=' + Date.now());
+      if (!resp.ok) return null;
+      return await resp.json();
+    } catch(e) { return null; }
+  }
+
+  function render(m) {
+    document.getElementById('title').textContent = m.collectionName;
+    document.title = m.collectionName + ' \u2014 Astra Gallery';
+    document.getElementById('description').textContent = m.collectionDescription || '';
+    document.getElementById('updated').textContent = 'Updated ' + new Date(m.updatedAt).toLocaleString();
+
+    // Build image map from manifest using catalogIds from annotations
+    imageMap = {};
+    for (var i = 0; i < m.images.length; i++) {
+      var img = m.images[i];
+      var ids = img.catalogIds || [];
+      for (var c = 0; c < ids.length; c++) {
+        var cid = ids[c].toUpperCase().replace(/\s+/g, '');
+        if (!imageMap[cid]) {
+          imageMap[cid] = img;
+        }
+      }
+    }
+
+    // Count captured
+    var captured = 0;
+    for (var j = 0; j < MESSIER.length; j++) {
+      if (imageMap[MESSIER[j].id]) captured++;
+    }
+    var pct = Math.round((captured / MESSIER.length) * 100);
+
+    document.getElementById('captured-count').textContent = captured;
+    document.getElementById('total-count').textContent = MESSIER.length;
+    document.getElementById('completion').textContent = pct + '%';
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-label').textContent =
+      captured + ' / ' + MESSIER.length + ' Messier objects (' + pct + '%)';
+
+    // Build grid
+    var grid = document.getElementById('grid');
+    grid.innerHTML = '';
+
+    for (var k = 0; k < MESSIER.length; k++) {
+      var entry = MESSIER[k];
+      var img = imageMap[entry.id];
+      var div = document.createElement('div');
+      div.className = 'catalog-item ' + (img ? 'captured' : 'missing');
+
+      if (img) {
+        var imgEl = document.createElement('img');
+        imgEl.src = img.thumbPath;
+        imgEl.alt = entry.id + (entry.name ? ' - ' + entry.name : '');
+        imgEl.loading = 'lazy';
+        div.appendChild(imgEl);
+        div.onclick = (function(image, entry) {
+          return function() { openLightbox(image, entry); };
+        })(img, entry);
+      } else {
+        var ph = document.createElement('div');
+        ph.className = 'placeholder';
+        var nameEl = document.createElement('div');
+        nameEl.className = 'name-label';
+        nameEl.textContent = entry.name || entry.type;
+        ph.appendChild(nameEl);
+        var typeEl = document.createElement('div');
+        typeEl.className = 'type-label';
+        typeEl.textContent = entry.con;
+        ph.appendChild(typeEl);
+        div.appendChild(ph);
+      }
+
+      var label = document.createElement('div');
+      label.className = 'id-label';
+      label.textContent = entry.id;
+      div.appendChild(label);
+
+      grid.appendChild(div);
+    }
+  }
+
+  function openLightbox(img, entry) {
+    document.getElementById('lb-img').src = img.imagePath;
+    document.getElementById('lb-caption').textContent =
+      entry.id + (entry.name ? ' \u2014 ' + entry.name : '') + ' (' + entry.type + ')';
+    document.getElementById('lightbox').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  window.closeLightbox = function() {
+    document.getElementById('lightbox').classList.remove('open');
+    document.body.style.overflow = '';
+  };
+
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeLightbox();
+  });
+
+  // Initial load
+  fetchManifest().then(function(m) {
+    if (!m) {
+      document.getElementById('title').textContent = 'Gallery Not Found';
+      return;
+    }
+    manifest = m;
+    render(m);
+  });
+
+  // Auto-refresh every 30s
+  setInterval(function() {
+    fetchManifest().then(function(m) {
+      if (!m) return;
+      manifest = m;
+      render(m);
+    });
+  }, 30000);
+})();
+</script>
+</body>
+</html>

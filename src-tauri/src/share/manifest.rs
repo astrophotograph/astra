@@ -27,6 +27,9 @@ pub struct ManifestImage {
     pub image_path: String,
     pub thumb_path: String,
     pub created_at: String,
+    /// Catalog object IDs matched from annotations (e.g., ["M31", "M32"])
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_ids: Vec<String>,
 }
 
 /// Build a manifest for a collection and its images.

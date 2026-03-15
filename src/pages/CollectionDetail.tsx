@@ -2,9 +2,10 @@
  * Collection Detail Page - View and manage a collection
  */
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import SunCalc from "suncalc";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Check,
   CheckSquare,
   Compass,
   ExternalLink,
@@ -64,7 +66,7 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { authApi, imageApi, plateSolveApi, shareApi, type Image, type PublishStatus } from "@/lib/tauri/commands";
+import { authApi, imageApi, plateSolveApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -117,6 +119,7 @@ export default function CollectionDetailPage() {
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [publishProgress, setPublishProgress] = useState<{ step: string; detail: string; current: number; total: number } | null>(null);
   const [batchPlateSolveDialogOpen, setBatchPlateSolveDialogOpen] = useState(false);
   const [batchPlateSolveApiKey, setBatchPlateSolveApiKey] = useState(() => {
     return localStorage.getItem("astrometry_api_key") || "";
@@ -188,15 +191,35 @@ export default function CollectionDetailPage() {
     }
   }, [id]);
 
+  const runWithProgress = useCallback(async (action: () => Promise<PublishResult>) => {
+    setPublishProgress({ step: "starting", detail: "Starting...", current: 0, total: 0 });
+
+    let unlisten: UnlistenFn | null = null;
+    try {
+      unlisten = await listen<{ step: string; detail: string; current: number; total: number }>(
+        "publish-progress",
+        (event) => setPublishProgress(event.payload)
+      );
+
+      const result = await action();
+      return result;
+    } finally {
+      if (unlisten) unlisten();
+      // Keep the "done" state visible briefly
+      setTimeout(() => setPublishProgress(null), 1500);
+    }
+  }, []);
+
   const handlePublish = async () => {
     if (!collection) return;
     setIsPublishing(true);
     try {
-      // Use astra.gallery if signed in, otherwise fall back to self-hosted S3
       const session = await authApi.getSession();
-      const result = session
-        ? await shareApi.publishGallery(collection.id)
-        : await shareApi.publish(collection.id);
+      const result = await runWithProgress(() =>
+        session
+          ? shareApi.publishGallery(collection.id)
+          : shareApi.publish(collection.id)
+      );
       toast.success(`Published! ${result.imagesUploaded} images uploaded`);
       setPublishStatus(await shareApi.getPublishStatus(collection.id));
     } catch (e) {
@@ -210,11 +233,12 @@ export default function CollectionDetailPage() {
     if (!collection) return;
     setIsSyncing(true);
     try {
-      // Use astra.gallery if signed in, otherwise fall back to self-hosted S3
       const session = await authApi.getSession();
-      const result = session
-        ? await shareApi.publishGallery(collection.id)
-        : await shareApi.sync(collection.id);
+      const result = await runWithProgress(() =>
+        session
+          ? shareApi.publishGallery(collection.id)
+          : shareApi.sync(collection.id)
+      );
       if (result.imagesUploaded > 0) {
         toast.success(`Synced! ${result.imagesUploaded} new images uploaded`);
       } else {
@@ -691,7 +715,7 @@ export default function CollectionDetailPage() {
                 </Button>
               )}
               {/* Publish / Sync buttons */}
-              {!isCatalogCollection && collectionImages.length > 0 && !publishStatus && (
+              {collectionImages.length > 0 && !publishStatus && (
                 <Button
                   variant="outline"
                   className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
@@ -707,7 +731,7 @@ export default function CollectionDetailPage() {
                   {isPublishing ? "Publishing..." : "Publish"}
                 </Button>
               )}
-              {!isCatalogCollection && publishStatus && (
+              {publishStatus && (
                 <>
                   <a
                     href={publishStatus.publicUrl}
@@ -929,6 +953,47 @@ export default function CollectionDetailPage() {
           ))}
         </div>
       )}
+
+      {/* Publish Progress Dialog */}
+      <Dialog open={publishProgress !== null} onOpenChange={() => {}}>
+        <DialogContent className="sm:max-w-md" onPointerDownOutside={(e) => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle>
+              {publishProgress?.step === "done" ? "Published!" : "Publishing..."}
+            </DialogTitle>
+            <DialogDescription>
+              {publishProgress?.detail}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-3">
+            {publishProgress?.step !== "done" && (
+              <div className="flex items-center gap-3">
+                <Loader2 className="w-5 h-5 animate-spin text-indigo-400" />
+                <span className="text-sm text-muted-foreground">{publishProgress?.detail}</span>
+              </div>
+            )}
+            {publishProgress && publishProgress.total > 0 && (
+              <div className="space-y-1">
+                <div className="w-full bg-slate-700 rounded-full h-2">
+                  <div
+                    className="bg-indigo-500 h-2 rounded-full transition-all"
+                    style={{ width: `${Math.round((publishProgress.current / publishProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground text-right">
+                  {publishProgress.current} / {publishProgress.total}
+                </p>
+              </div>
+            )}
+            {publishProgress?.step === "done" && (
+              <div className="flex items-center gap-2 text-emerald-400">
+                <Check className="w-5 h-5" />
+                <span>Done!</span>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

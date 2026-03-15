@@ -280,7 +280,7 @@ export default function Images() {
 
       {/* Selection toolbar */}
       {selectMode && (
-        <div className="flex items-center gap-3 bg-slate-800/80 rounded-lg px-4 py-2.5">
+        <div className="flex items-center gap-3 bg-slate-800/95 backdrop-blur rounded-lg px-4 py-2.5 sticky top-2 z-30">
           <span className="text-sm text-slate-300">
             {selectedCount} selected
           </span>

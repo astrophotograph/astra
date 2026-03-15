@@ -1,11 +1,29 @@
 //! Tauri commands for gallery sharing.
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::repository;
 use crate::share::{auth, config, credentials, manifest, upload, viewer};
 use crate::state::AppState;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishProgress {
+    step: String,
+    detail: String,
+    current: usize,
+    total: usize,
+}
+
+fn emit_progress(app: &AppHandle, step: &str, detail: &str, current: usize, total: usize) {
+    let _ = app.emit("publish-progress", PublishProgress {
+        step: step.to_string(),
+        detail: detail.to_string(),
+        current,
+        total,
+    });
+}
 
 // ============================================================================
 // Types
@@ -206,6 +224,7 @@ pub async fn publish_collection(
             image_path: format!("images/{}.{}", image.id, ext),
             thumb_path: format!("thumbs/{}.jpg", image.id),
             created_at: image.created_at.to_string(),
+            catalog_ids: vec![],
         });
 
         uploaded_ids.push(image.id.clone());
@@ -350,6 +369,7 @@ pub async fn sync_collection(
             image_path: format!("images/{}.{}", image.id, ext),
             thumb_path: format!("thumbs/{}.jpg", image.id),
             created_at: image.created_at.to_string(),
+            catalog_ids: vec![],
         });
 
         all_uploaded_ids.push(image.id.clone());
@@ -639,8 +659,12 @@ pub async fn publish_collection_gallery(
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
+    emit_progress(&app, "auth", "Checking authentication...", 0, 0);
+
     let session = auth::load_session(&data_dir)?
         .ok_or("Not signed in to astra.gallery. Sign in first.")?;
+
+    emit_progress(&app, "loading", "Loading collection...", 0, 0);
 
     // Load collection and images
     let mut conn = state.db.get().map_err(|e| e.to_string())?;
@@ -662,8 +686,10 @@ pub async fn publish_collection_gallery(
     let mut files_to_upload: Vec<(String, String, Vec<u8>)> = Vec::new(); // (key, content_type, data)
     let mut manifest_images = Vec::new();
     let mut uploaded_ids = Vec::new();
+    let total_images = images.len();
 
-    for image in &images {
+    for (idx, image) in images.iter().enumerate() {
+        emit_progress(&app, "preparing", &format!("Preparing image {}/{}...", idx + 1, total_images), idx + 1, total_images);
         let Some(file_path) = &image.url else { continue };
         let path = std::path::Path::new(file_path);
         if !path.exists() {
@@ -685,6 +711,19 @@ pub async fn publish_collection_gallery(
         let thumb_key = format!("thumbs/{}.jpg", image.id);
         files_to_upload.push((thumb_key.clone(), "image/jpeg".to_string(), thumb_data));
 
+        // Extract catalog IDs from annotations (e.g., "M 31" -> "M31")
+        let catalog_ids = image.annotations.as_ref().map(|ann| {
+            serde_json::from_str::<Vec<serde_json::Value>>(ann)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|obj| {
+                    obj.get("name").and_then(|n| n.as_str()).map(|name| {
+                        name.replace(' ', "").to_uppercase()
+                    })
+                })
+                .collect::<Vec<_>>()
+        }).unwrap_or_default();
+
         manifest_images.push(manifest::ManifestImage {
             id: image.id.clone(),
             filename: image.filename.clone(),
@@ -693,6 +732,7 @@ pub async fn publish_collection_gallery(
             image_path: image_key,
             thumb_path: thumb_key,
             created_at: image.created_at.to_string(),
+            catalog_ids,
         });
 
         uploaded_ids.push(image.id.clone());
@@ -708,7 +748,15 @@ pub async fn publish_collection_gallery(
     let manifest_json = serde_json::to_string_pretty(&share_manifest)
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
     files_to_upload.push(("manifest.json".to_string(), "application/json".to_string(), manifest_json.into_bytes()));
-    files_to_upload.push(("index.html".to_string(), "text/html".to_string(), viewer::VIEWER_HTML.as_bytes().to_vec()));
+
+    // Use catalog viewer for catalog collections, regular viewer otherwise
+    let viewer_html = match collection.template.as_deref() {
+        Some("messier") | Some("caldwell") => viewer::CATALOG_VIEWER_HTML,
+        _ => viewer::VIEWER_HTML,
+    };
+    files_to_upload.push(("index.html".to_string(), "text/html".to_string(), viewer_html.as_bytes().to_vec()));
+
+    emit_progress(&app, "presigning", "Requesting upload URLs...", 0, 0);
 
     // Request presigned URLs from Worker
     let presign_body = serde_json::json!({
@@ -747,8 +795,18 @@ pub async fn publish_collection_gallery(
     // Upload each file to its presigned URL
     let mut images_uploaded = 0usize;
     let mut thumbs_uploaded = 0usize;
+    let total_files = files_to_upload.len();
 
-    for (key, content_type, data) in &files_to_upload {
+    for (file_idx, (key, content_type, data)) in files_to_upload.iter().enumerate() {
+        let label = if key.starts_with("images/") {
+            "image"
+        } else if key.starts_with("thumbs/") {
+            "thumbnail"
+        } else {
+            key.as_str()
+        };
+        emit_progress(&app, "uploading", &format!("Uploading {} ({}/{})...", label, file_idx + 1, total_files), file_idx + 1, total_files);
+
         let upload_info = presign.uploads.iter().find(|u| &u.key == key)
             .ok_or_else(|| format!("No presigned URL for {}", key))?;
 
@@ -760,6 +818,8 @@ pub async fn publish_collection_gallery(
             thumbs_uploaded += 1;
         }
     }
+
+    emit_progress(&app, "done", "Published!", total_files, total_files);
 
     // Save publish status
     let now = chrono::Utc::now().to_rfc3339();
