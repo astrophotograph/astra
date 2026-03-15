@@ -304,6 +304,36 @@
 
   .lightbox .close:hover { color: #fff; }
 
+  .lightbox .overlay-toggle {
+    position: absolute;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.7);
+    color: #9ca3af;
+    border: 1px solid #4b5563;
+    padding: 0.4rem 1rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    z-index: 10;
+  }
+
+  .lightbox .overlay-toggle:hover { color: #fff; border-color: #6366f1; }
+  .lightbox .overlay-toggle.active { background: #6366f1; color: #fff; border-color: #6366f1; }
+
+  .lightbox .img-container {
+    position: relative;
+    display: inline-block;
+  }
+
+  .lightbox .img-container svg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+
   .powered-by {
     text-align: center;
     padding: 1.5rem;
@@ -404,8 +434,17 @@
 
 <div class="lightbox" id="lightbox">
   <button class="close" onclick="closeLightbox()">&times;</button>
-  <img id="lb-img" src="" alt="">
+  <div class="img-container" id="lb-container">
+    <img id="lb-img" src="" alt="">
+  </div>
   <div class="caption" id="lb-caption"></div>
+  <div style="position:absolute;bottom:1rem;left:50%;transform:translateX(-50%);display:flex;gap:0.5rem;align-items:center;z-index:10">
+    <button class="overlay-toggle" id="overlay-toggle" onclick="toggleOverlay()">Show Objects</button>
+    <div id="lb-mag-control" style="display:none;background:rgba(0,0,0,0.7);padding:0.3rem 0.8rem;border-radius:4px;color:#9ca3af;font-size:0.75rem;white-space:nowrap">
+      Mag &le; <span id="lb-mag-val">15</span>
+      <input type="range" id="lb-mag-slider" min="3" max="20" step="0.5" value="15" oninput="updateMagFilter(this.value)" style="width:100px;vertical-align:middle;accent-color:#6366f1">
+    </div>
+  </div>
 </div>
 
 <script>
@@ -724,17 +763,160 @@ var MESSIER = [
     document.body.style.overflow = '';
   };
 
+  var currentLightboxImg = null;
+  var overlayVisible = false;
+  var lbMagLimit = 15;
+
   function openLightbox(img, entry) {
-    document.getElementById('lb-img').src = img.imagePath;
+    currentLightboxImg = img;
+    overlayVisible = false;
+    var lbImg = document.getElementById('lb-img');
+    lbImg.src = img.imagePath;
     document.getElementById('lb-caption').textContent =
       entry.id + (entry.name ? ' \u2014 ' + entry.name : '') + ' (' + entry.type + ')';
+
+    var existing = document.getElementById('lb-overlay');
+    if (existing) existing.remove();
+
+    var hasOverlay = img.plateSolve && img.objects && img.objects.length > 0;
+    document.getElementById('overlay-toggle').style.display = hasOverlay ? 'inline-block' : 'none';
+    document.getElementById('lb-mag-control').style.display = 'none';
+    document.getElementById('overlay-toggle').classList.remove('active');
+    document.getElementById('overlay-toggle').textContent = 'Show Objects';
+
     document.getElementById('lightbox').classList.add('open');
     document.body.style.overflow = 'hidden';
+
+    lbImg.onload = function() {
+      if (img.plateSolve && img.objects) {
+        renderOverlay(img, lbImg);
+      }
+    };
   }
+
+  // Gnomonic (TAN) projection: RA/Dec to pixel
+  function projectObject(ps, objRa, objDec, w, h) {
+    var d2r = Math.PI / 180;
+    var ra0 = ps.centerRa * d2r;
+    var dec0 = ps.centerDec * d2r;
+    var ra = objRa * d2r;
+    var dec = objDec * d2r;
+
+    var cosDec = Math.cos(dec), sinDec = Math.sin(dec);
+    var cosDec0 = Math.cos(dec0), sinDec0 = Math.sin(dec0);
+    var cosDRa = Math.cos(ra - ra0), sinDRa = Math.sin(ra - ra0);
+
+    var sinD = sinDec0 * sinDec + cosDec0 * cosDec * cosDRa;
+    if (sinD <= 0) return null;
+
+    var xi = (cosDec * sinDRa) / sinD;
+    var eta = (cosDec0 * sinDec - sinDec0 * cosDec * cosDRa) / sinD;
+    var xiDeg = xi / d2r;
+    var etaDeg = eta / d2r;
+
+    var rotRad = (ps.rotation || 0) * d2r;
+    var cosR = Math.cos(rotRad), sinR = Math.sin(rotRad);
+    var rx = -xiDeg * cosR - etaDeg * sinR;
+    var ry = -xiDeg * sinR + etaDeg * cosR;
+
+    var fracX = 0.5 + rx / ps.widthDeg;
+    var fracY = 0.5 - ry / ps.heightDeg;
+    if (fracX < -0.1 || fracX > 1.1 || fracY < -0.1 || fracY > 1.1) return null;
+    return { x: fracX * w, y: fracY * h };
+  }
+
+  function renderOverlay(img, lbImg) {
+    var existing = document.getElementById('lb-overlay');
+    if (existing) existing.remove();
+
+    var ps = img.plateSolve;
+    if (!ps) return;
+
+    var w = lbImg.clientWidth;
+    var h = lbImg.clientHeight;
+    if (w === 0 || h === 0) return;
+
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.id = 'lb-overlay';
+    svg.setAttribute('width', w);
+    svg.setAttribute('height', h);
+    svg.style.display = overlayVisible ? 'block' : 'none';
+
+    var pxPerDegW = w / ps.widthDeg;
+
+    for (var i = 0; i < img.objects.length; i++) {
+      var obj = img.objects[i];
+      var mag = obj.magnitude || 99;
+      if (mag > lbMagLimit + 2) continue;
+
+      var pos = projectObject(ps, obj.ra, obj.dec, w, h);
+      if (!pos) continue;
+
+      var radius = 20;
+      if (obj.sizeArcmin && ps.widthDeg) {
+        radius = Math.max(12, Math.min(w / 3, (obj.sizeArcmin / 60) * pxPerDegW / 2));
+      }
+
+      var opacity = mag <= lbMagLimit
+        ? 0.85
+        : Math.max(0.05, 0.85 * (1 - (mag - lbMagLimit) / 2));
+      var showLabel = mag <= lbMagLimit;
+
+      var g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      g.setAttribute('opacity', opacity);
+
+      var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      circle.setAttribute('cx', pos.x);
+      circle.setAttribute('cy', pos.y);
+      circle.setAttribute('r', radius);
+      circle.setAttribute('fill', 'none');
+      circle.setAttribute('stroke', '#6366f1');
+      circle.setAttribute('stroke-width', '1.5');
+      g.appendChild(circle);
+
+      if (showLabel) {
+        var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', pos.x);
+        text.setAttribute('y', pos.y + radius + 14);
+        text.setAttribute('text-anchor', 'middle');
+        text.setAttribute('fill', '#6366f1');
+        text.setAttribute('font-size', '12');
+        text.setAttribute('font-weight', '500');
+        text.style.textShadow = '0 1px 3px rgba(0,0,0,0.9)';
+        text.textContent = obj.name;
+        g.appendChild(text);
+      }
+
+      svg.appendChild(g);
+    }
+
+    document.getElementById('lb-container').appendChild(svg);
+  }
+
+  window.updateMagFilter = function(val) {
+    lbMagLimit = parseFloat(val);
+    document.getElementById('lb-mag-val').textContent = val;
+    if (currentLightboxImg && overlayVisible) {
+      renderOverlay(currentLightboxImg, document.getElementById('lb-img'));
+      var svg = document.getElementById('lb-overlay');
+      if (svg) svg.style.display = 'block';
+    }
+  };
+
+  window.toggleOverlay = function() {
+    overlayVisible = !overlayVisible;
+    var svg = document.getElementById('lb-overlay');
+    if (svg) svg.style.display = overlayVisible ? 'block' : 'none';
+    var btn = document.getElementById('overlay-toggle');
+    btn.classList.toggle('active', overlayVisible);
+    btn.textContent = overlayVisible ? 'Hide Objects' : 'Show Objects';
+    document.getElementById('lb-mag-control').style.display = overlayVisible ? 'flex' : 'none';
+  };
 
   window.closeLightbox = function() {
     document.getElementById('lightbox').classList.remove('open');
     document.body.style.overflow = '';
+    currentLightboxImg = null;
   };
 
   document.addEventListener('keydown', function(e) {

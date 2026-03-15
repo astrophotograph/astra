@@ -238,28 +238,44 @@ export default function ImageViewerPage() {
       }
 
       const { center_ra, center_dec, width_deg, height_deg, rotation } = plateSolveInfo;
+      const deg2rad = Math.PI / 180;
 
-      // Calculate angular offset from center (in degrees)
-      // Note: RA increases to the left in standard orientation
-      let deltaRa = center_ra - objRa;
-      const deltaDec = objDec - center_dec;
+      // Gnomonic (TAN) projection — proper tangent plane projection
+      const ra0 = center_ra * deg2rad;
+      const dec0 = center_dec * deg2rad;
+      const ra = objRa * deg2rad;
+      const dec = objDec * deg2rad;
 
-      // Handle RA wrap-around at 0/360
-      if (deltaRa > 180) deltaRa -= 360;
-      if (deltaRa < -180) deltaRa += 360;
+      const cosDec = Math.cos(dec);
+      const sinDec = Math.sin(dec);
+      const cosDec0 = Math.cos(dec0);
+      const sinDec0 = Math.sin(dec0);
+      const cosDeltaRa = Math.cos(ra - ra0);
+      const sinDeltaRa = Math.sin(ra - ra0);
 
-      // Correct for cos(dec) factor in RA (RA is compressed at higher declinations)
-      const cosDec = Math.cos((center_dec * Math.PI) / 180);
-      const correctedDeltaRa = deltaRa * cosDec;
+      // Distance from tangent point
+      const sinD = sinDec0 * sinDec + cosDec0 * cosDec * cosDeltaRa;
+      if (sinD <= 0) return null; // Object is behind the tangent point
 
-      // Apply rotation if present (convert to radians)
+      // Standard coordinates (xi, eta) in radians
+      const xi = (cosDec * sinDeltaRa) / sinD;
+      const eta = (cosDec0 * sinDec - sinDec0 * cosDec * cosDeltaRa) / sinD;
+
+      // Convert to degrees
+      const xiDeg = xi / deg2rad;
+      const etaDeg = eta / deg2rad;
+
+      // Apply rotation
       const rotRad = ((rotation || 0) * Math.PI) / 180;
-      const rotatedDeltaX = correctedDeltaRa * Math.cos(rotRad) - deltaDec * Math.sin(rotRad);
-      const rotatedDeltaY = correctedDeltaRa * Math.sin(rotRad) + deltaDec * Math.cos(rotRad);
+      const cosR = Math.cos(rotRad);
+      const sinR = Math.sin(rotRad);
+      // RA increases left (negative X in standard orientation)
+      const rotX = -xiDeg * cosR - etaDeg * sinR;
+      const rotY = -xiDeg * sinR + etaDeg * cosR;
 
       // Convert to fractional position (0.5 = center)
-      const fracX = 0.5 + rotatedDeltaX / width_deg;
-      const fracY = 0.5 - rotatedDeltaY / height_deg;
+      const fracX = 0.5 + rotX / width_deg;
+      const fracY = 0.5 - rotY / height_deg;
 
       // Check if within image bounds (with some margin)
       if (fracX < -0.1 || fracX > 1.1 || fracY < -0.1 || fracY > 1.1) {
@@ -639,7 +655,7 @@ export default function ImageViewerPage() {
                     height={imageContainerSize.height}
                     viewBox={`0 0 ${imageContainerSize.width} ${imageContainerSize.height}`}
                   >
-                    {catalogObjects.filter((obj) => !obj.magnitude || obj.magnitude <= magLimit + 2).map((obj, idx) => {
+                    {catalogObjects.filter((obj) => (obj.magnitude ?? 99) <= magLimit + 2).map((obj, idx) => {
                       const pos = calculateObjectPosition(obj.ra, obj.dec);
                       if (!pos) return null;
 
@@ -654,7 +670,7 @@ export default function ImageViewerPage() {
                       }
 
                       // Calculate opacity: full at magLimit, fade to 0 over next 2 magnitudes
-                      const mag = obj.magnitude ?? 0;
+                      const mag = obj.magnitude ?? 99;
                       const fadeStart = magLimit;
                       const fadeEnd = magLimit + 2;
                       const opacity = mag <= fadeStart
@@ -867,7 +883,7 @@ export default function ImageViewerPage() {
                         <div className="space-y-1">
                           <div className="flex items-center justify-between text-xs text-muted-foreground">
                             <span>Magnitude limit</span>
-                            <span>&#8804; {magLimit} ({catalogObjects.filter((o) => !o.magnitude || o.magnitude <= magLimit).length} labeled, {catalogObjects.filter((o) => !o.magnitude || o.magnitude <= magLimit + 2).length} visible)</span>
+                            <span>&#8804; {magLimit} ({catalogObjects.filter((o) => (o.magnitude ?? 99) <= magLimit).length} labeled, {catalogObjects.filter((o) => (o.magnitude ?? 99) <= magLimit + 2).length} visible)</span>
                           </div>
                           <input type="range" min={3} max={20} step={0.5} value={magLimit} onChange={(e) => setMagLimit(Number(e.target.value))} className="w-full accent-indigo-500" />
                         </div>

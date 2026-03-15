@@ -36,6 +36,39 @@ pub struct ManifestImage {
     /// Catalog object IDs matched from annotations (e.g., ["M31", "M32"])
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub catalog_ids: Vec<String>,
+    /// Plate solve info for object overlay
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plate_solve: Option<ManifestPlateSolve>,
+    /// Catalog objects found in FOV (for overlay)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<ManifestObject>,
+}
+
+/// Plate solve data for an image.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestPlateSolve {
+    pub center_ra: f64,
+    pub center_dec: f64,
+    pub pixel_scale: f64,
+    pub rotation: f64,
+    pub width_deg: f64,
+    pub height_deg: f64,
+    pub image_width: Option<u32>,
+    pub image_height: Option<u32>,
+}
+
+/// A catalog object for overlay display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManifestObject {
+    pub name: String,
+    pub ra: f64,
+    pub dec: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub magnitude: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_arcmin: Option<f64>,
 }
 
 /// Build a manifest for a collection and its images.

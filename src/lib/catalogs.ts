@@ -403,6 +403,22 @@ export function matchesCatalogEntry(name: string, entry: CatalogEntry): boolean 
     return true;
   }
 
+  // Handle "Messier N" / "Caldwell N" format → convert to "M N" / "C N"
+  const messierMatch = normalizedName.match(/^MESSIER\s*(\d+)$/);
+  if (messierMatch) {
+    const shortForm = `M${messierMatch[1]}`;
+    if (shortForm === entry.id.toUpperCase() || shortForm === entryNameNoSpace) {
+      return true;
+    }
+  }
+  const caldwellMatch = normalizedName.match(/^CALDWELL\s*(\d+)$/);
+  if (caldwellMatch) {
+    const shortForm = `C${caldwellMatch[1]}`;
+    if (shortForm === entry.id.toUpperCase() || shortForm === entryNameNoSpace) {
+      return true;
+    }
+  }
+
   // Check aliases
   if (entry.aliases) {
     for (const alias of entry.aliases) {

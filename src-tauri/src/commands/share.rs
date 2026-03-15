@@ -226,6 +226,8 @@ pub async fn publish_collection(
             created_at: image.created_at.to_string(),
             favorite: image.favorite,
             catalog_ids: vec![],
+            plate_solve: None,
+            objects: vec![],
         });
 
         uploaded_ids.push(image.id.clone());
@@ -373,6 +375,8 @@ pub async fn sync_collection(
             created_at: image.created_at.to_string(),
             favorite: image.favorite,
             catalog_ids: vec![],
+            plate_solve: None,
+            objects: vec![],
         });
 
         all_uploaded_ids.push(image.id.clone());
@@ -744,11 +748,16 @@ pub async fn publish_collection_gallery(
                 .collect::<Vec<_>>()
         }).unwrap_or_default();
 
-        // Also extract Messier IDs from image summary (handles cases where
-        // plate solve returns NGC numbers but summary has the Messier name)
-        if let Some(summary) = &image.summary {
-            let normalized = summary.replace(' ', "").to_uppercase();
-            // Check for M followed by 1-3 digits
+        // Also extract Messier IDs from image summary and annotations
+        // Handles: "M 101", "M101", "Messier 101", "NGC 5457" (via summary)
+        let text_to_search = [
+            image.summary.clone().unwrap_or_default(),
+        ].join(" ");
+        let upper = text_to_search.to_uppercase();
+
+        // Match "M N" or "MN" patterns
+        {
+            let normalized = upper.replace(' ', "");
             let bytes = normalized.as_bytes();
             let mut i = 0;
             while i < bytes.len() {
@@ -758,15 +767,66 @@ pub async fn publish_collection_gallery(
                     while i < bytes.len() && bytes[i].is_ascii_digit() {
                         i += 1;
                     }
-                    let mid = &normalized[start..i];
-                    if !catalog_ids.contains(&mid.to_string()) {
-                        catalog_ids.push(mid.to_string());
+                    let mid = normalized[start..i].to_string();
+                    if !catalog_ids.contains(&mid) {
+                        catalog_ids.push(mid);
                     }
                 } else {
                     i += 1;
                 }
             }
         }
+
+        // Match "MESSIER N" pattern → convert to "MN"
+        if let Some(pos) = upper.find("MESSIER") {
+            let after = &upper[pos + 7..].trim_start();
+            let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if !num.is_empty() {
+                let mid = format!("M{}", num);
+                if !catalog_ids.contains(&mid) {
+                    catalog_ids.push(mid);
+                }
+            }
+        }
+
+        // Extract plate solve data and objects from metadata
+        let (plate_solve, objects) = image.metadata.as_ref().map(|meta| {
+            let parsed: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
+            let ps = parsed.get("plate_solve").and_then(|ps| {
+                Some(manifest::ManifestPlateSolve {
+                    center_ra: ps.get("center_ra")?.as_f64()?,
+                    center_dec: ps.get("center_dec")?.as_f64()?,
+                    pixel_scale: ps.get("pixel_scale")?.as_f64()?,
+                    rotation: ps.get("rotation")?.as_f64()?,
+                    width_deg: ps.get("width_deg")?.as_f64()?,
+                    height_deg: ps.get("height_deg")?.as_f64()?,
+                    image_width: parsed.get("NAXIS1")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .or_else(|| ps.get("image_width").and_then(|v| v.as_u64()).map(|v| v as u32)),
+                    image_height: parsed.get("NAXIS2")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse().ok())
+                        .or_else(|| ps.get("image_height").and_then(|v| v.as_u64()).map(|v| v as u32)),
+                })
+            });
+            let objs: Vec<manifest::ManifestObject> = image.annotations.as_ref().map(|ann| {
+                serde_json::from_str::<Vec<serde_json::Value>>(ann)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|obj| {
+                        Some(manifest::ManifestObject {
+                            name: obj.get("name")?.as_str()?.to_string(),
+                            ra: obj.get("ra")?.as_f64()?,
+                            dec: obj.get("dec")?.as_f64()?,
+                            magnitude: obj.get("magnitude").and_then(|v| v.as_f64()),
+                            size_arcmin: obj.get("sizeArcmin").and_then(|v| v.as_f64()),
+                        })
+                    })
+                    .collect()
+            }).unwrap_or_default();
+            (ps, objs)
+        }).unwrap_or((None, vec![]));
 
         // Always include in manifest (even if image already uploaded)
         manifest_images.push(manifest::ManifestImage {
@@ -779,6 +839,8 @@ pub async fn publish_collection_gallery(
             created_at: image.created_at.to_string(),
             favorite: image.favorite,
             catalog_ids,
+            plate_solve,
+            objects,
         });
 
         uploaded_ids.push(image.id.clone());

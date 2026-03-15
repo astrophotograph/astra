@@ -3,9 +3,20 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::watch;
 use walkdir::WalkDir;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoImportProgress {
+    pub step: String,
+    pub detail: String,
+    pub image_name: Option<String>,
+    pub current: usize,
+    pub total: usize,
+}
 
 use crate::db::models::{NewImage, UpdateImage};
 use crate::db::repository;
@@ -85,7 +96,19 @@ fn run_scan_cycle(
     db_pool: &crate::db::DbPool,
     user_id: &str,
     config: &AutoImportConfig,
+    progress_tx: Option<&mpsc::Sender<AutoImportProgress>>,
 ) -> Result<(usize, Vec<String>), String> {
+    let emit = |step: &str, detail: &str, name: Option<&str>, current: usize, total: usize| {
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(AutoImportProgress {
+                step: step.to_string(),
+                detail: detail.to_string(),
+                image_name: name.map(|s| s.to_string()),
+                current,
+                total,
+            });
+        }
+    };
     let watch_folders = &config.watch_folders;
     let mut imported = 0;
     let mut errors = Vec::new();
@@ -101,6 +124,8 @@ fn run_scan_cycle(
         .into_iter()
         .collect();
     drop(conn);
+
+    emit("scanning", "Scanning watch folders...", None, 0, 0);
 
     for folder in watch_folders {
         let folder_path = PathBuf::from(folder);
@@ -126,6 +151,9 @@ fn run_scan_cycle(
             if existing_urls.contains(&path_str) || existing_fits.contains(&path_str) {
                 continue;
             }
+
+            let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            emit("found", &format!("Found: {}", file_name), Some(&file_name), imported + 1, 0);
 
             // Parse FITS metadata
             let metadata = match parse_fits_metadata(path) {
@@ -210,6 +238,7 @@ fn run_scan_cycle(
                     );
                     let preview_path_str = preview_path.to_string_lossy().to_string();
 
+                    emit("stretching", &format!("Stretching: {}", new_image.filename), Some(&new_image.filename), imported, 0);
                     match py_image::quick_preview(&fits_path_str, &preview_path_str, config.stretch_bg_percent, config.stretch_sigma) {
                         Ok(output_path) => {
                             log::info!("Generated preview: {}", output_path);
@@ -238,6 +267,7 @@ fn run_scan_cycle(
                     // Plate solve if enabled
                     if config.plate_solve.unwrap_or(false) {
                         let solver = config.plate_solve_solver.as_deref().unwrap_or("local");
+                        emit("plate-solving", &format!("Plate solving: {}", new_image.filename), Some(&new_image.filename), imported, 0);
                         log::info!("Auto plate-solving: {} with {}", new_image.filename, solver);
                         match py_plate_solve::solve_image(
                             &fits_path_str,
@@ -378,12 +408,22 @@ pub async fn start_auto_import(
                 status.is_scanning = true;
             }
 
-            // Run scan in blocking task
+            // Run scan in blocking task with progress forwarding
             let db = db_pool.clone();
             let uid = user_id.clone();
             let cfg = config.clone();
-            let scan_result =
-                tokio::task::spawn_blocking(move || run_scan_cycle(&db, &uid, &cfg)).await;
+            let app_clone = app.clone();
+            let scan_result = tokio::task::spawn_blocking(move || {
+                let (tx, rx) = mpsc::channel();
+                // Spawn a thread to forward progress to the app
+                let app_fwd = app_clone.clone();
+                std::thread::spawn(move || {
+                    while let Ok(progress) = rx.recv() {
+                        let _ = app_fwd.emit("auto-import-progress", &progress);
+                    }
+                });
+                run_scan_cycle(&db, &uid, &cfg, Some(&tx))
+            }).await;
 
             // Update status with results
             {
@@ -464,8 +504,17 @@ pub async fn scan_auto_import_now(
         status.is_scanning = true;
     }
 
-    let scan_result =
-        tokio::task::spawn_blocking(move || run_scan_cycle(&db_pool, &user_id, &config)).await;
+    let app_clone = app.clone();
+    let scan_result = tokio::task::spawn_blocking(move || {
+        let (tx, rx) = mpsc::channel();
+        let app_fwd = app_clone.clone();
+        std::thread::spawn(move || {
+            while let Ok(progress) = rx.recv() {
+                let _ = app_fwd.emit("auto-import-progress", &progress);
+            }
+        });
+        run_scan_cycle(&db_pool, &user_id, &config, Some(&tx))
+    }).await;
 
     let mut status = state.auto_import_status.lock().unwrap();
     status.is_scanning = false;

@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { MapPin, Search } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { Loader2, MapPin, Search } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,6 +17,47 @@ export default function Layout() {
   const isHomePage = location.pathname === "/";
   const [searchOpen, setSearchOpen] = useState(false);
   const { locations, activeLocation, setActiveLocationId } = useLocations();
+
+  // Auto-import progress toast
+  const [importProgress, setImportProgress] = useState<{
+    step: string; detail: string; imageName?: string;
+  } | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const unlisten = listen<{ step: string; detail: string; imageName?: string }>(
+      "auto-import-progress",
+      (event) => {
+        setImportProgress(event.payload);
+        // Clear any pending hide timer
+        if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      }
+    );
+
+    // Also listen for status to know when scan completes
+    const unlistenStatus = listen<{ lastImportCount: number; isScanning: boolean }>(
+      "auto-import-status",
+      (event) => {
+        if (!event.payload.isScanning && importProgress) {
+          const count = event.payload.lastImportCount;
+          if (count > 0) {
+            setImportProgress({
+              step: "done",
+              detail: `Imported ${count} new image${count !== 1 ? "s" : ""}`,
+            });
+          }
+          // Hide after 3 seconds
+          hideTimerRef.current = setTimeout(() => setImportProgress(null), 3000);
+        }
+      }
+    );
+
+    return () => {
+      unlisten.then((fn) => fn());
+      unlistenStatus.then((fn) => fn());
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    };
+  }, [importProgress]);
 
   // Global keyboard shortcut for search (Cmd+K or Ctrl+K)
   useEffect(() => {
@@ -143,6 +185,31 @@ export default function Layout() {
 
       {/* Global Search Dialog */}
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+
+      {/* Auto-import progress toast */}
+      {importProgress && (
+        <div className="fixed bottom-4 right-4 z-50 bg-slate-800/95 backdrop-blur border border-slate-700 rounded-lg shadow-xl px-4 py-3 min-w-[280px] max-w-[360px] animate-in slide-in-from-bottom-2">
+          <div className="flex items-center gap-3">
+            {importProgress.step !== "done" ? (
+              <Loader2 className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
+            ) : (
+              <div className="w-4 h-4 rounded-full bg-emerald-500 shrink-0" />
+            )}
+            <div className="min-w-0">
+              <p className="text-sm text-white font-medium truncate">
+                {importProgress.step === "scanning" && "Scanning..."}
+                {importProgress.step === "found" && "New image found"}
+                {importProgress.step === "stretching" && "Generating preview"}
+                {importProgress.step === "plate-solving" && "Plate solving"}
+                {importProgress.step === "done" && "Import complete"}
+              </p>
+              <p className="text-xs text-slate-400 truncate">
+                {importProgress.imageName || importProgress.detail}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

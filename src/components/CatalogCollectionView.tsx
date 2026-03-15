@@ -112,18 +112,23 @@ export default function CatalogCollectionView({
   }, [collection.template, catalog]);
 
   // Date filter for scoped collections
-  const savedFilter = useMemo<DateFilter | null>(() => {
-    if (!collection.metadata) return null;
+  const savedMeta = useMemo(() => {
+    if (!collection.metadata) return { dateFilter: null, autoRefresh: false };
     try {
       const meta = JSON.parse(collection.metadata);
-      return meta.dateFilter ?? null;
-    } catch { return null; }
+      return {
+        dateFilter: (meta.dateFilter as DateFilter) ?? null,
+        autoRefresh: meta.autoRefresh === true,
+      };
+    } catch { return { dateFilter: null, autoRefresh: false }; }
   }, [collection.metadata]);
+
+  const savedFilter = savedMeta.dateFilter;
 
   const [dateStart, setDateStart] = useState(savedFilter?.start ?? "");
   const [dateEnd, setDateEnd] = useState(savedFilter?.end ?? "");
   const [isPopulating, setIsPopulating] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(savedMeta.autoRefresh);
   const prevImageCountRef = useRef(collectionImages.length);
 
   // Sync date inputs when saved filter changes
@@ -547,7 +552,15 @@ export default function CatalogCollectionView({
                 <input
                   type="checkbox"
                   checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  onChange={(e) => {
+                    setAutoRefresh(e.target.checked);
+                    // Persist to collection metadata
+                    const existingMeta = collection.metadata ? JSON.parse(collection.metadata) : {};
+                    collectionApi.update({
+                      id: collection.id,
+                      metadata: JSON.stringify({ ...existingMeta, autoRefresh: e.target.checked }),
+                    }).catch(console.error);
+                  }}
                   className="accent-indigo-500"
                 />
                 Auto-refresh & sync
