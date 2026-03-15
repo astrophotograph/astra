@@ -115,7 +115,7 @@ export default function ImageViewerPage() {
   const [objectsExpanded, setObjectsExpanded] = useState(false);
   const [showObjectOverlay, setShowObjectOverlay] = useState(false);
   const [magLimit, setMagLimit] = useState(15);
-  const [imageContainerSize, setImageContainerSize] = useState({ width: 0, height: 0 });
+  const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0 });
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const [skymapImage, setSkymapImage] = useState<string | null>(null);
   const [isLoadingSkymap, setIsLoadingSkymap] = useState(false);
@@ -203,37 +203,24 @@ export default function ImageViewerPage() {
     return null;
   }, [plateSolveInfo, equipmentSets]);
 
-  // Track image container size for overlay calculations
+  // Track displayed image size for overlay (updates on resize)
+  const imgRef = useRef<HTMLImageElement | null>(null);
   useEffect(() => {
-    const updateSize = () => {
-      if (imageContainerRef.current) {
-        const img = imageContainerRef.current.querySelector("img");
-        if (img) {
-          setImageContainerSize({ width: img.clientWidth, height: img.clientHeight });
-        }
-      }
-    };
+    const img = imageContainerRef.current?.querySelector("img");
+    if (!img) return;
+    imgRef.current = img;
 
-    // Update size when image loads
-    updateSize();
-    window.addEventListener("resize", updateSize);
-
-    // Also observe the image for size changes
-    const observer = new ResizeObserver(updateSize);
-    if (imageContainerRef.current) {
-      observer.observe(imageContainerRef.current);
-    }
-
-    return () => {
-      window.removeEventListener("resize", updateSize);
-      observer.disconnect();
-    };
+    const observer = new ResizeObserver(() => {
+      setImageDisplaySize({ width: img.clientWidth, height: img.clientHeight });
+    });
+    observer.observe(img);
+    return () => observer.disconnect();
   }, [imageDataUrl]);
 
   // Calculate pixel position for a celestial object based on plate solve WCS
   const calculateObjectPosition = useCallback(
     (objRa: number, objDec: number) => {
-      if (!plateSolveInfo || !imageContainerSize.width || !imageContainerSize.height) {
+      if (!plateSolveInfo || !imageDisplaySize.width || !imageDisplaySize.height) {
         return null;
       }
 
@@ -255,7 +242,7 @@ export default function ImageViewerPage() {
 
       // Distance from tangent point
       const sinD = sinDec0 * sinDec + cosDec0 * cosDec * cosDeltaRa;
-      if (sinD <= 0) return null; // Object is behind the tangent point
+      if (sinD <= 0) return null;
 
       // Standard coordinates (xi, eta) in radians
       const xi = (cosDec * sinDeltaRa) / sinD;
@@ -265,30 +252,53 @@ export default function ImageViewerPage() {
       const xiDeg = xi / deg2rad;
       const etaDeg = eta / deg2rad;
 
-      // Apply rotation
+      // The displayed image may have different orientation from the FITS
+      // (e.g., portrait FITS displayed as landscape JPEG preview).
+      // Use the displayed image aspect ratio to determine the mapping.
+      const displayW = imageDisplaySize.width;
+      const displayH = imageDisplaySize.height;
+      const displayAspect = displayW / displayH;
+      const fitsAspect = width_deg / height_deg;
+
+      // Determine if the preview was transposed relative to FITS
+      // If FITS is portrait (height > width) but display is landscape (width > height),
+      // the axes are swapped
+      const isTransposed = (fitsAspect < 1) !== (displayAspect < 1);
+
+      // Apply rotation (PA = position angle of +Y from N through E)
       const rotRad = ((rotation || 0) * Math.PI) / 180;
       const cosR = Math.cos(rotRad);
       const sinR = Math.sin(rotRad);
-      // RA increases left (negative X in standard orientation)
-      const rotX = -xiDeg * cosR - etaDeg * sinR;
-      const rotY = -xiDeg * sinR + etaDeg * cosR;
 
-      // Convert to fractional position (0.5 = center)
-      const fracX = 0.5 + rotX / width_deg;
-      const fracY = 0.5 - rotY / height_deg;
+      // Standard tangent plane to FITS pixel mapping:
+      // dx_fits = -xi*sin(PA) + eta*cos(PA)
+      // dy_fits = xi*cos(PA) + eta*sin(PA)
+      const dxFits = -xiDeg * sinR + etaDeg * cosR;
+      const dyFits = xiDeg * cosR + etaDeg * sinR;
+
+      let fracX: number, fracY: number;
+      if (isTransposed) {
+        // FITS is portrait but displayed landscape — axes swapped and flipped
+        fracX = 0.5 - dyFits / height_deg;
+        fracY = 0.5 - dxFits / width_deg;
+      } else {
+        fracX = 0.5 + dxFits / width_deg;
+        fracY = 0.5 - dyFits / height_deg;
+      }
 
       // Check if within image bounds (with some margin)
       if (fracX < -0.1 || fracX > 1.1 || fracY < -0.1 || fracY > 1.1) {
         return null;
       }
 
-      // Convert to pixel coordinates
+      // Convert to viewBox coordinates (1000-wide, proportional height)
+      const vbHeight = 1000 * imageDisplaySize.height / imageDisplaySize.width;
       return {
-        x: fracX * imageContainerSize.width,
-        y: fracY * imageContainerSize.height,
+        x: fracX * 1000,
+        y: fracY * vbHeight,
       };
     },
-    [plateSolveInfo, imageContainerSize]
+    [plateSolveInfo, imageDisplaySize]
   );
 
   // Load skymap when plate solve info is available and expanded
@@ -633,44 +643,47 @@ export default function ImageViewerPage() {
               </div>
             ) : imageDataUrl ? (
               <>
-                <img
-                  src={imageDataUrl}
-                  alt={image.filename}
-                  className="w-full h-auto"
-                  onLoad={() => {
-                    // Trigger size update when image loads
-                    if (imageContainerRef.current) {
-                      const img = imageContainerRef.current.querySelector("img");
-                      if (img) {
-                        setImageContainerSize({ width: img.clientWidth, height: img.clientHeight });
-                      }
-                    }
-                  }}
-                />
-                {/* Object overlay */}
-                {showObjectOverlay && plateSolveInfo && imageContainerSize.width > 0 && (
-                  <svg
-                    className="absolute top-0 left-0 pointer-events-none"
-                    width={imageContainerSize.width}
-                    height={imageContainerSize.height}
-                    viewBox={`0 0 ${imageContainerSize.width} ${imageContainerSize.height}`}
-                  >
+                <div className="relative inline-block w-full">
+                  <img
+                    src={imageDataUrl}
+                    alt={image.filename}
+                    className="w-full h-auto block"
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setImageDisplaySize({ width: img.clientWidth, height: img.clientHeight });
+                    }}
+                  />
+                  {/* Object overlay — positioned directly over the img, scales with it */}
+                  {showObjectOverlay && plateSolveInfo && imageDisplaySize.width > 0 && (
+                    <svg
+                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      viewBox={`0 0 1000 ${1000 * imageDisplaySize.height / imageDisplaySize.width}`}
+                      preserveAspectRatio="none"
+                    >
                     {catalogObjects.filter((obj) => (obj.magnitude ?? 99) <= magLimit + 2).map((obj, idx) => {
                       const pos = calculateObjectPosition(obj.ra, obj.dec);
                       if (!pos) return null;
 
                       // Calculate circle radius based on object size if available
-                      let radius = 40; // Default radius
-                      if (obj.sizeArcmin && plateSolveInfo.width_deg && imageContainerSize.width > 0) {
-                        // Convert object size from arcmin to pixels
-                        const pixelsPerDegree = imageContainerSize.width / plateSolveInfo.width_deg;
-                        const pixelsPerArcmin = pixelsPerDegree / 60;
-                        // Use full object size as diameter, so radius is half
-                        radius = Math.max(20, Math.min(imageContainerSize.width / 2, (obj.sizeArcmin * pixelsPerArcmin) / 2));
+                      let radius = 20; // Default radius in viewBox units
+                      if (obj.sizeArcmin && plateSolveInfo.width_deg) {
+                        const vbUnitsPerDegree = 1000 / plateSolveInfo.width_deg;
+                        const vbUnitsPerArcmin = vbUnitsPerDegree / 60;
+                        radius = Math.max(10, Math.min(400, (obj.sizeArcmin * vbUnitsPerArcmin) / 2));
                       }
 
                       // Calculate opacity: full at magLimit, fade to 0 over next 2 magnitudes
-                      const mag = obj.magnitude ?? 99;
+                      // Fill in missing magnitudes for known Messier objects
+                      let mag = obj.magnitude ?? null;
+                      if (mag == null) {
+                        const mMatch = obj.name.replace(/\s+/g, '').toUpperCase().match(/^M(\d+)$/);
+                        if (mMatch) {
+                          const MESSIER_MAGS: Record<string, number> = {M1:8.4,M2:6.5,M3:6.2,M4:5.6,M5:5.6,M6:4.2,M7:3.3,M8:6.0,M9:7.7,M10:6.6,M11:6.3,M12:6.7,M13:5.8,M14:7.6,M15:6.2,M16:6.0,M17:6.0,M18:7.5,M19:6.8,M20:6.3,M21:6.5,M22:5.1,M23:6.9,M24:4.6,M25:6.5,M26:8.0,M27:7.4,M28:6.8,M29:7.1,M30:7.2,M31:3.4,M32:8.1,M33:5.7,M34:5.5,M35:5.3,M36:6.3,M37:6.2,M38:7.4,M39:4.6,M40:8.4,M41:4.5,M42:4.0,M43:9.0,M44:3.7,M45:1.6,M46:6.1,M47:4.4,M48:5.5,M49:8.4,M50:5.9,M51:8.4,M52:7.3,M53:7.6,M54:7.6,M55:6.3,M56:8.3,M57:8.8,M58:9.7,M59:9.6,M60:8.8,M61:9.7,M62:6.5,M63:8.6,M64:8.5,M65:9.3,M66:8.9,M67:6.1,M68:7.8,M69:7.6,M70:7.9,M71:8.2,M72:9.3,M73:9.0,M74:9.4,M75:8.5,M76:10.1,M77:8.9,M78:8.3,M79:7.7,M80:7.3,M81:6.9,M82:8.4,M83:7.6,M84:9.1,M85:9.1,M86:8.9,M87:8.6,M88:9.6,M89:9.8,M90:9.5,M91:10.2,M92:6.4,M93:6.0,M94:8.2,M95:9.7,M96:9.2,M97:9.9,M98:10.1,M99:9.9,M100:9.3,M101:7.9,M102:9.9,M103:7.4,M104:8.0,M105:9.3,M106:8.4,M107:7.9,M108:10.0,M109:9.8,M110:8.5};
+                          mag = MESSIER_MAGS[`M${mMatch[1]}`] ?? 99;
+                        } else {
+                          mag = 99;
+                        }
+                      }
                       const fadeStart = magLimit;
                       const fadeEnd = magLimit + 2;
                       const opacity = mag <= fadeStart
@@ -721,8 +734,9 @@ export default function ImageViewerPage() {
                         </g>
                       );
                     })}
-                  </svg>
-                )}
+                    </svg>
+                  )}
+                </div>
               </>
             ) : (
               <div className="aspect-video flex items-center justify-center">

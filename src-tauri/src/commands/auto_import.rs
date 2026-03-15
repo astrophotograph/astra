@@ -96,6 +96,7 @@ fn run_scan_cycle(
     db_pool: &crate::db::DbPool,
     user_id: &str,
     config: &AutoImportConfig,
+    preview_dir: &Path,
     progress_tx: Option<&mpsc::Sender<AutoImportProgress>>,
 ) -> Result<(usize, Vec<String>), String> {
     let emit = |step: &str, detail: &str, name: Option<&str>, current: usize, total: usize| {
@@ -232,9 +233,9 @@ fn run_scan_cycle(
                     log::info!("Auto-imported: {}", new_image.filename);
 
                     // Generate a full-size preview JPEG via Python stretch
-                    let preview_dir = path.parent().unwrap_or(Path::new("/tmp"));
+                    // Save preview locally (not on remote mount) using image ID
                     let preview_path = preview_dir.join(
-                        format!("{}_preview.jpg", path.file_stem().unwrap_or_default().to_string_lossy())
+                        format!("{}.jpg", image_id)
                     );
                     let preview_path_str = preview_path.to_string_lossy().to_string();
 
@@ -387,6 +388,10 @@ pub async fn start_auto_import(
     let poll_interval = std::time::Duration::from_secs(config.poll_interval_secs.max(30));
     let config = config.clone();
     let status_ref = state.auto_import_status.clone();
+    let pdir = app.path().app_data_dir()
+        .map(|d| d.join("previews"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/astra-previews"));
+    let _ = std::fs::create_dir_all(&pdir);
 
     // Spawn background polling task
     tokio::spawn(async move {
@@ -413,16 +418,16 @@ pub async fn start_auto_import(
             let uid = user_id.clone();
             let cfg = config.clone();
             let app_clone = app.clone();
+            let pd = pdir.clone();
             let scan_result = tokio::task::spawn_blocking(move || {
                 let (tx, rx) = mpsc::channel();
-                // Spawn a thread to forward progress to the app
                 let app_fwd = app_clone.clone();
                 std::thread::spawn(move || {
                     while let Ok(progress) = rx.recv() {
                         let _ = app_fwd.emit("auto-import-progress", &progress);
                     }
                 });
-                run_scan_cycle(&db, &uid, &cfg, Some(&tx))
+                run_scan_cycle(&db, &uid, &cfg, &pd, Some(&tx))
             }).await;
 
             // Update status with results
@@ -497,6 +502,10 @@ pub async fn scan_auto_import_now(
 ) -> Result<AutoImportStatus, String> {
     let db_pool = state.db.clone();
     let user_id = state.user_id.clone();
+    let pdir = app.path().app_data_dir()
+        .map(|d| d.join("previews"))
+        .unwrap_or_else(|_| PathBuf::from("/tmp/astra-previews"));
+    let _ = std::fs::create_dir_all(&pdir);
 
     // Update status
     {
@@ -513,7 +522,7 @@ pub async fn scan_auto_import_now(
                 let _ = app_fwd.emit("auto-import-progress", &progress);
             }
         });
-        run_scan_cycle(&db_pool, &user_id, &config, Some(&tx))
+        run_scan_cycle(&db_pool, &user_id, &config, &pdir, Some(&tx))
     }).await;
 
     let mut status = state.auto_import_status.lock().unwrap();

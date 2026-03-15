@@ -236,6 +236,22 @@ def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list
     return objects
 
 
+# Known Messier magnitudes (visual)
+MESSIER_MAGNITUDES: dict[int, float] = {
+    1: 8.4, 2: 6.5, 3: 6.2, 4: 5.6, 5: 5.6, 6: 4.2, 7: 3.3, 8: 6.0, 9: 7.7, 10: 6.6,
+    11: 6.3, 12: 6.7, 13: 5.8, 14: 7.6, 15: 6.2, 16: 6.0, 17: 6.0, 18: 7.5, 19: 6.8, 20: 6.3,
+    21: 6.5, 22: 5.1, 23: 6.9, 24: 4.6, 25: 6.5, 26: 8.0, 27: 7.4, 28: 6.8, 29: 7.1, 30: 7.2,
+    31: 3.4, 32: 8.1, 33: 5.7, 34: 5.5, 35: 5.3, 36: 6.3, 37: 6.2, 38: 7.4, 39: 4.6, 40: 8.4,
+    41: 4.5, 42: 4.0, 43: 9.0, 44: 3.7, 45: 1.6, 46: 6.1, 47: 4.4, 48: 5.5, 49: 8.4, 50: 5.9,
+    51: 8.4, 52: 7.3, 53: 7.6, 54: 7.6, 55: 6.3, 56: 8.3, 57: 8.8, 58: 9.7, 59: 9.6, 60: 8.8,
+    61: 9.7, 62: 6.5, 63: 8.6, 64: 8.5, 65: 9.3, 66: 8.9, 67: 6.1, 68: 7.8, 69: 7.6, 70: 7.9,
+    71: 8.2, 72: 9.3, 73: 9.0, 74: 9.4, 75: 8.5, 76: 10.1, 77: 8.9, 78: 8.3, 79: 7.7, 80: 7.3,
+    81: 6.9, 82: 8.4, 83: 7.6, 84: 9.1, 85: 9.1, 86: 8.9, 87: 8.6, 88: 9.6, 89: 9.8, 90: 9.5,
+    91: 10.2, 92: 6.4, 93: 6.0, 94: 8.2, 95: 9.7, 96: 9.2, 97: 9.9, 98: 10.1, 99: 9.9, 100: 9.3,
+    101: 7.9, 102: 9.9, 103: 7.4, 104: 8.0, 105: 9.3, 106: 8.4, 107: 7.9, 108: 10.0, 109: 9.8, 110: 8.5,
+}
+
+
 def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> list[CatalogObject]:
     """Query Messier catalog objects via SIMBAD."""
     objects = []
@@ -285,6 +301,9 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
                 size_arcsec = _safe_float(row["galdim_majaxis"])
                 size_arcmin = size_arcsec / 60 if size_arcsec else None
 
+                # Look up known magnitude
+                mag = MESSIER_MAGNITUDES.get(int(messier_num)) if messier_num else None
+
                 objects.append(
                     CatalogObject(
                         name=display_name,
@@ -292,7 +311,7 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
                         object_type=obj_type,
                         ra=ra,
                         dec=dec,
-                        magnitude=None,  # Skip magnitude for now
+                        magnitude=mag,
                         size=_format_size(size_arcmin),
                         size_arcmin=size_arcmin,
                     )
@@ -954,12 +973,12 @@ def query_objects_in_fov(
 
     catalog_lower = [c.lower() for c in catalogs]
 
-    # Query each requested catalog
-    if "ngc" in catalog_lower or "ic" in catalog_lower:
-        all_objects.extend(query_ngc_ic(center_ra, center_dec, radius_deg))
-
+    # Query each requested catalog (Messier first for dedup priority)
     if "messier" in catalog_lower:
         all_objects.extend(query_messier(center_ra, center_dec, radius_deg))
+
+    if "ngc" in catalog_lower or "ic" in catalog_lower:
+        all_objects.extend(query_ngc_ic(center_ra, center_dec, radius_deg))
 
     if "barnard" in catalog_lower:
         all_objects.extend(query_barnard(center_ra, center_dec, radius_deg))
@@ -1005,8 +1024,21 @@ def query_objects_in_fov(
                     "PGC": 8,
                 }
                 if priority.get(obj.catalog, 99) < priority.get(existing.catalog, 99):
+                    # Merge: keep magnitude from whichever has it
+                    if obj.magnitude is None and existing.magnitude is not None:
+                        obj.magnitude = existing.magnitude
+                    if obj.size_arcmin is None and existing.size_arcmin is not None:
+                        obj.size_arcmin = existing.size_arcmin
+                        obj.size = existing.size
                     unique_objects.remove(existing)
                     unique_objects.append(obj)
+                else:
+                    # Keep existing but fill in missing data from obj
+                    if existing.magnitude is None and obj.magnitude is not None:
+                        existing.magnitude = obj.magnitude
+                    if existing.size_arcmin is None and obj.size_arcmin is not None:
+                        existing.size_arcmin = obj.size_arcmin
+                        existing.size = obj.size
                 is_duplicate = True
                 break
         if not is_duplicate:

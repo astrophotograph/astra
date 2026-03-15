@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::mpsc;
-use tauri::{Emitter, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 use crate::db::{models::{NewCollection, NewCollectionImage, NewImage, UpdateImage}, repository};
 use crate::python::image_process::{self, ProcessingParams, ProcessingProgress, ProcessingResult, TargetInfo};
@@ -444,6 +444,7 @@ pub struct RegenerateResult {
 
 #[tauri::command]
 pub async fn regenerate_preview(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
     bg_percent: Option<f64>,
@@ -472,12 +473,12 @@ pub async fn regenerate_preview(
         return Err(format!("FITS file not found: {}", fits_path));
     }
 
-    // Generate preview via Python
-    let preview_dir = fits_file.parent().unwrap_or(Path::new("/tmp"));
-    let preview_path = preview_dir.join(format!(
-        "{}_preview.jpg",
-        fits_file.file_stem().unwrap_or_default().to_string_lossy()
-    ));
+    // Generate preview in local app data dir (survives unmounting remote volumes)
+    let preview_dir = app.path().app_data_dir()
+        .map(|d| d.join("previews"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/astra-previews"));
+    let _ = std::fs::create_dir_all(&preview_dir);
+    let preview_path = preview_dir.join(format!("{}.jpg", id));
     let preview_path_str = preview_path.to_string_lossy().to_string();
 
     let output = tokio::task::spawn_blocking({

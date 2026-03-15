@@ -226,13 +226,40 @@ pub fn get_image_data(state: State<'_, AppState>, id: String) -> Result<String, 
     let file_path = image.url.as_ref()
         .ok_or_else(|| "Image has no file path".to_string())?;
 
-    let path = Path::new(file_path);
+    let orig_path = Path::new(file_path);
+
+    // If URL points to a FITS file or doesn't exist, look for a preview JPEG
+    let path = if !orig_path.exists() || orig_path.extension().and_then(|e| e.to_str())
+        .map(|e| { let l = e.to_lowercase(); l == "fit" || l == "fits" }).unwrap_or(false)
+    {
+        // Check local previews dir first (survives unmounting)
+        let local_preview = dirs::data_dir()
+            .map(|d| d.join("com.astra.app").join("previews").join(format!("{}.jpg", id)))
+            .unwrap_or_default();
+        if local_preview.exists() {
+            local_preview
+        } else {
+            // Fall back to preview next to the file
+            let adjacent_preview = orig_path.with_file_name(format!(
+                "{}_preview.jpg",
+                orig_path.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            if adjacent_preview.exists() {
+                adjacent_preview
+            } else {
+                orig_path.to_path_buf()
+            }
+        }
+    } else {
+        orig_path.to_path_buf()
+    };
+
     if !path.exists() {
-        return Err(format!("Image file not found: {}", file_path));
+        return Err(format!("Image file not found: {}", path.display()));
     }
 
     // Read the file
-    let data = fs::read(path)
+    let data = fs::read(&path)
         .map_err(|e| format!("Failed to read image file: {}", e))?;
 
     // Determine content type

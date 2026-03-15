@@ -42,6 +42,7 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 walkdir = "2"
+dirs = "6"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["rustls-tls-native-roots", "json"] }
