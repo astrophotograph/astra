@@ -945,8 +945,16 @@ export const authApi = {
 // Auto-Import Types
 // =============================================================================
 
+export interface ImportSource {
+  name: string;
+  watchFolder: string;
+  libraryPath?: string;
+  copySubframes?: boolean;
+  copyCalibration?: boolean;
+}
+
 export interface AutoImportConfig {
-  watchFolders: string[];
+  sources: ImportSource[];
   pollIntervalSecs: number;
   enabled: boolean;
   plateSolve?: boolean;
@@ -955,6 +963,10 @@ export interface AutoImportConfig {
   plateSolveApiUrl?: string;
   stretchBgPercent?: number;
   stretchSigma?: number;
+  /** @deprecated Use sources instead */
+  watchFolders?: string[];
+  /** @deprecated Use sources[].libraryPath instead */
+  libraryPath?: string;
 }
 
 export interface AutoImportStatus {

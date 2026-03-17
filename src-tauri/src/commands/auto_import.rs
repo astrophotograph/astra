@@ -30,17 +30,56 @@ use super::scan::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportSource {
+    pub name: String,
+    pub watch_folder: String,
+    pub library_path: Option<String>,
+    pub copy_subframes: Option<bool>,
+    pub copy_calibration: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AutoImportConfig {
-    pub watch_folders: Vec<String>,
+    pub sources: Vec<ImportSource>,
     pub poll_interval_secs: u64,
     pub enabled: bool,
-    /// Plate solve on import
     pub plate_solve: Option<bool>,
     pub plate_solve_solver: Option<String>,
     pub plate_solve_api_key: Option<String>,
     pub plate_solve_api_url: Option<String>,
     pub stretch_bg_percent: Option<f64>,
     pub stretch_sigma: Option<f64>,
+    /// Legacy fields for backward compatibility
+    pub watch_folders: Option<Vec<String>>,
+    pub library_path: Option<String>,
+}
+
+/// Check if a file is a FITS file
+fn is_fits(path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    ext == "fit" || ext == "fits"
+}
+
+/// Check if a file is a subframe (Light frame)
+fn is_subframe(path: &Path) -> bool {
+    if !is_fits(path) { return false; }
+    let path_str = path.to_string_lossy().to_lowercase();
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    // ASI Air: Light_*.fit in Autorun/Light/ or Plan/Light/ or Live/Light/
+    (path_str.contains("/light/") || file_name.starts_with("light_"))
+        && !is_stacked_fits(path)
+}
+
+/// Check if a file is a calibration frame (Dark, Flat, Bias)
+fn is_calibration(path: &Path) -> bool {
+    if !is_fits(path) { return false; }
+    let path_str = path.to_string_lossy().to_lowercase();
+    let file_name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+    path_str.contains("/dark/") || file_name.starts_with("dark_")
+        || path_str.contains("/flat/") || file_name.starts_with("flat_")
+        || path_str.contains("/bias/") || file_name.starts_with("bias_")
+        || file_name.starts_with("master_")
 }
 
 /// Check if a file path matches stacked image patterns
@@ -91,6 +130,79 @@ fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
     None
 }
 
+/// Copy supporting files (subframes, calibration) to library
+fn copy_supporting_files(
+    source: &ImportSource,
+    progress_tx: Option<&mpsc::Sender<AutoImportProgress>>,
+) {
+    let Some(lib_path) = &source.library_path else { return };
+    let lib_base = PathBuf::from(lib_path);
+
+    let copy_subs = source.copy_subframes.unwrap_or(false);
+    let copy_cal = source.copy_calibration.unwrap_or(false);
+    if !copy_subs && !copy_cal { return; }
+
+    let watch = PathBuf::from(&source.watch_folder);
+    if !watch.exists() { return; }
+
+    let emit = |detail: &str| {
+        if let Some(tx) = progress_tx {
+            let _ = tx.send(AutoImportProgress {
+                step: "copying".to_string(),
+                detail: detail.to_string(),
+                image_name: None,
+                current: 0,
+                total: 0,
+            });
+        }
+    };
+
+    let mut copied = 0usize;
+    let mut skipped = 0usize;
+
+    for entry in WalkDir::new(&watch)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() { continue; }
+
+        let should_copy = (copy_subs && is_subframe(path)) || (copy_cal && is_calibration(path));
+        if !should_copy { continue; }
+
+        // Determine destination: preserve relative path structure
+        let rel_path = path.strip_prefix(&watch).unwrap_or(path);
+        let dest = lib_base.join(rel_path);
+
+        if dest.exists() {
+            skipped += 1;
+            continue;
+        }
+
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        match std::fs::copy(path, &dest) {
+            Ok(_) => {
+                copied += 1;
+                if copied % 50 == 0 {
+                    emit(&format!("Copied {} files to library...", copied));
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to copy {}: {}", path.display(), e);
+            }
+        }
+    }
+
+    if copied > 0 {
+        log::info!("Copied {} supporting files to library ({} skipped)", copied, skipped);
+        emit(&format!("Copied {} files to library", copied));
+    }
+}
+
 /// Run a single scan cycle
 fn run_scan_cycle(
     db_pool: &crate::db::DbPool,
@@ -110,7 +222,21 @@ fn run_scan_cycle(
             });
         }
     };
-    let watch_folders = &config.watch_folders;
+    // Build effective sources list (support legacy watchFolders format)
+    let sources: Vec<ImportSource> = if !config.sources.is_empty() {
+        config.sources.clone()
+    } else if let Some(folders) = &config.watch_folders {
+        folders.iter().map(|f| ImportSource {
+            name: f.split('/').last().unwrap_or("source").to_string(),
+            watch_folder: f.clone(),
+            library_path: config.library_path.clone(),
+            copy_subframes: None,
+            copy_calibration: None,
+        }).collect()
+    } else {
+        vec![]
+    };
+
     let mut imported = 0;
     let mut errors = Vec::new();
 
@@ -126,14 +252,19 @@ fn run_scan_cycle(
         .collect();
     drop(conn);
 
-    emit("scanning", "Scanning watch folders...", None, 0, 0);
+    emit("scanning", "Scanning sources...", None, 0, 0);
 
-    for folder in watch_folders {
-        let folder_path = PathBuf::from(folder);
+    for source in &sources {
+        let folder_path = PathBuf::from(&source.watch_folder);
         if !folder_path.exists() {
-            errors.push(format!("Watch folder not found: {}", folder));
+            errors.push(format!("Watch folder not found: {} ({})", source.name, source.watch_folder));
             continue;
         }
+
+        emit("scanning", &format!("Scanning {}...", source.name), None, 0, 0);
+
+        // Copy supporting files (subframes, calibration) to library
+        copy_supporting_files(source, progress_tx);
 
         // Walk directory looking for stacked FITS files
         for entry in WalkDir::new(&folder_path)
@@ -199,9 +330,49 @@ fn run_scan_cycle(
             // Build metadata JSON
             let meta_json = serde_json::to_string(&metadata.raw_headers).ok();
 
+            // Copy FITS to library if configured for this source
+            let fits_final_path = if let Some(lib_path) = &source.library_path {
+                let lib_base = PathBuf::from(lib_path);
+
+                // Organize: {library}/{YYYY-MM-DD}/{target}/filename.fit
+                let date_dir = metadata.date_obs.as_ref()
+                    .and_then(|d| d.split('T').next())
+                    .unwrap_or("unknown-date");
+                let target_dir = target.as_deref().unwrap_or("unknown");
+                // Sanitize directory names
+                let target_dir = target_dir.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+
+                let dest_dir = lib_base.join(date_dir).join(&target_dir);
+                if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+                    log::warn!("Failed to create library dir {}: {}", dest_dir.display(), e);
+                    path_str.clone()
+                } else {
+                    let dest_file = dest_dir.join(path.file_name().unwrap_or_default());
+                    if dest_file.exists() {
+                        // Already copied
+                        dest_file.to_string_lossy().to_string()
+                    } else {
+                        emit("copying", &format!("Copying to library: {}", file_name), Some(&file_name), imported + 1, 0);
+                        match std::fs::copy(path, &dest_file) {
+                            Ok(bytes) => {
+                                log::info!("Copied {} to library ({} bytes)", file_name, bytes);
+                                dest_file.to_string_lossy().to_string()
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to copy to library: {}", e);
+                                path_str.clone()
+                            }
+                        }
+                    }
+                }
+            } else {
+                path_str.clone()
+            };
+
             // Create image record
+            let image_id = uuid::Uuid::new_v4().to_string();
             let new_image = NewImage {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: image_id.clone(),
                 user_id: user_id.to_string(),
                 collection_id: None,
                 filename: path
@@ -220,10 +391,9 @@ fn run_scan_cycle(
                 annotations: None,
                 metadata: meta_json,
                 thumbnail,
-                fits_url: Some(path_str),
+                fits_url: Some(fits_final_path),
             };
 
-            let image_id = new_image.id.clone();
             let fits_path_str = new_image.fits_url.clone().unwrap_or_default();
 
             let mut conn = db_pool.get().map_err(|e| e.to_string())?;

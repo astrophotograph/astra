@@ -24,7 +24,8 @@ function App() {
       const saved = localStorage.getItem("auto_import_config");
       if (saved) {
         const config: AutoImportConfig = JSON.parse(saved);
-        if (config.enabled && config.watchFolders.length > 0) {
+        const hasSources = (config.sources?.length > 0) || (config.watchFolders?.length ?? 0) > 0;
+        if (config.enabled && hasSources) {
           // Merge plate solve settings from localStorage
           const fullConfig: AutoImportConfig = {
             ...config,

@@ -366,7 +366,7 @@ export default function AdminPage() {
           // ignore
         }
       }
-      return { watchFolders: [], pollIntervalSecs: 300, enabled: false, plateSolve: false };
+      return { sources: [], pollIntervalSecs: 300, enabled: false, plateSolve: false };
     },
   );
   const [autoImportStatus, setAutoImportStatus] =
@@ -482,39 +482,47 @@ export default function AdminPage() {
     }
   };
 
-  const handleAddWatchFolder = async () => {
+  const handleAddSource = async () => {
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === "string") {
-      if (autoImportConfig.watchFolders.includes(selected)) {
-        toast.error("Folder already in watch list");
+      if ((autoImportConfig.sources || []).some((s) => s.watchFolder === selected)) {
+        toast.error("Source already configured");
         return;
       }
+      // Derive a name from the last path segment
+      const name = selected.split("/").filter(Boolean).pop() || "source";
       const newConfig = {
         ...autoImportConfig,
-        watchFolders: [...autoImportConfig.watchFolders, selected],
+        sources: [...(autoImportConfig.sources || []), { name, watchFolder: selected }],
       };
       saveAutoImportConfig(newConfig);
-      // If auto-import is running, restart with new config
       if (autoImportConfig.enabled) {
-        await autoImportApi.start(newConfig).catch(console.error);
+        await autoImportApi.start(buildFullConfig(newConfig)).catch(console.error);
       }
     }
   };
 
-  const handleRemoveWatchFolder = async (folder: string) => {
+  const handleRemoveSource = async (index: number) => {
     const newConfig = {
       ...autoImportConfig,
-      watchFolders: autoImportConfig.watchFolders.filter((f) => f !== folder),
+      sources: (autoImportConfig.sources || []).filter((_, i) => i !== index),
     };
     saveAutoImportConfig(newConfig);
     if (autoImportConfig.enabled) {
-      await autoImportApi.start(newConfig).catch(console.error);
+      await autoImportApi.start(buildFullConfig(newConfig)).catch(console.error);
     }
   };
 
+  const handleUpdateSource = (index: number, updates: Partial<import("@/lib/tauri/commands").ImportSource>) => {
+    const sources = [...(autoImportConfig.sources || [])];
+    sources[index] = { ...sources[index], ...updates };
+    const newConfig = { ...autoImportConfig, sources };
+    saveAutoImportConfig(newConfig);
+  };
+
   const handleScanNow = async () => {
-    if (autoImportConfig.watchFolders.length === 0) {
-      toast.error("No watch folders configured");
+    if ((autoImportConfig.sources || []).length === 0) {
+      toast.error("No sources configured");
       return;
     }
     try {
@@ -1902,43 +1910,86 @@ export default function AdminPage() {
                   </Button>
                 </div>
 
-                {/* Watch Folders */}
+                {/* Import Sources */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <Label className="text-base font-medium">
-                      Watch Folders
+                      Import Sources
                     </Label>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={handleAddWatchFolder}
+                      onClick={handleAddSource}
                     >
                       <FolderPlus className="w-4 h-4 mr-2" />
-                      Add Folder
+                      Add Source
                     </Button>
                   </div>
-                  {autoImportConfig.watchFolders.length === 0 ? (
+                  {(autoImportConfig.sources || []).length === 0 ? (
                     <div className="text-sm text-muted-foreground border rounded-lg p-4 text-center">
-                      No watch folders configured. Add a folder to start
-                      auto-importing.
+                      No import sources configured. Add a telescope or camera source to start.
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      {autoImportConfig.watchFolders.map((folder) => (
+                    <div className="space-y-3">
+                      {(autoImportConfig.sources || []).map((source, idx) => (
                         <div
-                          key={folder}
-                          className="flex items-center justify-between border rounded-lg p-3"
+                          key={idx}
+                          className="border rounded-lg p-3 space-y-2"
                         >
-                          <span className="text-sm font-mono break-all">
-                            {folder}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveWatchFolder(folder)}
-                          >
-                            <X className="w-4 h-4" />
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={source.name}
+                              onChange={(e) => handleUpdateSource(idx, { name: e.target.value })}
+                              className="font-medium flex-1"
+                              placeholder="Source name"
+                            />
+                            <Button variant="ghost" size="sm" onClick={() => handleRemoveSource(idx)}>
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </div>
+                          <div className="text-xs text-muted-foreground font-mono break-all">
+                            Watch: {source.watchFolder}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              value={source.libraryPath || ""}
+                              onChange={(e) => handleUpdateSource(idx, { libraryPath: e.target.value || undefined })}
+                              placeholder="Library path (optional)"
+                              className="flex-1 text-sm"
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                const selected = await open({ directory: true, multiple: false });
+                                if (selected && typeof selected === "string") {
+                                  handleUpdateSource(idx, { libraryPath: selected });
+                                }
+                              }}
+                            >
+                              Browse
+                            </Button>
+                          </div>
+                          <div className="flex gap-4">
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={source.copySubframes || false}
+                                onChange={(e) => handleUpdateSource(idx, { copySubframes: e.target.checked })}
+                                className="accent-indigo-500"
+                              />
+                              Copy subframes
+                            </label>
+                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={source.copyCalibration || false}
+                                onChange={(e) => handleUpdateSource(idx, { copyCalibration: e.target.checked })}
+                                className="accent-indigo-500"
+                              />
+                              Copy calibration frames
+                            </label>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -2028,7 +2079,7 @@ export default function AdminPage() {
                     onClick={handleScanNow}
                     disabled={
                       autoImportStatus?.isScanning ||
-                      autoImportConfig.watchFolders.length === 0
+                      (autoImportConfig.sources || []).length === 0
                     }
                   >
                     <RefreshCw
