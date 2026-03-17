@@ -18,7 +18,7 @@ pub struct AutoImportProgress {
     pub total: usize,
 }
 
-use crate::db::models::{NewImage, UpdateImage};
+use crate::db::models::{NewCollection, NewCollectionImage, NewImage, UpdateImage};
 use crate::db::repository;
 use crate::python::image_process as py_image;
 use crate::python::plate_solve as py_plate_solve;
@@ -252,6 +252,9 @@ fn run_scan_cycle(
         .collect();
     drop(conn);
 
+    // Track session collections: session_date_string → collection_id
+    let mut session_collections: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
     emit("scanning", "Scanning sources...", None, 0, 0);
 
     for source in &sources {
@@ -401,6 +404,64 @@ fn run_scan_cycle(
                 Ok(_) => {
                     imported += 1;
                     log::info!("Auto-imported: {}", new_image.filename);
+
+                    // Add to session collection (one per observing night)
+                    if let Some(date_obs) = &metadata.date_obs {
+                        if let Some(session_date) = super::scan::get_session_date(date_obs) {
+                            let session_key = session_date.to_string();
+                            let session_coll_id = if let Some(id) = session_collections.get(&session_key) {
+                                id.clone()
+                            } else {
+                                let coll_name = super::scan::generate_collection_name(&session_date, None);
+                                match repository::get_collection_by_name(&mut conn, user_id, &coll_name) {
+                                    Ok(Some(existing)) => {
+                                        session_collections.insert(session_key.clone(), existing.id.clone());
+                                        existing.id
+                                    }
+                                    _ => {
+                                        let coll_id = uuid::Uuid::new_v4().to_string();
+                                        let new_coll = NewCollection {
+                                            id: coll_id.clone(),
+                                            user_id: user_id.to_string(),
+                                            name: coll_name,
+                                            description: Some(format!("Observing session {}", session_key)),
+                                            visibility: "private".to_string(),
+                                            template: None,
+                                            favorite: false,
+                                            tags: Some("session,auto-import".to_string()),
+                                            metadata: Some(serde_json::json!({
+                                                "session_date": session_key,
+                                                "auto_imported": true,
+                                                "source": source.name,
+                                            }).to_string()),
+                                            archived: false,
+                                        };
+                                        match repository::create_collection(&mut conn, &new_coll) {
+                                            Ok(c) => {
+                                                log::info!("Created session collection: {} ({})", c.name, session_key);
+                                                session_collections.insert(session_key.clone(), c.id.clone());
+                                                c.id
+                                            }
+                                            Err(e) => {
+                                                log::warn!("Failed to create session collection: {}", e);
+                                                String::new()
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+
+                            // Add image to session collection
+                            if !session_coll_id.is_empty() {
+                                let entry = NewCollectionImage {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    collection_id: session_coll_id,
+                                    image_id: image_id.clone(),
+                                };
+                                let _ = repository::add_image_to_collection(&mut conn, &entry);
+                            }
+                        }
+                    }
 
                     // Generate a full-size preview JPEG via Python stretch
                     // Save preview locally (not on remote mount) using image ID
