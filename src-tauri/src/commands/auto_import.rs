@@ -95,6 +95,24 @@ fn is_stacked_fits(path: &Path) -> bool {
         return false;
     }
 
+    // Exclude calibration frames and raw subframes
+    if is_calibration(path) {
+        return false;
+    }
+    if file_name.starts_with("light_") || file_name.starts_with("dark_")
+        || file_name.starts_with("flat_") || file_name.starts_with("bias_")
+        || file_name.starts_with("master_")
+    {
+        return false;
+    }
+    // Exclude files in calibration/light directories that aren't in Stacked
+    if (path_str.contains("/light/") || path_str.contains("/dark/")
+        || path_str.contains("/flat/") || path_str.contains("/bias/"))
+        && !path_str.contains("/stacked/")
+    {
+        return false;
+    }
+
     // Match stacked patterns:
     // - Files in a "Stacked" directory
     // - Files with "Stack_" or "Stacked_" prefix
@@ -282,9 +300,18 @@ fn run_scan_cycle(
 
             let path_str = path.to_string_lossy().to_string();
 
-            // Skip already imported
+            // Skip already imported — check original path, library path, and filename
             if existing_urls.contains(&path_str) || existing_fits.contains(&path_str) {
                 continue;
+            }
+            // Also check if the library destination path already exists in DB
+            // (the FITS was copied to library on a previous import)
+            if let Some(lib_path) = &source.library_path {
+                let file_name_str = path.file_name().unwrap_or_default().to_string_lossy();
+                let lib_check = existing_fits.iter().any(|f| f.ends_with(file_name_str.as_ref()));
+                if lib_check {
+                    continue;
+                }
             }
 
             let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -426,7 +453,7 @@ fn run_scan_cycle(
                                             name: coll_name,
                                             description: Some(format!("Observing session {}", session_key)),
                                             visibility: "private".to_string(),
-                                            template: None,
+                                            template: Some("astrolog".to_string()),
                                             favorite: false,
                                             tags: Some("session,auto-import".to_string()),
                                             metadata: Some(serde_json::json!({
