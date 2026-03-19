@@ -47,6 +47,7 @@ import {
   ImageIcon,
   Loader2,
   Map,
+  Maximize2,
   MoreHorizontal,
   Play,
   Plus,
@@ -717,16 +718,33 @@ export default function CollectionDetailPage() {
                   Sky Map
                 </Button>
               )}
-              {!isCatalogCollection && collectionImages.length > 0 && (
-                <Button
-                  variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                  onClick={() => setSlideshowDialogOpen(true)}
-                  title="Present images as a slideshow"
-                >
-                  <Play className="w-4 h-4 mr-2" />
-                  Slideshow
-                </Button>
+              {collectionImages.length > 0 && (
+                <>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                    onClick={() => {
+                      const catalogPrefix = collection.template === "messier" ? "M"
+                        : collection.template === "caldwell" ? "C" : "";
+                      navigate(`/slideshow?collections=${collection.id}&mode=gallery${catalogPrefix ? `&catalogPrefix=${catalogPrefix}` : ""}`);
+                    }}
+                    title="Fullscreen gallery view"
+                  >
+                    <Maximize2 className="w-4 h-4 mr-2" />
+                    Gallery
+                  </Button>
+                  {!isCatalogCollection && (
+                    <Button
+                      variant="outline"
+                      className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                      onClick={() => setSlideshowDialogOpen(true)}
+                      title="Present images as a slideshow"
+                    >
+                      <Play className="w-4 h-4 mr-2" />
+                      Slideshow
+                    </Button>
+                  )}
+                </>
               )}
               {/* Publish / Sync buttons */}
               {collectionImages.length > 0 && !publishStatus && (
@@ -963,6 +981,7 @@ export default function CollectionDetailPage() {
             <ImageCard
               key={image.id}
               image={image}
+              collectionId={collection.id}
               onRemove={() => handleRemoveImage(image.id)}
               onToggleFavorite={() => handleToggleFavorite(image)}
               selectionMode={selectionMode}
@@ -1371,6 +1390,7 @@ function hasPlateSolveFailed(image: Image): boolean {
 
 function ImageCard({
   image,
+  collectionId,
   onRemove,
   onToggleFavorite,
   selectionMode = false,
@@ -1378,6 +1398,7 @@ function ImageCard({
   onToggleSelect,
 }: {
   image: Image;
+  collectionId: string;
   onRemove: () => void;
   onToggleFavorite: () => void;
   selectionMode?: boolean;
@@ -1462,7 +1483,7 @@ function ImageCard({
       {selectionMode ? (
         cardContent
       ) : (
-        <Link to={`/i/${image.id}`}>{cardContent}</Link>
+        <Link to={`/i/${image.id}?cid=${collectionId}`}>{cardContent}</Link>
       )}
 
       {/* Dropdown Menu - hidden in selection mode */}

@@ -88,10 +88,13 @@ export default function Slideshow() {
 
   // Parse config from URL
   const collectionIds = (searchParams.get("collections") || "").split(",").filter(Boolean);
+  const mode = searchParams.get("mode") || "slideshow"; // "slideshow" or "gallery"
+  const isGallery = mode === "gallery";
   const transition = (searchParams.get("transition") || "fade") as keyof typeof TRANSITIONS;
-  const theme = searchParams.get("theme") || "nameOnly";
-  const interval = parseInt(searchParams.get("interval") || "10", 10);
+  const theme = searchParams.get("theme") || (isGallery ? "nothing" : "nameOnly");
+  const interval = parseInt(searchParams.get("interval") || (isGallery ? "0" : "10"), 10);
   const shouldShuffle = searchParams.get("shuffle") === "1";
+  const catalogPrefix = searchParams.get("catalogPrefix") || "";
 
   // Fetch images for all selected collections
   const collectionQueries = collectionIds.map((id) => ({
@@ -351,6 +354,46 @@ export default function Slideshow() {
         </div>
       )}
 
+      {/* Gallery mode: hover overlay (shows on mouse move, fades after 2s) */}
+      {isGallery && currentImage && (
+        <div
+          className={`absolute bottom-6 left-6 transition-opacity duration-500 ${
+            controlsVisible ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-4 py-2">
+            <p className="text-white font-medium">
+              {currentImage.summary || currentImage.filename}
+            </p>
+            <p className="text-sm text-gray-400">
+              {new Date(currentImage.created_at).toLocaleDateString()}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Gallery mode: persistent catalog label */}
+      {isGallery && catalogPrefix && currentImage && (() => {
+        try {
+          const annotations = currentImage.annotations
+            ? JSON.parse(currentImage.annotations) as { name: string }[]
+            : [];
+          const match = annotations.find((a) =>
+            a.name.replace(/\s+/g, "").toUpperCase().startsWith(catalogPrefix.toUpperCase())
+          );
+          if (match) {
+            return (
+              <div className="absolute top-6 right-6">
+                <span className="text-white/80 text-2xl font-light tracking-wide">
+                  {match.name.replace(/\s+/g, "")}
+                </span>
+              </div>
+            );
+          }
+        } catch { /* ignore */ }
+        return null;
+      })()}
+
       {/* Controls bar (bottom) */}
       <div
         className={`absolute bottom-0 left-0 right-0 transition-opacity duration-300 ${
@@ -367,17 +410,19 @@ export default function Slideshow() {
               <ChevronLeft className="w-6 h-6" />
             </button>
 
-            <button
-              onClick={togglePlay}
-              className="p-3 rounded-full hover:bg-white/10 text-white transition-colors"
-              title={isPlaying ? "Pause (Space)" : "Play (Space)"}
-            >
-              {isPlaying ? (
-                <Pause className="w-6 h-6" />
-              ) : (
-                <Play className="w-6 h-6" />
-              )}
-            </button>
+            {!isGallery && (
+              <button
+                onClick={togglePlay}
+                className="p-3 rounded-full hover:bg-white/10 text-white transition-colors"
+                title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+              >
+                {isPlaying ? (
+                  <Pause className="w-6 h-6" />
+                ) : (
+                  <Play className="w-6 h-6" />
+                )}
+              </button>
+            )}
 
             <button
               onClick={goNext}

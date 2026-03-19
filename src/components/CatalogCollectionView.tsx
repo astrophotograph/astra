@@ -27,17 +27,13 @@ import {
   type CatalogEntry,
 } from "@/lib/catalogs";
 import { NGC_TO_MESSIER } from "@/lib/models";
+import { type CollectionFilters, imageMatchesFilters } from "@/lib/collection-utils";
 import { collectionApi, imageApi, type Collection, type Image, type CatalogObject } from "@/lib/tauri/commands";
 import CatalogObjectDialog, {
   type ImageWithMeta,
   extractEquipment,
   extractExposureSeconds,
 } from "./CatalogObjectDialog";
-
-interface DateFilter {
-  start: string; // ISO date "YYYY-MM-DD"
-  end: string;
-}
 
 interface CatalogCollectionViewProps {
   collection: Collection;
@@ -111,80 +107,71 @@ export default function CatalogCollectionView({
     return catalog?.objects || [];
   }, [collection.template, catalog]);
 
-  // Date filter for scoped collections
+  // Filter criteria for scoped collections
   const savedMeta = useMemo(() => {
-    if (!collection.metadata) return { dateFilter: null, autoRefresh: false };
+    if (!collection.metadata) return { filters: null as CollectionFilters | null, autoRefresh: false };
     try {
       const meta = JSON.parse(collection.metadata);
-      return {
-        dateFilter: (meta.dateFilter as DateFilter) ?? null,
-        autoRefresh: meta.autoRefresh === true,
-      };
-    } catch { return { dateFilter: null, autoRefresh: false }; }
+      // Support both new format (filters) and legacy (dateFilter)
+      const filters: CollectionFilters | null = meta.filters ?? (meta.dateFilter ? { dateRange: meta.dateFilter } : null);
+      return { filters, autoRefresh: meta.autoRefresh === true };
+    } catch { return { filters: null as CollectionFilters | null, autoRefresh: false }; }
   }, [collection.metadata]);
 
-  const savedFilter = savedMeta.dateFilter;
-
-  const [dateStart, setDateStart] = useState(savedFilter?.start ?? "");
-  const [dateEnd, setDateEnd] = useState(savedFilter?.end ?? "");
+  const [dateStart, setDateStart] = useState(savedMeta.filters?.dateRange?.start ?? "");
+  const [dateEnd, setDateEnd] = useState(savedMeta.filters?.dateRange?.end ?? "");
+  const [filterCameras, setFilterCameras] = useState(savedMeta.filters?.cameras?.join(", ") ?? "");
+  const [filterTags, setFilterTags] = useState(savedMeta.filters?.tags?.join(", ") ?? "");
   const [isPopulating, setIsPopulating] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(savedMeta.autoRefresh);
   const prevImageCountRef = useRef(collectionImages.length);
 
-  // Sync date inputs when saved filter changes
+  // Sync inputs when saved filter changes
   useEffect(() => {
-    if (savedFilter) {
-      setDateStart(savedFilter.start);
-      setDateEnd(savedFilter.end);
+    if (savedMeta.filters) {
+      if (savedMeta.filters.dateRange) {
+        setDateStart(savedMeta.filters.dateRange.start);
+        setDateEnd(savedMeta.filters.dateRange.end);
+      }
+      if (savedMeta.filters.cameras) setFilterCameras(savedMeta.filters.cameras.join(", "));
+      if (savedMeta.filters.tags) setFilterTags(savedMeta.filters.tags.join(", "));
     }
-  }, [savedFilter]);
+  }, [savedMeta.filters]);
 
   // Save date filter to collection metadata
-  const saveDateFilter = useCallback(async (start: string, end: string) => {
+  const buildFilters = useCallback((): CollectionFilters => {
+    const filters: CollectionFilters = {};
+    if (dateStart && dateEnd) filters.dateRange = { start: dateStart, end: dateEnd };
+    const cameras = filterCameras.split(",").map((c) => c.trim()).filter(Boolean);
+    if (cameras.length > 0) filters.cameras = cameras;
+    const tags = filterTags.split(",").map((t) => t.trim()).filter(Boolean);
+    if (tags.length > 0) filters.tags = tags;
+    return filters;
+  }, [dateStart, dateEnd, filterCameras, filterTags]);
+
+  const saveFilters = useCallback(async () => {
     const existingMeta = collection.metadata ? JSON.parse(collection.metadata) : {};
-    const newMeta = { ...existingMeta, dateFilter: { start, end } };
+    const filters = buildFilters();
+    // Save in both formats for backward compat
+    const newMeta = { ...existingMeta, filters, dateFilter: filters.dateRange };
     await collectionApi.update({
       id: collection.id,
       metadata: JSON.stringify(newMeta),
     });
-  }, [collection.id, collection.metadata]);
+  }, [collection.id, collection.metadata, buildFilters]);
 
-  // Auto-populate: find images in date range matching catalog, add to collection
+  // Auto-populate: find images matching filters + catalog entries, add to collection
   const autoPopulate = useCallback(async () => {
-    if (!dateStart || !dateEnd || !catalog) return;
+    if (!catalog) return;
+    const filters = buildFilters();
+    if (!filters.dateRange && !filters.cameras?.length && !filters.tags?.length) return;
 
     setIsPopulating(true);
     try {
-      // Save the date filter
-      await saveDateFilter(dateStart, dateEnd);
+      await saveFilters();
 
-      const startDate = new Date(dateStart);
-      const endDate = new Date(dateEnd + "T23:59:59");
-
-      // Extract observation date from FITS DATE-OBS metadata, fall back to created_at
-      const getObsDate = (img: Image): Date => {
-        if (img.metadata) {
-          try {
-            const meta = JSON.parse(img.metadata);
-            const raw = meta["DATE-OBS"] || meta["date-obs"];
-            if (raw) {
-              const m = String(raw).match(/CharacterString\("([^"]*)"\)/);
-              const dateStr = m ? m[1] : (String(raw) !== "None" ? String(raw) : null);
-              if (dateStr) {
-                const d = new Date(dateStr);
-                if (!isNaN(d.getTime())) return d;
-              }
-            }
-          } catch { /* ignore */ }
-        }
-        return new Date(img.created_at);
-      };
-
-      // Filter all images by observation date range
-      const inRange = allImages.filter((img) => {
-        const d = getObsDate(img);
-        return d >= startDate && d <= endDate;
-      });
+      // Filter all images by criteria
+      const matching = allImages.filter((img) => imageMatchesFilters(img, filters));
 
       // Match against catalog entries
       const allEntries = catalog.pagination
@@ -193,7 +180,7 @@ export default function CatalogCollectionView({
 
       // Build set of image IDs that should be in the collection
       const inRangeIds = new Set<string>();
-      for (const image of inRange) {
+      for (const image of matching) {
         if (!image.annotations) continue;
 
         let annotations: CatalogObject[] = [];
@@ -254,7 +241,7 @@ export default function CatalogCollectionView({
     } finally {
       setIsPopulating(false);
     }
-  }, [dateStart, dateEnd, catalog, allImages, collectionImages, collection.id, saveDateFilter, onImagesChanged]);
+  }, [catalog, allImages, collectionImages, collection.id, buildFilters, saveFilters, onImagesChanged]);
 
   // Auto-refresh: periodically re-populate and sync if images changed
   useEffect(() => {
@@ -500,7 +487,7 @@ export default function CatalogCollectionView({
           <div className="flex items-center gap-2 mb-3">
             <CalendarDays className="w-4 h-4 text-slate-400" />
             <span className="text-sm font-medium text-slate-300">Date Filter</span>
-            {savedFilter && (
+            {savedMeta.filters && (
               <Badge variant="outline" className="text-xs">
                 Active
               </Badge>
@@ -525,9 +512,27 @@ export default function CatalogCollectionView({
                 className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1"
               />
             </div>
+            <div>
+              <Label className="text-xs text-slate-400">Camera</Label>
+              <Input
+                value={filterCameras}
+                onChange={(e) => setFilterCameras(e.target.value)}
+                placeholder="e.g. ASI2600MC"
+                className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1 text-xs"
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-slate-400">Tags</Label>
+              <Input
+                value={filterTags}
+                onChange={(e) => setFilterTags(e.target.value)}
+                placeholder="e.g. processed"
+                className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1 text-xs"
+              />
+            </div>
             <Button
               onClick={autoPopulate}
-              disabled={isPopulating || !dateStart || !dateEnd}
+              disabled={isPopulating || (!dateStart && !filterCameras && !filterTags)}
               size="sm"
             >
               {isPopulating ? (
@@ -538,7 +543,7 @@ export default function CatalogCollectionView({
               ) : (
                 <>
                   <RefreshCw className="w-3 h-3 mr-1" />
-                  {savedFilter ? "Refresh" : "Find Images"}
+                  {savedMeta.filters ? "Refresh" : "Find Images"}
                 </>
               )}
             </Button>
@@ -547,7 +552,7 @@ export default function CatalogCollectionView({
                 {collectionImages.length} image{collectionImages.length !== 1 ? "s" : ""} in collection
               </span>
             )}
-            {savedFilter && (
+            {savedMeta.filters && (
               <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer ml-auto">
                 <input
                   type="checkbox"

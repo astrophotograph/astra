@@ -36,6 +36,8 @@ import {
   ArrowLeft,
   Calendar,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Compass,
   Edit,
   Eye,
@@ -55,7 +57,7 @@ import {
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { useQueryClient } from "@tanstack/react-query";
-import { useImage, useUpdateImage, useDeleteImage, imageKeys } from "@/hooks/use-images";
+import { useImage, useUpdateImage, useDeleteImage, useCollectionImages, imageKeys } from "@/hooks/use-images";
 import { useEquipment } from "@/contexts/EquipmentContext";
 
 // Calculate focal length from pixel size and pixel scale
@@ -90,6 +92,13 @@ export default function ImageViewerPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Collection context for prev/next navigation
+  const collectionId = searchParams.get("cid");
+  const { data: collectionImagesNav = [] } = useCollectionImages(collectionId || "");
+  const navIndex = collectionImagesNav.findIndex((img) => img.id === id);
+  const prevImage = navIndex > 0 ? collectionImagesNav[navIndex - 1] : null;
+  const nextImage = navIndex < collectionImagesNav.length - 1 ? collectionImagesNav[navIndex + 1] : null;
   const [isEditing, setIsEditing] = useState(false);
   const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -202,6 +211,22 @@ export default function ImageViewerPage() {
     }
     return null;
   }, [plateSolveInfo, equipmentSets]);
+
+  // Keyboard navigation for collection context (left/right arrows)
+  useEffect(() => {
+    if (!collectionId) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't navigate when typing in inputs
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "ArrowLeft" && prevImage) {
+        navigate(`/i/${prevImage.id}?cid=${collectionId}`);
+      } else if (e.key === "ArrowRight" && nextImage) {
+        navigate(`/i/${nextImage.id}?cid=${collectionId}`);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [collectionId, prevImage, nextImage, navigate]);
 
   // Track displayed image size for overlay (updates on resize)
   const imgRef = useRef<HTMLImageElement | null>(null);
@@ -555,10 +580,39 @@ export default function ImageViewerPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+          <Button variant="ghost" size="sm" onClick={() => {
+            if (collectionId) {
+              navigate(`/collections/${collectionId}`);
+            } else {
+              navigate(-1);
+            }
+          }}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
           </Button>
+          {collectionId && navIndex >= 0 && (
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!prevImage}
+                onClick={() => prevImage && navigate(`/i/${prevImage.id}?cid=${collectionId}`)}
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+              <span className="text-sm text-muted-foreground min-w-[60px] text-center">
+                {navIndex + 1} of {collectionImagesNav.length}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!nextImage}
+                onClick={() => nextImage && navigate(`/i/${nextImage.id}?cid=${collectionId}`)}
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
           <h1 className="text-2xl font-bold">{image.summary || image.filename}</h1>
         </div>
         <div className="flex items-center gap-2">
