@@ -105,10 +105,13 @@ fn is_stacked_fits(path: &Path) -> bool {
     {
         return false;
     }
-    // Exclude files in calibration/light directories that aren't in Stacked
+    // Exclude files in calibration/light directories unless they're stacked
+    // (ASI Air puts Stacked_*.fit directly in /Live/Light/<target>/)
     if (path_str.contains("/light/") || path_str.contains("/dark/")
         || path_str.contains("/flat/") || path_str.contains("/bias/"))
         && !path_str.contains("/stacked/")
+        && !file_name.starts_with("stack_")
+        && !file_name.starts_with("stacked")
     {
         return false;
     }

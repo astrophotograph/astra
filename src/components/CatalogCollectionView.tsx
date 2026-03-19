@@ -124,6 +124,14 @@ export default function CatalogCollectionView({
   const [filterTags, setFilterTags] = useState(savedMeta.filters?.tags?.join(", ") ?? "");
   const [isPopulating, setIsPopulating] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(savedMeta.autoRefresh);
+  const [availableCameras, setAvailableCameras] = useState<string[]>([]);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+
+  // Fetch autocomplete suggestions
+  useEffect(() => {
+    imageApi.getUniqueCameras().then(setAvailableCameras).catch(() => {});
+    imageApi.getUniqueTags().then(setAvailableTags).catch(() => {});
+  }, []);
   const prevImageCountRef = useRef(collectionImages.length);
 
   // Sync inputs when saved filter changes
@@ -515,20 +523,28 @@ export default function CatalogCollectionView({
             <div>
               <Label className="text-xs text-slate-400">Camera</Label>
               <Input
+                list="camera-suggestions"
                 value={filterCameras}
                 onChange={(e) => setFilterCameras(e.target.value)}
-                placeholder="e.g. ASI2600MC"
-                className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1 text-xs"
+                placeholder={availableCameras[0] || "e.g. ASI2600MC"}
+                className="bg-slate-900 border-slate-600 text-white w-[180px] mt-1 text-xs"
               />
+              <datalist id="camera-suggestions">
+                {availableCameras.map((c) => <option key={c} value={c} />)}
+              </datalist>
             </div>
             <div>
               <Label className="text-xs text-slate-400">Tags</Label>
               <Input
+                list="tag-suggestions"
                 value={filterTags}
                 onChange={(e) => setFilterTags(e.target.value)}
                 placeholder="e.g. processed"
                 className="bg-slate-900 border-slate-600 text-white w-[160px] mt-1 text-xs"
               />
+              <datalist id="tag-suggestions">
+                {availableTags.map((t) => <option key={t} value={t} />)}
+              </datalist>
             </div>
             <Button
               onClick={autoPopulate}

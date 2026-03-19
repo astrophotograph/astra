@@ -431,3 +431,62 @@ pub fn ensure_fits_url(state: State<'_, AppState>, id: String) -> Result<Option<
         Ok(None)
     }
 }
+
+/// Get all unique tags across all images
+#[tauri::command]
+pub fn get_unique_tags(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let all_tags = repository::get_all_tags(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut unique = std::collections::BTreeSet::new();
+    for tags_str in all_tags {
+        for tag in tags_str.split(',') {
+            let t = tag.trim().to_string();
+            if !t.is_empty() {
+                unique.insert(t);
+            }
+        }
+    }
+    Ok(unique.into_iter().collect())
+}
+
+/// Get all unique camera/instrument names from image metadata
+#[tauri::command]
+pub fn get_unique_cameras(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let all_meta = repository::get_all_metadata(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut unique = std::collections::BTreeSet::new();
+    for meta_str in all_meta {
+        if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&meta_str) {
+            for key in ["INSTRUME", "instrume"] {
+                if let Some(val) = meta.get(key) {
+                    let s = val.to_string();
+                    // Parse fitrs debug format
+                    if let Some(caps) = s.strip_prefix("\"Some(CharacterString(\\\"") {
+                        if let Some(name) = caps.strip_suffix("\\\"))\"}").or_else(|| caps.strip_suffix("\\\"))\"")) {
+                            let trimmed = name.trim().to_string();
+                            if !trimmed.is_empty() {
+                                unique.insert(trimmed);
+                            }
+                        }
+                    } else {
+                        // Try simpler parsing
+                        let cleaned = s.trim_matches('"').to_string();
+                        if let Some(m) = cleaned.strip_prefix("Some(CharacterString(\"") {
+                            if let Some(name) = m.strip_suffix("\"))") {
+                                let trimmed = name.trim().to_string();
+                                if !trimmed.is_empty() {
+                                    unique.insert(trimmed);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(unique.into_iter().collect())
+}

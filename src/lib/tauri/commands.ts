@@ -299,6 +299,10 @@ export const imageApi = {
 
   regeneratePreview: (id: string, bgPercent?: number, sigma?: number) =>
     invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id, bgPercent, sigma }),
+
+  getUniqueTags: () => invoke<string[]>("get_unique_tags"),
+
+  getUniqueCameras: () => invoke<string[]>("get_unique_cameras"),
 };
 
 export const collectionImageApi = {

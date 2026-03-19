@@ -147,6 +147,8 @@ pub fn run() {
             commands::classify_target_type,
             commands::get_processing_defaults,
             commands::regenerate_preview,
+            commands::get_unique_tags,
+            commands::get_unique_cameras,
             // Target browser commands
             commands::get_targets,
             commands::search_images_by_target,

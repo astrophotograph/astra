@@ -169,6 +169,26 @@ pub fn get_all_fits_urls(
         .map(|v| v.into_iter().flatten().collect())
 }
 
+/// Get all unique non-null tags from images
+pub fn get_all_tags(conn: &mut SqliteConnection, user_id: &str) -> QueryResult<Vec<String>> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::tags.is_not_null())
+        .select(images::tags)
+        .load::<Option<String>>(conn)
+        .map(|v| v.into_iter().flatten().collect())
+}
+
+/// Get all non-null metadata from images (for extracting cameras etc.)
+pub fn get_all_metadata(conn: &mut SqliteConnection, user_id: &str) -> QueryResult<Vec<String>> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::metadata.is_not_null())
+        .select(images::metadata)
+        .load::<Option<String>>(conn)
+        .map(|v| v.into_iter().flatten().collect())
+}
+
 /// Get all collection-image mappings for efficient duplicate checking
 pub fn get_all_collection_image_pairs(
     conn: &mut SqliteConnection,
