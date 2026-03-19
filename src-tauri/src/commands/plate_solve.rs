@@ -92,6 +92,16 @@ pub async fn plate_solve_image(
 
     // If solve was successful and catalog query is requested, query catalogs
     if solve_result.success && input.query_catalogs.unwrap_or(true) {
+        // Use FITS file for WCS pixel positions (preview JPEG has no WCS headers)
+        let fits_for_wcs = image.fits_url.as_deref()
+            .or_else(|| {
+                // Use url if it's a FITS file
+                image.url.as_deref().filter(|u| {
+                    let l = u.to_lowercase();
+                    l.ends_with(".fit") || l.ends_with(".fits")
+                })
+            });
+
         objects = plate_solve::query_objects_in_fov(
             solve_result.center_ra,
             solve_result.center_dec,
@@ -99,6 +109,7 @@ pub async fn plate_solve_image(
             solve_result.height_deg,
             input.catalogs,
             input.star_mag_limit,
+            fits_for_wcs,
         )
         .unwrap_or_else(|e| {
             log::warn!("Failed to query catalogs: {}", e);
@@ -227,5 +238,6 @@ pub fn query_sky_region(
         height_deg,
         catalogs,
         star_mag_limit,
+        None,
     )
 }

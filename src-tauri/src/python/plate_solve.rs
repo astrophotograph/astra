@@ -42,6 +42,12 @@ pub struct CatalogObject {
     pub size_arcmin: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub common_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_px: Option<f64>,
 }
 
 /// Plate solve an image using the specified solver
@@ -240,6 +246,7 @@ pub fn query_objects_in_fov(
     height_deg: f64,
     catalogs: Option<Vec<String>>,
     star_mag_limit: Option<f64>,
+    fits_path: Option<&str>,
 ) -> Result<Vec<CatalogObject>, String> {
     Python::with_gil(|py| {
         // Import our module
@@ -277,9 +284,19 @@ pub fn query_objects_in_fov(
         }
 
         // Call query_objects_in_fov function
-        let result = astra_astro
+        let mut result = astra_astro
             .call_method("query_objects_in_fov", (), Some(&kwargs))
             .map_err(|e| format!("Catalog query failed: {}", e))?;
+
+        // Add pixel positions from WCS if FITS path provided
+        if let Some(fpath) = fits_path {
+            let catalog_query = astra_astro
+                .getattr("catalog_query")
+                .map_err(|e| format!("Failed to get catalog_query: {}", e))?;
+            result = catalog_query
+                .call_method1("add_pixel_positions", (result, fpath))
+                .map_err(|e| format!("Failed to add pixel positions: {}", e))?;
+        }
 
         // Convert Python list of dicts to Rust Vec
         let list: &Bound<'_, PyList> = result
@@ -351,6 +368,10 @@ pub fn query_objects_in_fov(
                 .flatten()
                 .and_then(|v| v.extract().ok());
 
+            let pixel_x: Option<f64> = dict.get_item("pixelX").ok().flatten().and_then(|v| v.extract().ok());
+            let pixel_y: Option<f64> = dict.get_item("pixelY").ok().flatten().and_then(|v| v.extract().ok());
+            let radius_px: Option<f64> = dict.get_item("radiusPx").ok().flatten().and_then(|v| v.extract().ok());
+
             objects.push(CatalogObject {
                 name,
                 catalog,
@@ -361,6 +382,9 @@ pub fn query_objects_in_fov(
                 size,
                 size_arcmin,
                 common_name,
+                pixel_x,
+                pixel_y,
+                radius_px,
             });
         }
 

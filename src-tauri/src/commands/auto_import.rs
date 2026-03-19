@@ -543,6 +543,7 @@ fn run_scan_cycle(
                                     result.center_ra, result.center_dec,
                                     result.width_deg, result.height_deg,
                                     None, None,
+                                    Some(&fits_path_str),
                                 ).unwrap_or_default();
 
                                 // Build annotations JSON

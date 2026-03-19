@@ -29,6 +29,9 @@ class CatalogObject:
     size: Optional[str] = None  # formatted size string
     size_arcmin: Optional[float] = None  # size in arcminutes
     common_name: Optional[str] = None
+    pixel_x: Optional[float] = None  # pixel position in image
+    pixel_y: Optional[float] = None
+    radius_px: Optional[float] = None  # radius in pixels
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -47,6 +50,12 @@ class CatalogObject:
             result["sizeArcmin"] = self.size_arcmin
         if self.common_name is not None:
             result["commonName"] = self.common_name
+        if self.pixel_x is not None:
+            result["pixelX"] = self.pixel_x
+        if self.pixel_y is not None:
+            result["pixelY"] = self.pixel_y
+        if self.radius_px is not None:
+            result["radiusPx"] = self.radius_px
         return result
 
 
@@ -1071,3 +1080,74 @@ def query_objects_in_fov(
     fov_objects.sort(key=sort_key)
 
     return [obj.to_dict() for obj in fov_objects]
+
+
+def add_pixel_positions(
+    objects: list[dict],
+    fits_path: str,
+) -> list[dict]:
+    """
+    Add pixel positions to catalog objects using WCS from a plate-solved FITS file.
+
+    This uses astropy's WCS to do proper world_to_pixel conversion, which handles
+    all projection types (TAN-SIP, etc.) correctly.
+
+    Args:
+        objects: List of catalog object dicts (from query_objects_in_fov)
+        fits_path: Path to the plate-solved FITS file with WCS headers
+
+    Returns:
+        Same list with pixelX, pixelY, and radiusPx fields added
+    """
+    try:
+        from astropy.io import fits
+        from astropy.wcs import WCS
+        from astropy.coordinates import SkyCoord
+
+        with fits.open(fits_path) as hdul:
+            header = hdul[0].header
+            # Use naxis=2 to handle 3D (RGB) FITS with SIP distortion
+            wcs = WCS(header, naxis=2)
+
+        # Get image dimensions
+        naxis1 = header.get("NAXIS1", 0)
+        naxis2 = header.get("NAXIS2", 0)
+
+        # Compute pixel scale (deg/pixel) for size conversion
+        if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
+            cd = wcs.wcs.cd
+            pixel_scale_deg = abs(cd[0, 0] * cd[1, 1] - cd[0, 1] * cd[1, 0]) ** 0.5
+        elif hasattr(wcs.wcs, "cdelt") and wcs.wcs.cdelt is not None:
+            pixel_scale_deg = abs(wcs.wcs.cdelt[0])
+        else:
+            pixel_scale_deg = None
+
+        for obj in objects:
+            ra = obj.get("ra")
+            dec = obj.get("dec")
+            if ra is None or dec is None:
+                continue
+
+            try:
+                coord = SkyCoord(ra=ra, dec=dec, unit="deg")
+                px, py = wcs.world_to_pixel(coord)
+
+                px = float(px)
+                py = float(py)
+
+                # Check if within image bounds (with margin)
+                if -50 < px < naxis1 + 50 and -50 < py < naxis2 + 50:
+                    obj["pixelX"] = round(px, 2)
+                    obj["pixelY"] = round(py, 2)
+
+                    # Convert angular size to pixel radius
+                    if pixel_scale_deg and obj.get("sizeArcmin"):
+                        radius_px = (obj["sizeArcmin"] / 60.0) / pixel_scale_deg / 2.0
+                        obj["radiusPx"] = round(max(10, radius_px), 2)
+            except Exception:
+                continue
+
+    except Exception as e:
+        print(f"Failed to add pixel positions: {e}")
+
+    return objects

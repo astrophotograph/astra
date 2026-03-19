@@ -699,6 +699,9 @@ export interface CatalogObject {
   size?: string;
   sizeArcmin?: number;
   commonName?: string;
+  pixelX?: number;
+  pixelY?: number;
+  radiusPx?: number;
 }
 
 export interface PlateSolveResponse extends PlateSolveResult {
