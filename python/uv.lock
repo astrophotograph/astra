@@ -42,7 +42,7 @@ requires-dist = [
     { name = "erewhon-astro", marker = "extra == 'platesolve'", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12.1.0" },
-    { name = "processinator" },
+    { name = "processinator", specifier = ">=0.2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "scipy", specifier = ">=1.16.3" },
@@ -821,16 +821,16 @@ wheels = [
 
 [[package]]
 name = "processinator"
-version = "0.1.0"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astropy" },
     { name = "numpy" },
     { name = "pillow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2d/6b/308e2b74c1dc640394bf365f16b25071c9173cc68007d82e637fb1f3cd0e/processinator-0.1.0.tar.gz", hash = "sha256:67f36b0155874bcfb4e4223a36d3661e3051e60ec0d5aee9dd9c192abea6e614", size = 4344, upload-time = "2026-03-14T18:45:54.295Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/c4/fa4b836ae67c62c011d02c9879fdb60bf7a7a3acabdae83bbac12bd50ba0/processinator-0.2.0.tar.gz", hash = "sha256:898864c87ed2cd70b1b338491a52a574a6adf03e342a0c2758376efe42db672f", size = 4614, upload-time = "2026-03-22T05:40:00.1Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/36/d4d2b751498c08f5438424726c33ed041a8548a921da78b9749d748269cd/processinator-0.1.0-py3-none-any.whl", hash = "sha256:709298db44ea00bbd1c838358caa1571965ee0d7f8076ca01a4132e508a92c26", size = 6108, upload-time = "2026-03-14T18:45:53.294Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/7b/d5894ddc4d913b31f33c0d6d2ed9cdda3c04a60fccb3ab0ee62fe52e95b9/processinator-0.2.0-py3-none-any.whl", hash = "sha256:33a70b6263ae347d482d93d1d64730a969c938a5f9f4b9a270ad724a07f3e9b7", size = 6374, upload-time = "2026-03-22T05:40:00.856Z" },
 ]
 
 [[package]]
