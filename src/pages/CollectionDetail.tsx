@@ -46,7 +46,7 @@ import {
   Globe,
   ImageIcon,
   Loader2,
-  Map,
+  Map as MapIcon,
   Maximize2,
   MoreHorizontal,
   Play,
@@ -153,6 +153,77 @@ export default function CollectionDetailPage() {
       unsolvedImages: unsolved,
       solvableImages: solvable,
     };
+  }, [collectionImages]);
+
+  // Group duplicate images by plate solve center (within ~2 arcmin margin)
+  const { displayImages, duplicateGroups } = useMemo(() => {
+    const emptyGroups = new globalThis.Map<string, Image[]>();
+    if (!collectionImages.length) return { displayImages: [] as Image[], duplicateGroups: emptyGroups };
+
+    const groups = new globalThis.Map<string, Image[]>();
+    const imageGroup = new globalThis.Map<string, string>();
+
+    type PlateSolveCenter = { ra: number; dec: number };
+
+    const getCenter = (img: Image): PlateSolveCenter | null => {
+      if (!img.metadata) return null;
+      try {
+        const meta = JSON.parse(img.metadata);
+        const ps = meta.plate_solve;
+        if (!ps?.center_ra || !ps?.center_dec) return null;
+        return { ra: ps.center_ra, dec: ps.center_dec };
+      } catch { return null; }
+    };
+
+    const MARGIN_DEG = 2 / 60; // 2 arcminutes
+
+    for (const img of collectionImages) {
+      const center = getCenter(img);
+      if (!center) {
+        // No plate solve — standalone
+        const key = `solo_${img.id}`;
+        groups.set(key, [img]);
+        imageGroup.set(img.id, key);
+        continue;
+      }
+
+      // Find existing group within margin
+      let foundKey: string | null = null;
+      for (const [key, members] of groups) {
+        const refCenter = getCenter(members[0]);
+        if (!refCenter) continue;
+        const dRa = Math.abs(center.ra - refCenter.ra) * Math.cos(center.dec * Math.PI / 180);
+        const dDec = Math.abs(center.dec - refCenter.dec);
+        if (dRa < MARGIN_DEG && dDec < MARGIN_DEG) {
+          foundKey = key;
+          break;
+        }
+      }
+
+      if (foundKey) {
+        groups.get(foundKey)!.push(img);
+        imageGroup.set(img.id, foundKey);
+      } else {
+        const key = `group_${img.id}`;
+        groups.set(key, [img]);
+        imageGroup.set(img.id, key);
+      }
+    }
+
+    // For each group, pick the most recent image as representative
+    const display: Image[] = [];
+    const dupeGroups = new globalThis.Map<string, Image[]>();
+
+    for (const [, members] of groups) {
+      // Sort by created_at descending
+      const sorted = [...members].sort((a, b) => b.created_at.localeCompare(a.created_at));
+      display.push(sorted[0]); // Show newest
+      if (sorted.length > 1) {
+        dupeGroups.set(sorted[0].id, sorted);
+      }
+    }
+
+    return { displayImages: display, duplicateGroups: dupeGroups };
   }, [collectionImages]);
 
   // Extract footprints for sky map
@@ -714,7 +785,7 @@ export default function CollectionDetailPage() {
                   onClick={() => setSkyMapOpen(true)}
                   title="View sky coverage map"
                 >
-                  <Map className="w-4 h-4 mr-2" />
+                  <MapIcon className="w-4 h-4 mr-2" />
                   Sky Map
                 </Button>
               )}
@@ -977,11 +1048,12 @@ export default function CollectionDetailPage() {
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {collectionImages.map((image) => (
+          {displayImages.map((image) => (
             <ImageCard
               key={image.id}
               image={image}
               collectionId={collection.id}
+              duplicateCount={duplicateGroups.get(image.id)?.length}
               onRemove={() => handleRemoveImage(image.id)}
               onToggleFavorite={() => handleToggleFavorite(image)}
               selectionMode={selectionMode}
@@ -1391,6 +1463,7 @@ function hasPlateSolveFailed(image: Image): boolean {
 function ImageCard({
   image,
   collectionId,
+  duplicateCount,
   onRemove,
   onToggleFavorite,
   selectionMode = false,
@@ -1399,6 +1472,7 @@ function ImageCard({
 }: {
   image: Image;
   collectionId: string;
+  duplicateCount?: number;
   onRemove: () => void;
   onToggleFavorite: () => void;
   selectionMode?: boolean;
@@ -1407,6 +1481,44 @@ function ImageCard({
 }) {
   const navigate = useNavigate();
   const plateSolved = isPlateSolved(image);
+
+  // Compute integration time and object count
+  const { integrationStr, objectCount } = useMemo(() => {
+    let integrationStr = "";
+    let objectCount = 0;
+
+    if (image.metadata) {
+      try {
+        const meta = JSON.parse(image.metadata);
+        const parseFv = (v: unknown): number => {
+          if (v == null) return 0;
+          const s = String(v);
+          let m = s.match(/RealFloatingNumber\(([\d.eE+-]+)\)/);
+          if (m) return parseFloat(m[1]);
+          m = s.match(/IntegerNumber\((\d+)\)/);
+          if (m) return parseInt(m[1]);
+          return parseFloat(s) || 0;
+        };
+        const exp = parseFv(meta.EXPTIME || meta.EXPOSURE);
+        const frames = parseFv(meta.STACKCNT || meta.NCOMBINE);
+        const total = exp * frames;
+        if (total > 0) {
+          if (total < 60) integrationStr = `${total.toFixed(0)}s`;
+          else if (total < 3600) integrationStr = `${(total / 60).toFixed(1)}m`;
+          else integrationStr = `${(total / 3600).toFixed(1)}h`;
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (image.annotations) {
+      try {
+        const ann = JSON.parse(image.annotations);
+        objectCount = Array.isArray(ann) ? ann.length : 0;
+      } catch { /* ignore */ }
+    }
+
+    return { integrationStr, objectCount };
+  }, [image.metadata, image.annotations]);
 
   const handlePlateSolve = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1436,13 +1548,38 @@ function ImageCard({
             <ImageIcon className="w-10 h-10 text-gray-500" />
           </div>
         )}
-        {/* Plate-solved indicator */}
-        {plateSolved && (
+        {/* Bottom-left badges: plate solve + object count */}
+        <div className="absolute bottom-2 left-2 flex items-center gap-1">
+          {plateSolved && (
+            <div
+              className="w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
+              title="Plate solved"
+            >
+              <Compass className="w-3.5 h-3.5 text-white" />
+            </div>
+          )}
+          {objectCount > 0 && (
+            <div
+              className="bg-indigo-600/90 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none"
+              title={`${objectCount} objects identified`}
+            >
+              {objectCount}
+            </div>
+          )}
+        </div>
+        {/* Bottom-right: integration time */}
+        {integrationStr && (
+          <div className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] font-medium px-1.5 py-0.5 rounded leading-none">
+            {integrationStr}
+          </div>
+        )}
+        {/* Top-right: duplicate stack count */}
+        {duplicateCount && duplicateCount > 1 && (
           <div
-            className="absolute bottom-2 left-2 w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
-            title="Plate solved"
+            className="absolute top-2 right-2 bg-slate-600/90 text-white text-[10px] font-medium px-1.5 py-0.5 rounded leading-none flex items-center gap-1"
+            title={`${duplicateCount} versions of this target`}
           >
-            <Compass className="w-3.5 h-3.5 text-white" />
+            <span className="opacity-70">&#x25A0;&#x25A0;</span> {duplicateCount}
           </div>
         )}
         {/* Selection checkbox */}

@@ -933,7 +933,9 @@ export default function ImageViewerPage() {
                       const exposure = parseFitsVal(meta.EXPTIME || meta.EXPOSURE || meta.exptime || meta.exposure);
                       const gain = parseFitsVal(meta.GAIN || meta.gain);
                       const stackCount = parseFitsVal(meta.STACKCNT || meta.NCOMBINE || meta.stackcnt || meta.ncombine);
-                      const hasInfo = instrument || telescope || filter || exposure || gain || stackCount;
+                      const imageW = parseFitsVal(meta.NAXIS1 || meta.IMAGEW || meta.naxis1);
+                      const imageH = parseFitsVal(meta.NAXIS2 || meta.IMAGEH || meta.naxis2);
+                      const hasInfo = instrument || telescope || filter || exposure || gain || stackCount || imageW;
                       if (!hasInfo) return null;
 
                       // Calculate total integration time
@@ -974,6 +976,12 @@ export default function ImageViewerPage() {
                               <>
                                 <span className="text-muted-foreground">Integration</span>
                                 <span>{formatIntegration(totalSecs)}</span>
+                              </>
+                            )}
+                            {imageW && imageH && (
+                              <>
+                                <span className="text-muted-foreground">Resolution</span>
+                                <span>{imageW} × {imageH}</span>
                               </>
                             )}
                           </div>
