@@ -16,6 +16,29 @@ struct PublishProgress {
     total: usize,
 }
 
+/// Parse a FITS integer value from the fitrs debug format
+fn parse_fits_int(val: Option<&serde_json::Value>) -> Option<u32> {
+    let val = val?;
+    let s = match val.as_str() {
+        Some(s) => s.to_string(),
+        None => val.to_string().trim_matches('"').to_string(),
+    };
+    // Try: Some(IntegerNumber(6248))
+    if let Some(caps) = s.strip_prefix("Some(IntegerNumber(") {
+        if let Some(num) = caps.strip_suffix("))") {
+            return num.parse().ok();
+        }
+    }
+    // Try: IntegerNumber(6248)
+    if let Some(caps) = s.strip_prefix("IntegerNumber(") {
+        if let Some(num) = caps.strip_suffix(")") {
+            return num.parse().ok();
+        }
+    }
+    // Try plain number
+    s.parse().ok()
+}
+
 fn emit_progress(app: &AppHandle, step: &str, detail: &str, current: usize, total: usize) {
     let _ = app.emit("publish-progress", PublishProgress {
         step: step.to_string(),
@@ -800,13 +823,9 @@ pub async fn publish_collection_gallery(
                     rotation: ps.get("rotation")?.as_f64()?,
                     width_deg: ps.get("width_deg")?.as_f64()?,
                     height_deg: ps.get("height_deg")?.as_f64()?,
-                    image_width: parsed.get("NAXIS1")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
+                    image_width: parse_fits_int(parsed.get("NAXIS1"))
                         .or_else(|| ps.get("image_width").and_then(|v| v.as_u64()).map(|v| v as u32)),
-                    image_height: parsed.get("NAXIS2")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
+                    image_height: parse_fits_int(parsed.get("NAXIS2"))
                         .or_else(|| ps.get("image_height").and_then(|v| v.as_u64()).map(|v| v as u32)),
                 })
             });
@@ -821,6 +840,9 @@ pub async fn publish_collection_gallery(
                             dec: obj.get("dec")?.as_f64()?,
                             magnitude: obj.get("magnitude").and_then(|v| v.as_f64()),
                             size_arcmin: obj.get("sizeArcmin").and_then(|v| v.as_f64()),
+                            pixel_x: obj.get("pixelX").and_then(|v| v.as_f64()),
+                            pixel_y: obj.get("pixelY").and_then(|v| v.as_f64()),
+                            radius_px: obj.get("radiusPx").and_then(|v| v.as_f64()),
                         })
                     })
                     .collect()

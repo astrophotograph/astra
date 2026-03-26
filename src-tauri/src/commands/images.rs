@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::db::models::{Collection, Image, NewCollectionImage, NewImage, UpdateImage};
 use crate::db::repository;
@@ -234,7 +234,7 @@ pub fn get_image_data(state: State<'_, AppState>, id: String) -> Result<String, 
     {
         // Check local previews dir first (survives unmounting)
         let local_preview = dirs::data_dir()
-            .map(|d| d.join("com.astra.app").join("previews").join(format!("{}.jpg", id)))
+            .map(|d| d.join("com.erewhon.astra").join("previews").join(format!("{}.jpg", id)))
             .unwrap_or_default();
         if local_preview.exists() {
             local_preview
@@ -255,6 +255,12 @@ pub fn get_image_data(state: State<'_, AppState>, id: String) -> Result<String, 
     };
 
     if !path.exists() {
+        // Last resort: return the embedded thumbnail if available
+        if let Some(thumb) = &image.thumbnail {
+            if !thumb.is_empty() {
+                return Ok(thumb.clone());
+            }
+        }
         return Err(format!("Image file not found: {}", path.display()));
     }
 
@@ -430,6 +436,86 @@ pub fn ensure_fits_url(state: State<'_, AppState>, id: String) -> Result<Option<
     } else {
         Ok(None)
     }
+}
+
+/// Check which image sources/mounts are available
+#[tauri::command]
+pub fn check_source_health(state: State<'_, AppState>) -> Result<Vec<(String, bool, usize)>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let images = repository::get_images_by_user(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+
+    // Group by mount prefix and check availability
+    let mut mounts: std::collections::HashMap<String, (bool, usize)> = std::collections::HashMap::new();
+    for img in &images {
+        if let Some(url) = &img.url {
+            // Extract mount prefix (e.g., /mnt/asiair, /mnt/mouseion)
+            let parts: Vec<&str> = url.split('/').collect();
+            if parts.len() >= 3 && parts[1] == "mnt" {
+                let mount = format!("/{}/{}", parts[1], parts[2]);
+                let entry = mounts.entry(mount.clone()).or_insert((false, 0));
+                entry.1 += 1;
+                if !entry.0 {
+                    entry.0 = Path::new(&mount).exists() && std::fs::read_dir(&mount).is_ok();
+                }
+            }
+        }
+    }
+
+    Ok(mounts.into_iter().map(|(path, (available, count))| (path, available, count)).collect())
+}
+
+/// Migrate preview images from remote paths to local storage
+#[tauri::command]
+pub async fn migrate_previews_to_local(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(usize, usize), String> {
+    let preview_dir = app.path().app_data_dir()
+        .map(|d| d.join("previews"))
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let _ = std::fs::create_dir_all(&preview_dir);
+
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let images = repository::get_images_by_user(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut migrated = 0usize;
+    let mut skipped = 0usize;
+
+    for img in &images {
+        let local_preview = preview_dir.join(format!("{}.jpg", img.id));
+        if local_preview.exists() {
+            skipped += 1;
+            continue;
+        }
+
+        // Try to find an existing preview to copy
+        if let Some(url) = &img.url {
+            let url_path = Path::new(url);
+            if url_path.exists() && !url.ends_with(".fit") && !url.ends_with(".fits") {
+                // URL points to an image file — copy it to local previews
+                if let Ok(_) = std::fs::copy(url_path, &local_preview) {
+                    migrated += 1;
+                    continue;
+                }
+            }
+
+            // Try adjacent preview
+            let adjacent = url_path.with_file_name(format!(
+                "{}_preview.jpg",
+                url_path.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+            if adjacent.exists() {
+                if let Ok(_) = std::fs::copy(&adjacent, &local_preview) {
+                    migrated += 1;
+                    continue;
+                }
+            }
+        }
+    }
+
+    Ok((migrated, skipped))
 }
 
 /// Get all unique tags across all images

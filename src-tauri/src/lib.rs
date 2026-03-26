@@ -149,6 +149,8 @@ pub fn run() {
             commands::regenerate_preview,
             commands::get_unique_tags,
             commands::get_unique_cameras,
+            commands::check_source_health,
+            commands::migrate_previews_to_local,
             // Target browser commands
             commands::get_targets,
             commands::search_images_by_target,

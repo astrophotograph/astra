@@ -69,6 +69,12 @@ pub struct ManifestObject {
     pub magnitude: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size_arcmin: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_y: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_px: Option<f64>,
 }
 
 /// Build a manifest for a collection and its images.

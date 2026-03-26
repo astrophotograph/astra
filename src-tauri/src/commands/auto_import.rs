@@ -280,8 +280,9 @@ fn run_scan_cycle(
 
     for source in &sources {
         let folder_path = PathBuf::from(&source.watch_folder);
-        if !folder_path.exists() {
-            errors.push(format!("Watch folder not found: {} ({})", source.name, source.watch_folder));
+        if !folder_path.exists() || std::fs::read_dir(&folder_path).is_err() {
+            log::info!("Source {} unavailable ({}), skipping", source.name, source.watch_folder);
+            emit("skipped", &format!("{} not mounted, skipping", source.name), None, 0, 0);
             continue;
         }
 

@@ -871,11 +871,33 @@ var MESSIER = [
       }
       if (mag > lbMagLimit + 2) continue;
 
-      var pos = projectObject(ps, obj.ra, obj.dec, w, h);
+      // Use precomputed WCS pixel positions when available
+      var pos;
+      if (obj.pixelX != null && obj.pixelY != null && ps) {
+        // Map FITS pixel coords to display coords
+        var pixScale = ps.pixelScale / 3600;
+        var fitsW = ps.imageWidth || (ps.widthDeg / pixScale);
+        var fitsH = ps.imageHeight || (ps.heightDeg / pixScale);
+        var displayAspect = w / h;
+        var fitsAspect = fitsW / fitsH;
+        var isTransposed = (fitsAspect < 1) !== (displayAspect < 1);
+        if (isTransposed) {
+          pos = { x: (obj.pixelY / fitsH) * w, y: (obj.pixelX / fitsW) * h };
+        } else {
+          pos = { x: (obj.pixelX / fitsW) * w, y: (obj.pixelY / fitsH) * h };
+        }
+        if (pos.x < -50 || pos.x > w + 50 || pos.y < -50 || pos.y > h + 50) pos = null;
+      } else {
+        pos = projectObject(ps, obj.ra, obj.dec, w, h);
+      }
       if (!pos) continue;
 
       var radius = 20;
-      if (obj.sizeArcmin && ps.widthDeg) {
+      if (obj.radiusPx != null && ps) {
+        var pxS = ps.pixelScale / 3600;
+        var fW = ps.widthDeg / pxS;
+        radius = Math.max(12, Math.min(w / 3, (obj.radiusPx / fW) * w));
+      } else if (obj.sizeArcmin && ps.widthDeg) {
         radius = Math.max(12, Math.min(w / 3, (obj.sizeArcmin / 60) * pxPerDegW / 2));
       }
 

@@ -198,7 +198,9 @@ export default function Layout() {
             <div className="min-w-0">
               <p className="text-sm text-white font-medium truncate">
                 {importProgress.step === "scanning" && "Scanning..."}
+                {importProgress.step === "skipped" && "Source unavailable"}
                 {importProgress.step === "found" && "New image found"}
+                {importProgress.step === "copying" && "Copying to library"}
                 {importProgress.step === "stretching" && "Generating preview"}
                 {importProgress.step === "plate-solving" && "Plate solving"}
                 {importProgress.step === "done" && "Import complete"}

@@ -303,6 +303,10 @@ export const imageApi = {
   getUniqueTags: () => invoke<string[]>("get_unique_tags"),
 
   getUniqueCameras: () => invoke<string[]>("get_unique_cameras"),
+
+  checkSourceHealth: () => invoke<[string, boolean, number][]>("check_source_health"),
+
+  migratePreviewsToLocal: () => invoke<[number, number]>("migrate_previews_to_local"),
 };
 
 export const collectionImageApi = {
