@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
+import { useSettings } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,6 +93,7 @@ export default function ImageViewerPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { developerMode } = useSettings();
 
   // Collection context for prev/next navigation
   const collectionId = searchParams.get("cid");
@@ -628,45 +630,49 @@ export default function ImageViewerPage() {
               }`}
             />
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              // Skip dialog if we already have what we need
-              if (plateSolveSolver !== "nova" || plateSolveApiKey) {
-                handlePlateSolve();
-              } else {
-                setPlateSolveDialogOpen(true);
+          {developerMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                // Skip dialog if we already have what we need
+                if (plateSolveSolver !== "nova" || plateSolveApiKey) {
+                  handlePlateSolve();
+                } else {
+                  setPlateSolveDialogOpen(true);
+                }
+              }}
+              disabled={isPlateSolving}
+            >
+              {isPlateSolving ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Solving...
+                </>
+              ) : (
+                <>
+                  <Compass className="w-4 h-4 mr-2" />
+                  Plate Solve
+                </>
+              )}
+            </Button>
+          )}
+          {developerMode && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setProcessingDialogOpen(true)}
+              disabled={!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')}
+              title={
+                !image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')
+                  ? "No FITS file available for processing"
+                  : "Process image with stretch and enhancements"
               }
-            }}
-            disabled={isPlateSolving}
-          >
-            {isPlateSolving ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Solving...
-              </>
-            ) : (
-              <>
-                <Compass className="w-4 h-4 mr-2" />
-                Plate Solve
-              </>
-            )}
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setProcessingDialogOpen(true)}
-            disabled={!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')}
-            title={
-              !image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')
-                ? "No FITS file available for processing"
-                : "Process image with stretch and enhancements"
-            }
-          >
-            <Wand2 className="w-4 h-4 mr-2" />
-            Process
-          </Button>
+            >
+              <Wand2 className="w-4 h-4 mr-2" />
+              Process
+            </Button>
+          )}
           {!isEditing && (
             <Button variant="outline" size="sm" onClick={handleStartEdit}>
               <Edit className="w-4 h-4 mr-2" />
@@ -762,13 +768,15 @@ export default function ImageViewerPage() {
                       // Known Messier sizes (major axis in arcminutes)
                       const MESSIER_SIZES: Record<string, number> = {M1:6,M2:16,M3:18,M4:36,M5:23,M6:25,M7:80,M8:90,M9:12,M10:20,M11:14,M12:16,M13:20,M14:12,M15:18,M16:7,M17:11,M18:9,M19:17,M20:28,M21:13,M22:32,M23:27,M24:90,M25:32,M26:15,M27:8,M28:11,M29:7,M30:12,M31:178,M32:9,M33:73,M34:35,M35:28,M36:12,M37:24,M38:21,M39:32,M40:1,M41:38,M42:85,M43:20,M44:95,M45:110,M46:27,M47:30,M48:54,M49:10,M50:16,M51:11,M52:13,M53:13,M54:12,M55:19,M56:9,M57:1.4,M58:6,M59:5,M60:7,M61:6,M62:15,M63:13,M64:10,M65:10,M66:9,M67:30,M68:11,M69:10,M70:8,M71:7,M72:6,M73:3,M74:11,M75:7,M76:3,M77:7,M78:8,M79:9,M80:10,M81:27,M82:11,M83:13,M84:7,M85:7,M86:9,M87:8,M88:7,M89:5,M90:10,M91:5,M92:14,M93:22,M94:11,M95:7,M96:8,M97:3,M98:10,M99:5,M100:7,M101:29,M102:6,M103:6,M104:9,M105:5,M106:19,M107:13,M108:8,M109:8,M110:22};
 
-                      // Determine size: use annotation data, Messier lookup, or default
-                      let effectiveSize = obj.sizeArcmin ?? null;
-                      if (effectiveSize == null) {
-                        const mMatch = obj.name.replace(/\s+/g, '').toUpperCase().match(/^M(\d+)$/);
-                        if (mMatch) {
-                          effectiveSize = MESSIER_SIZES[`M${mMatch[1]}`] ?? null;
-                        }
+                      // Determine size: use Messier lookup (most reliable), then annotation data
+                      let effectiveSize: number | null = null;
+                      const mSizeMatch = obj.name.replace(/\s+/g, '').toUpperCase().match(/^M(\d+)$/);
+                      if (mSizeMatch) {
+                        effectiveSize = MESSIER_SIZES[`M${mSizeMatch[1]}`] ?? null;
+                      }
+                      if (effectiveSize == null && obj.sizeArcmin && obj.sizeArcmin > 0.5) {
+                        // Only use annotation size if > 0.5 arcmin (filter out bad data)
+                        effectiveSize = obj.sizeArcmin;
                       }
 
                       let radius = 20; // Default radius in viewBox units

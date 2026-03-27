@@ -58,6 +58,9 @@ import {
   FolderSearch,
   X,
   FolderPlus,
+  Code,
+  ToggleLeft,
+  ToggleRight,
 } from "lucide-react";
 import {
   appApi,
@@ -89,6 +92,7 @@ import {
   type GuideCamera as GuideCameraType,
 } from "@/lib/astronomy-utils";
 import { useLocations } from "@/contexts/LocationContext";
+import { useSettings } from "@/hooks/useSettings";
 import { useEquipment } from "@/contexts/EquipmentContext";
 import { MoonPhase } from "@/components/MoonPhase";
 import {
@@ -191,7 +195,8 @@ type SettingsSection =
   | "auto-import"
   | "sharing"
   | "database"
-  | "about";
+  | "about"
+  | "developer";
 
 const SETTINGS_SECTIONS: {
   id: SettingsSection;
@@ -217,9 +222,11 @@ const SETTINGS_SECTIONS: {
   { id: "sharing", label: "Sharing", icon: <Upload className="w-4 h-4" /> },
   { id: "database", label: "Database", icon: <Database className="w-4 h-4" /> },
   { id: "about", label: "About", icon: <Info className="w-4 h-4" /> },
+  { id: "developer", label: "Developer", icon: <Code className="w-4 h-4" /> },
 ];
 
 export default function AdminPage() {
+  const { developerMode, setDeveloperMode } = useSettings();
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("locations");
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -1234,7 +1241,10 @@ export default function AdminPage() {
           <h1 className="text-xl font-bold">Settings</h1>
         </div>
         <nav className="space-y-1">
-          {SETTINGS_SECTIONS.map((section) => (
+          {SETTINGS_SECTIONS.filter((s) => {
+            if (!developerMode && (s.id === "plate-solving" || s.id === "auto-import")) return false;
+            return true;
+          }).map((section) => (
             <button
               key={section.id}
               onClick={() => setActiveSection(section.id)}
@@ -1563,6 +1573,54 @@ export default function AdminPage() {
               longitude={activeLocation?.longitude}
             />
           </div>
+        )}
+
+        {/* Developer Section */}
+        {activeSection === "developer" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Code className="w-5 h-5" />
+                Developer Mode
+              </CardTitle>
+              <CardDescription>
+                Enable advanced features that are under active development. These may be unstable or require local dependencies.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-base font-medium">Developer Mode</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Show experimental features: image processing, plate solving, and auto-import
+                  </p>
+                </div>
+                <Button
+                  variant={developerMode ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setDeveloperMode(!developerMode)}
+                  className="gap-2"
+                >
+                  {developerMode ? (
+                    <ToggleRight className="w-4 h-4" />
+                  ) : (
+                    <ToggleLeft className="w-4 h-4" />
+                  )}
+                  {developerMode ? "Enabled" : "Disabled"}
+                </Button>
+              </div>
+              {developerMode && (
+                <div className="rounded-md bg-muted/50 p-3 text-sm text-muted-foreground">
+                  <p className="font-medium mb-1">Unlocked features:</p>
+                  <ul className="list-disc list-inside space-y-1">
+                    <li>Plate Solving settings and image plate solving</li>
+                    <li>Image Processing (FITS stretch and enhancements)</li>
+                    <li>Auto-Import from watch folders</li>
+                  </ul>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         )}
 
         {/* Plate Solving Section */}

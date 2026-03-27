@@ -391,7 +391,7 @@ footer .footer-links {
   <a href="/" class="wordmark">astra.gallery</a>
   <ul class="nav-links">
     <li><a href="#features">Features</a></li>
-    <li><a href="https://github.com/erewhon/astra" target="_blank" rel="noopener">Source</a></li>
+    <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">Source</a></li>
   </ul>
 </nav>
 
@@ -402,7 +402,7 @@ footer .footer-links {
     <p class="hero-tagline">Publish your astrophotography collections as beautiful, auto-refreshing galleries</p>
     <div class="hero-cta">
       <a href="#features" class="btn btn-primary">Learn More</a>
-      <a href="https://github.com/erewhon/astra" class="btn btn-ghost" target="_blank" rel="noopener">View Source</a>
+      <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">View Source</a>
     </div>
     <div class="hero-scroll"><span></span></div>
   </section>
@@ -434,8 +434,8 @@ footer .footer-links {
       <div class="open-source-inner">
         <h2>Open source</h2>
         <p>Astra is free software. The desktop app, this gallery service, and every line of code in between. Built in the open because your data should always be yours.</p>
-        <a href="https://github.com/erewhon/astra" class="btn btn-ghost" target="_blank" rel="noopener">Browse the source</a>
-        <p class="license" style="margin-top: 1.5rem; margin-bottom: 0;">Licensed under GNU GPL v3</p>
+        <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">Browse the source</a>
+        <p class="license" style="margin-top: 1.5rem; margin-bottom: 0;">Licensed under GNU AGPL v3</p>
       </div>
     </div>
   </section>
@@ -445,7 +445,7 @@ footer .footer-links {
   <div class="footer-inner">
     <span class="footer-wordmark">astra.gallery</span>
     <ul class="footer-links">
-      <li><a href="https://github.com/erewhon/astra" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">GitHub</a></li>
     </ul>
   </div>
 </footer>

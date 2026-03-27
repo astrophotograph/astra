@@ -307,8 +307,8 @@ def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> lis
                     continue
 
                 obj_type = str(row["otype"]).strip() if row["otype"] else "Unknown"
-                size_arcsec = _safe_float(row["galdim_majaxis"])
-                size_arcmin = size_arcsec / 60 if size_arcsec else None
+                # galdim_majaxis is in arcminutes (not arcseconds)
+                size_arcmin = _safe_float(row["galdim_majaxis"])
 
                 # Look up known magnitude
                 mag = MESSIER_MAGNITUDES.get(int(messier_num)) if messier_num else None
@@ -1113,13 +1113,11 @@ def add_pixel_positions(
         naxis1 = header.get("NAXIS1", 0)
         naxis2 = header.get("NAXIS2", 0)
 
-        # Skip pixel position computation for SharpCap images
-        # SharpCap's WCS headers are sometimes inconsistent with the actual
-        # data layout due to ROWORDER: TOP-DOWN. Let the frontend use
-        # RA/Dec projection fallback instead.
-        swcreate = str(header.get("SWCREATE", "")).lower()
+        # Skip WCS pixel positions for TOP-DOWN FITS (SharpCap)
+        # The WCS pixel coords are inconsistent with the saved preview orientation.
+        # The frontend RA/Dec projection fallback works better for these.
         row_order = str(header.get("ROWORDER", "")).upper()
-        if "sharpcap" in swcreate or "TOP" in row_order:
+        if "TOP" in row_order:
             return objects
 
         # Compute pixel scale (deg/pixel) for size conversion
