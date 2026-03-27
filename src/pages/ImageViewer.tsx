@@ -759,16 +759,27 @@ export default function ImageViewerPage() {
                       if (!pos) return null;
 
                       // Calculate circle radius based on object size if available
+                      // Known Messier sizes (major axis in arcminutes)
+                      const MESSIER_SIZES: Record<string, number> = {M1:6,M2:16,M3:18,M4:36,M5:23,M6:25,M7:80,M8:90,M9:12,M10:20,M11:14,M12:16,M13:20,M14:12,M15:18,M16:7,M17:11,M18:9,M19:17,M20:28,M21:13,M22:32,M23:27,M24:90,M25:32,M26:15,M27:8,M28:11,M29:7,M30:12,M31:178,M32:9,M33:73,M34:35,M35:28,M36:12,M37:24,M38:21,M39:32,M40:1,M41:38,M42:85,M43:20,M44:95,M45:110,M46:27,M47:30,M48:54,M49:10,M50:16,M51:11,M52:13,M53:13,M54:12,M55:19,M56:9,M57:1.4,M58:6,M59:5,M60:7,M61:6,M62:15,M63:13,M64:10,M65:10,M66:9,M67:30,M68:11,M69:10,M70:8,M71:7,M72:6,M73:3,M74:11,M75:7,M76:3,M77:7,M78:8,M79:9,M80:10,M81:27,M82:11,M83:13,M84:7,M85:7,M86:9,M87:8,M88:7,M89:5,M90:10,M91:5,M92:14,M93:22,M94:11,M95:7,M96:8,M97:3,M98:10,M99:5,M100:7,M101:29,M102:6,M103:6,M104:9,M105:5,M106:19,M107:13,M108:8,M109:8,M110:22};
+
+                      // Determine size: use annotation data, Messier lookup, or default
+                      let effectiveSize = obj.sizeArcmin ?? null;
+                      if (effectiveSize == null) {
+                        const mMatch = obj.name.replace(/\s+/g, '').toUpperCase().match(/^M(\d+)$/);
+                        if (mMatch) {
+                          effectiveSize = MESSIER_SIZES[`M${mMatch[1]}`] ?? null;
+                        }
+                      }
+
                       let radius = 20; // Default radius in viewBox units
                       if (obj.radiusPx != null && plateSolveInfo.pixel_scale) {
-                        // Use precomputed pixel radius, scaled to viewBox
                         const pixScale = plateSolveInfo.pixel_scale / 3600;
                         const fitsW = plateSolveInfo.width_deg / pixScale;
                         radius = Math.max(10, Math.min(400, (obj.radiusPx / fitsW) * 1000));
-                      } else if (obj.sizeArcmin && plateSolveInfo.width_deg) {
+                      } else if (effectiveSize && plateSolveInfo.width_deg) {
                         const vbUnitsPerDegree = 1000 / plateSolveInfo.width_deg;
                         const vbUnitsPerArcmin = vbUnitsPerDegree / 60;
-                        radius = Math.max(10, Math.min(400, (obj.sizeArcmin * vbUnitsPerArcmin) / 2));
+                        radius = Math.max(10, Math.min(400, (effectiveSize * vbUnitsPerArcmin) / 2));
                       }
 
                       // Calculate opacity: full at magLimit, fade to 0 over next 2 magnitudes

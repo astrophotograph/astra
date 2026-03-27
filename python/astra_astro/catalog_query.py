@@ -1113,6 +1113,15 @@ def add_pixel_positions(
         naxis1 = header.get("NAXIS1", 0)
         naxis2 = header.get("NAXIS2", 0)
 
+        # Skip pixel position computation for SharpCap images
+        # SharpCap's WCS headers are sometimes inconsistent with the actual
+        # data layout due to ROWORDER: TOP-DOWN. Let the frontend use
+        # RA/Dec projection fallback instead.
+        swcreate = str(header.get("SWCREATE", "")).lower()
+        row_order = str(header.get("ROWORDER", "")).upper()
+        if "sharpcap" in swcreate or "TOP" in row_order:
+            return objects
+
         # Compute pixel scale (deg/pixel) for size conversion
         if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
             cd = wcs.wcs.cd
