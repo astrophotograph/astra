@@ -66,8 +66,10 @@ fn is_subframe(path: &Path) -> bool {
     if !is_fits(path) { return false; }
     let path_str = path.to_string_lossy().to_lowercase();
     let file_name = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-    // ASI Air: Light_*.fit in Autorun/Light/ or Plan/Light/ or Live/Light/
-    (path_str.contains("/light/") || file_name.starts_with("light_"))
+    // ASI Air: Light_*.fit in /Light/ directories
+    // SharpCap: frame_*.fits in /rawframes/ directories
+    ((path_str.contains("/light/") || file_name.starts_with("light_"))
+        || (path_str.contains("/rawframes/") || file_name.starts_with("frame_")))
         && !is_stacked_fits(path)
 }
 
@@ -102,13 +104,16 @@ fn is_stacked_fits(path: &Path) -> bool {
     if file_name.starts_with("light_") || file_name.starts_with("dark_")
         || file_name.starts_with("flat_") || file_name.starts_with("bias_")
         || file_name.starts_with("master_")
+        || file_name.starts_with("frame_")  // SharpCap raw subframes
     {
         return false;
     }
     // Exclude files in calibration/light directories unless they're stacked
     // (ASI Air puts Stacked_*.fit directly in /Live/Light/<target>/)
+    // Exclude files in raw/calibration directories unless they're stacked
     if (path_str.contains("/light/") || path_str.contains("/dark/")
-        || path_str.contains("/flat/") || path_str.contains("/bias/"))
+        || path_str.contains("/flat/") || path_str.contains("/bias/")
+        || path_str.contains("/rawframes/"))  // SharpCap raw subframes
         && !path_str.contains("/stacked/")
         && !file_name.starts_with("stack_")
         && !file_name.starts_with("stacked")
@@ -131,7 +136,13 @@ fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
     // Prefer FITS OBJECT header
     if let Some(obj) = &metadata.object_name {
         if !obj.is_empty() {
-            return Some(obj.clone());
+            // Clean up SharpCap-style names: "M101 (NGC 5457,Pinwheel Galaxy)" → "M101"
+            let name = if let Some(paren_pos) = obj.find('(') {
+                obj[..paren_pos].trim().to_string()
+            } else {
+                obj.clone()
+            };
+            return Some(name);
         }
     }
 
@@ -140,12 +151,30 @@ fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
     let mut current = path.parent();
     while let Some(dir) = current {
         let dir_name = dir.file_name()?.to_string_lossy().to_string();
+        let lower = dir_name.to_lowercase();
         // Skip generic directory names
-        if !["stacked", "light", "autorun", "plan", "live", "dark", "flat", "bias"]
-            .contains(&dir_name.to_lowercase().as_str())
+        if ["stacked", "light", "autorun", "plan", "live", "dark", "flat", "bias",
+            "rawframes", "processed", "sharpcap"]
+            .contains(&lower.as_str())
         {
-            return Some(dir_name);
+            current = dir.parent();
+            continue;
         }
+        // Skip timestamp-like dirs (HH_MM_SS) and date-like dirs (YYYY-MM-DD)
+        if lower.len() <= 10 && (
+            lower.chars().all(|c| c.is_ascii_digit() || c == '_' || c == '-')
+        ) {
+            current = dir.parent();
+            continue;
+        }
+        // Found a meaningful directory name — use it as target
+        // For SharpCap, extract just the primary name from "M101 (NGC 5457,Pinwheel Galaxy)"
+        let name = if let Some(paren_pos) = dir_name.find('(') {
+            dir_name[..paren_pos].trim().to_string()
+        } else {
+            dir_name
+        };
+        return Some(name);
         current = dir.parent();
     }
     None
@@ -345,11 +374,27 @@ fn run_scan_cycle(
                 .or_else(|| Some(path.file_stem()?.to_string_lossy().to_string()));
 
             // Build description
+            // Try to extract frame count from filename if not in FITS headers
+            // SharpCap: Stack_16bits_13frames_130s.fits → 13 frames
+            let stacked_frames = metadata.stacked_frames.or_else(|| {
+                let fname = file_name.to_lowercase();
+                if let Some(pos) = fname.find("frames") {
+                    let before = &fname[..pos];
+                    let num_str: String = before.chars().rev()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect::<String>()
+                        .chars().rev().collect();
+                    num_str.parse::<i32>().ok()
+                } else {
+                    None
+                }
+            });
+
             let mut desc_parts = Vec::new();
             if let Some(exp) = metadata.exposure {
                 desc_parts.push(format!("{:.1}s exposure", exp));
             }
-            if let Some(frames) = metadata.stacked_frames {
+            if let Some(frames) = stacked_frames {
                 desc_parts.push(format!("{} frames stacked", frames));
             }
             if let Some(filter) = &metadata.filter {
