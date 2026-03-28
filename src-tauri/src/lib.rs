@@ -47,6 +47,45 @@ pub fn run() {
             let db_pool = db::init_database(&db_path)
                 .expect("Failed to initialize database");
 
+            // Auto-backup on startup (keep last 5, one per launch)
+            {
+                let handle = app.handle().clone();
+                let backup_dir = handle
+                    .path()
+                    .app_data_dir()
+                    .map(|d| d.join("backups"));
+
+                if let Ok(backup_dir) = backup_dir {
+                    if std::fs::create_dir_all(&backup_dir).is_ok() && db_path.exists() {
+                        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+                        let dest = backup_dir.join(format!("astra_auto_{}.db", ts));
+                        if let Err(e) = std::fs::copy(&db_path, &dest) {
+                            log::warn!("Auto-backup failed: {}", e);
+                        } else {
+                            log::info!("Auto-backup created: {}", dest.display());
+                            // Prune: keep only the 5 most recent auto-backups
+                            if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+                                let mut auto_backups: Vec<std::path::PathBuf> = entries
+                                    .flatten()
+                                    .map(|e| e.path())
+                                    .filter(|p| {
+                                        p.file_name()
+                                            .and_then(|n| n.to_str())
+                                            .map(|n| n.starts_with("astra_auto_") && n.ends_with(".db"))
+                                            .unwrap_or(false)
+                                    })
+                                    .collect();
+                                auto_backups.sort();
+                                auto_backups.reverse();
+                                for old in auto_backups.into_iter().skip(5) {
+                                    let _ = std::fs::remove_file(&old);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Create app state
             let app_state = AppState::new(db_pool);
             app.manage(app_state);
