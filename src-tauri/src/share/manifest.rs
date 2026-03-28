@@ -97,3 +97,122 @@ pub fn build_manifest(
         date_range_end: date_range.map(|(_, e)| e.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_image(id: &str) -> ManifestImage {
+        ManifestImage {
+            id: id.to_string(),
+            filename: format!("{}.jpg", id),
+            summary: Some("M42".to_string()),
+            content_type: "image/jpeg".to_string(),
+            image_path: format!("images/{}.jpg", id),
+            thumb_path: format!("thumbs/{}.jpg", id),
+            created_at: "2026-01-15T20:00:00Z".to_string(),
+            favorite: false,
+            catalog_ids: vec![],
+            plate_solve: None,
+            objects: vec![],
+        }
+    }
+
+    #[test]
+    fn build_manifest_no_images() {
+        let manifest = build_manifest("Empty Collection", None, None, vec![], None);
+
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.collection_name, "Empty Collection");
+        assert_eq!(manifest.collection_description, None);
+        assert_eq!(manifest.template, None);
+        assert_eq!(manifest.image_count, 0);
+        assert!(manifest.images.is_empty());
+        assert_eq!(manifest.date_range_start, None);
+        assert_eq!(manifest.date_range_end, None);
+        // updated_at should be a valid RFC3339 timestamp
+        assert!(manifest.updated_at.contains('T'));
+    }
+
+    #[test]
+    fn build_manifest_with_images_plate_solve_and_objects() {
+        let mut img = make_test_image("img-1");
+        img.plate_solve = Some(ManifestPlateSolve {
+            center_ra: 83.822,
+            center_dec: -5.391,
+            pixel_scale: 1.5,
+            rotation: 0.5,
+            width_deg: 1.2,
+            height_deg: 0.8,
+            image_width: Some(4096),
+            image_height: Some(2160),
+        });
+        img.objects = vec![ManifestObject {
+            name: "M42".to_string(),
+            ra: 83.822,
+            dec: -5.391,
+            magnitude: Some(4.0),
+            size_arcmin: Some(85.0),
+            pixel_x: Some(2048.0),
+            pixel_y: Some(1080.0),
+            radius_px: Some(500.0),
+        }];
+        img.catalog_ids = vec!["M42".to_string(), "NGC 1976".to_string()];
+
+        let manifest = build_manifest(
+            "Orion Session",
+            Some("Winter imaging"),
+            None,
+            vec![img],
+            None,
+        );
+
+        assert_eq!(manifest.image_count, 1);
+        assert_eq!(manifest.collection_description, Some("Winter imaging".to_string()));
+
+        let image = &manifest.images[0];
+        assert_eq!(image.catalog_ids, vec!["M42", "NGC 1976"]);
+        assert!(image.plate_solve.is_some());
+        let ps = image.plate_solve.as_ref().unwrap();
+        assert!((ps.center_ra - 83.822).abs() < 0.001);
+        assert_eq!(ps.image_width, Some(4096));
+        assert_eq!(image.objects.len(), 1);
+        assert_eq!(image.objects[0].name, "M42");
+    }
+
+    #[test]
+    fn build_manifest_messier_template() {
+        let manifest = build_manifest(
+            "Messier Catalog",
+            Some("All 110 Messier objects"),
+            Some("messier"),
+            vec![make_test_image("m1"), make_test_image("m2")],
+            None,
+        );
+
+        assert_eq!(manifest.template, Some("messier".to_string()));
+        assert_eq!(manifest.image_count, 2);
+    }
+
+    #[test]
+    fn build_manifest_date_range_both() {
+        let manifest = build_manifest(
+            "Session",
+            None,
+            None,
+            vec![],
+            Some(("2026-01-01", "2026-01-31")),
+        );
+
+        assert_eq!(manifest.date_range_start, Some("2026-01-01".to_string()));
+        assert_eq!(manifest.date_range_end, Some("2026-01-31".to_string()));
+    }
+
+    #[test]
+    fn build_manifest_date_range_none() {
+        let manifest = build_manifest("Session", None, None, vec![], None);
+
+        assert_eq!(manifest.date_range_start, None);
+        assert_eq!(manifest.date_range_end, None);
+    }
+}

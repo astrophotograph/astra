@@ -1697,3 +1697,233 @@ pub async fn collect_raw_files(
 
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // extract_string_value tests
+    // ========================================================================
+
+    #[test]
+    fn extract_string_value_character_string_some() {
+        let input = r#"Some(CharacterString("M42 Orion Nebula"))"#;
+        assert_eq!(
+            extract_string_value(input),
+            Some("M42 Orion Nebula".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_string_value_character_string() {
+        let input = r#"CharacterString("NGC 7000")"#;
+        assert_eq!(
+            extract_string_value(input),
+            Some("NGC 7000".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_string_value_character() {
+        let input = r#"Character("Ha")"#;
+        assert_eq!(extract_string_value(input), Some("Ha".to_string()));
+    }
+
+    #[test]
+    fn extract_string_value_real_floating_some() {
+        let input = "Some(RealFloatingNumber(83.822))";
+        let result = extract_string_value(input).unwrap();
+        assert!(result.starts_with("83.82"));
+    }
+
+    #[test]
+    fn extract_string_value_real_floating() {
+        let input = "RealFloatingNumber(-5.391)";
+        let result = extract_string_value(input).unwrap();
+        assert!(result.starts_with("-5.39"));
+    }
+
+    #[test]
+    fn extract_string_value_quoted_string() {
+        assert_eq!(
+            extract_string_value(r#""hello world""#),
+            Some("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_string_value_single_quoted() {
+        assert_eq!(
+            extract_string_value("'Luminance'"),
+            Some("Luminance".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_string_value_none() {
+        assert_eq!(extract_string_value("None"), None);
+    }
+
+    #[test]
+    fn extract_string_value_plain_text() {
+        assert_eq!(
+            extract_string_value("something"),
+            Some("something".to_string())
+        );
+    }
+
+    // ========================================================================
+    // extract_float_value tests
+    // ========================================================================
+
+    #[test]
+    fn extract_float_value_real_floating_some() {
+        let input = "Some(RealFloatingNumber(120.5))";
+        assert_eq!(extract_float_value(input), Some(120.5));
+    }
+
+    #[test]
+    fn extract_float_value_real_floating() {
+        assert_eq!(
+            extract_float_value("RealFloatingNumber(3.14)"),
+            Some(3.14)
+        );
+    }
+
+    #[test]
+    fn extract_float_value_floating_point() {
+        assert_eq!(extract_float_value("FloatingPoint(42.0)"), Some(42.0));
+    }
+
+    #[test]
+    fn extract_float_value_integer_number_some() {
+        let input = "Some(IntegerNumber(100))";
+        assert_eq!(extract_float_value(input), Some(100.0));
+    }
+
+    #[test]
+    fn extract_float_value_integer_number() {
+        assert_eq!(extract_float_value("IntegerNumber(200)"), Some(200.0));
+    }
+
+    #[test]
+    fn extract_float_value_plain_number() {
+        assert_eq!(extract_float_value("2.718"), Some(2.718));
+    }
+
+    #[test]
+    fn extract_float_value_invalid() {
+        assert_eq!(extract_float_value("not_a_number"), None);
+    }
+
+    // ========================================================================
+    // extract_int_value tests
+    // ========================================================================
+
+    #[test]
+    fn extract_int_value_integer_number_some() {
+        assert_eq!(
+            extract_int_value("Some(IntegerNumber(4096))"),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn extract_int_value_integer_number() {
+        assert_eq!(extract_int_value("IntegerNumber(2160)"), Some(2160));
+    }
+
+    #[test]
+    fn extract_int_value_real_floating_some() {
+        assert_eq!(
+            extract_int_value("Some(RealFloatingNumber(120.0))"),
+            Some(120)
+        );
+    }
+
+    #[test]
+    fn extract_int_value_floating_point() {
+        assert_eq!(extract_int_value("FloatingPoint(50.0)"), Some(50));
+    }
+
+    #[test]
+    fn extract_int_value_plain_number() {
+        assert_eq!(extract_int_value("42"), Some(42));
+    }
+
+    #[test]
+    fn extract_int_value_invalid() {
+        assert_eq!(extract_int_value("hello"), None);
+    }
+
+    // ========================================================================
+    // get_session_date tests
+    // ========================================================================
+
+    #[test]
+    fn get_session_date_evening_observation() {
+        // 9 PM observation — same day
+        let date = get_session_date("2026-01-15T21:30:00.000").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+    }
+
+    #[test]
+    fn get_session_date_after_midnight() {
+        // 2 AM observation — should roll back to previous day
+        let date = get_session_date("2026-01-16T02:15:00.000").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+    }
+
+    #[test]
+    fn get_session_date_no_fractional_seconds() {
+        let date = get_session_date("2026-03-10T23:00:00").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 3, 10).unwrap());
+    }
+
+    #[test]
+    fn get_session_date_date_only() {
+        // Date-only string: treated as noon, so same day
+        let date = get_session_date("2026-06-21").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 6, 21).unwrap());
+    }
+
+    #[test]
+    fn get_session_date_invalid() {
+        assert_eq!(get_session_date("not-a-date"), None);
+    }
+
+    #[test]
+    fn get_session_date_exactly_midnight() {
+        // Midnight (hour 0) should roll back
+        let date = get_session_date("2026-02-01T00:00:00").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 1, 31).unwrap());
+    }
+
+    #[test]
+    fn get_session_date_exactly_noon() {
+        // Noon (hour 12) should NOT roll back
+        let date = get_session_date("2026-02-01T12:00:00").unwrap();
+        assert_eq!(date, NaiveDate::from_ymd_opt(2026, 2, 1).unwrap());
+    }
+
+    // ========================================================================
+    // generate_collection_name tests
+    // ========================================================================
+
+    #[test]
+    fn generate_collection_name_formats_date() {
+        let date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        assert_eq!(generate_collection_name(&date, None), "2026-01-15");
+    }
+
+    #[test]
+    fn generate_collection_name_ignores_object_name() {
+        let date = NaiveDate::from_ymd_opt(2026, 3, 28).unwrap();
+        // The current implementation ignores the object_name parameter
+        assert_eq!(
+            generate_collection_name(&date, Some("M42")),
+            "2026-03-28"
+        );
+    }
+}

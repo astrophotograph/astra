@@ -860,3 +860,197 @@ pub async fn scan_auto_import_now(
     let _ = app.emit("auto-import-status", &result);
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ========================================================================
+    // is_fits tests
+    // ========================================================================
+
+    #[test]
+    fn is_fits_fit_extension() {
+        assert!(is_fits(Path::new("/data/Stack_M42.fit")));
+    }
+
+    #[test]
+    fn is_fits_fits_extension() {
+        assert!(is_fits(Path::new("/data/image.fits")));
+    }
+
+    #[test]
+    fn is_fits_case_insensitive() {
+        assert!(is_fits(Path::new("/data/image.FIT")));
+        assert!(is_fits(Path::new("/data/image.FITS")));
+    }
+
+    #[test]
+    fn is_fits_not_jpeg() {
+        assert!(!is_fits(Path::new("/data/image.jpg")));
+    }
+
+    #[test]
+    fn is_fits_not_png() {
+        assert!(!is_fits(Path::new("/data/image.png")));
+    }
+
+    #[test]
+    fn is_fits_no_extension() {
+        assert!(!is_fits(Path::new("/data/noext")));
+    }
+
+    // ========================================================================
+    // is_subframe tests
+    // ========================================================================
+
+    #[test]
+    fn is_subframe_light_directory() {
+        assert!(is_subframe(Path::new("/asiair/Autorun/Light/M42/Light_00001.fit")));
+    }
+
+    #[test]
+    fn is_subframe_light_prefix() {
+        assert!(is_subframe(Path::new("/data/Light_00001.fit")));
+    }
+
+    #[test]
+    fn is_subframe_sharpcap_rawframes() {
+        assert!(is_subframe(Path::new("/sharpcap/rawframes/frame_001.fits")));
+    }
+
+    #[test]
+    fn is_subframe_sharpcap_frame_prefix() {
+        assert!(is_subframe(Path::new("/data/frame_001.fits")));
+    }
+
+    #[test]
+    fn is_subframe_not_stacked() {
+        // A stacked file in Light directory should NOT be a subframe
+        assert!(!is_subframe(Path::new("/asiair/Autorun/Light/M42/Stacked/Stacked_M42.fit")));
+    }
+
+    #[test]
+    fn is_subframe_not_jpeg() {
+        assert!(!is_subframe(Path::new("/data/Light_00001.jpg")));
+    }
+
+    #[test]
+    fn is_subframe_not_dark() {
+        assert!(!is_subframe(Path::new("/data/Dark_00001.fit")));
+    }
+
+    // ========================================================================
+    // is_calibration tests
+    // ========================================================================
+
+    #[test]
+    fn is_calibration_dark_dir() {
+        assert!(is_calibration(Path::new("/asiair/Dark/Dark_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_dark_prefix() {
+        assert!(is_calibration(Path::new("/data/Dark_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_flat_dir() {
+        assert!(is_calibration(Path::new("/asiair/Flat/Flat_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_flat_prefix() {
+        assert!(is_calibration(Path::new("/data/Flat_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_bias_dir() {
+        assert!(is_calibration(Path::new("/asiair/Bias/Bias_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_bias_prefix() {
+        assert!(is_calibration(Path::new("/data/Bias_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_master() {
+        assert!(is_calibration(Path::new("/data/master_dark.fit")));
+    }
+
+    #[test]
+    fn is_calibration_not_light() {
+        assert!(!is_calibration(Path::new("/data/Light_001.fit")));
+    }
+
+    #[test]
+    fn is_calibration_not_jpeg() {
+        assert!(!is_calibration(Path::new("/data/Dark_001.jpg")));
+    }
+
+    // ========================================================================
+    // is_stacked_fits tests
+    // ========================================================================
+
+    #[test]
+    fn is_stacked_fits_stacked_dir() {
+        assert!(is_stacked_fits(Path::new(
+            "/asiair/Autorun/Light/M42/Stacked/Stack_M42.fit"
+        )));
+    }
+
+    #[test]
+    fn is_stacked_fits_stack_prefix() {
+        assert!(is_stacked_fits(Path::new("/data/Stack_16bits.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_stacked_prefix() {
+        assert!(is_stacked_fits(Path::new("/data/Stacked_M42.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_stacked_in_name() {
+        assert!(is_stacked_fits(Path::new("/data/M42_stacked.fits")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_light_subframe() {
+        assert!(!is_stacked_fits(Path::new("/data/Light_00001.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_dark() {
+        assert!(!is_stacked_fits(Path::new("/data/Dark_001.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_flat() {
+        assert!(!is_stacked_fits(Path::new("/data/Flat_001.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_master() {
+        assert!(!is_stacked_fits(Path::new("/data/master_dark.fit")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_jpeg() {
+        assert!(!is_stacked_fits(Path::new("/data/stacked.jpg")));
+    }
+
+    #[test]
+    fn is_stacked_fits_not_light_dir_without_stacked() {
+        // A plain FITS in /Light/ that is not a stacked file
+        assert!(!is_stacked_fits(Path::new(
+            "/asiair/Autorun/Light/M42/some_image.fit"
+        )));
+    }
+
+    #[test]
+    fn is_stacked_fits_sharpcap_frame_excluded() {
+        assert!(!is_stacked_fits(Path::new("/data/frame_001.fits")));
+    }
+}

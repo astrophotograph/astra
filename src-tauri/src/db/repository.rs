@@ -817,3 +817,519 @@ pub fn delete_scanned_directory(
     )
     .execute(conn)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::models::*;
+    use crate::db::DbPool;
+    use diesel::r2d2::{self, ConnectionManager};
+    use diesel::sqlite::SqliteConnection;
+    use diesel_migrations::{embed_migrations, EmbeddedMigrations, MigrationHarness};
+
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+
+    fn setup_test_db() -> DbPool {
+        let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
+        let pool = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+        let mut conn = pool.get().unwrap();
+        conn.run_pending_migrations(MIGRATIONS).unwrap();
+        pool
+    }
+
+    /// Insert a test user so foreign key constraints are satisfied.
+    fn insert_test_user(conn: &mut SqliteConnection, user_id: &str) {
+        diesel::insert_into(users::table)
+            .values(&NewUser {
+                id: user_id.to_string(),
+                email: None,
+                name: Some("Test User".to_string()),
+                image: None,
+                username: None,
+                first_name: None,
+                last_name: None,
+            })
+            .execute(conn)
+            .unwrap();
+    }
+
+    // ========================================================================
+    // Collection CRUD
+    // ========================================================================
+
+    #[test]
+    fn collection_create_and_get() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "My Collection".to_string(),
+            description: Some("Test description".to_string()),
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        let created = create_collection(&mut conn, &new).unwrap();
+        assert_eq!(created.name, "My Collection");
+        assert_eq!(created.description, Some("Test description".to_string()));
+
+        let fetched = get_collection_by_id(&mut conn, "coll-1").unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().name, "My Collection");
+    }
+
+    #[test]
+    fn collection_get_by_name() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "2026-01-15".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &new).unwrap();
+
+        let found = get_collection_by_name(&mut conn, "user-1", "2026-01-15").unwrap();
+        assert!(found.is_some());
+
+        let not_found = get_collection_by_name(&mut conn, "user-1", "nonexistent").unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn collection_update() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Original".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &new).unwrap();
+
+        let update = UpdateCollection {
+            name: Some("Updated".to_string()),
+            favorite: Some(true),
+            ..Default::default()
+        };
+        let updated = update_collection(&mut conn, "coll-1", &update).unwrap();
+        assert_eq!(updated.name, "Updated");
+        assert!(updated.favorite);
+    }
+
+    #[test]
+    fn collection_delete() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = NewCollection {
+            id: "coll-del".to_string(),
+            user_id: "user-1".to_string(),
+            name: "To Delete".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &new).unwrap();
+
+        let deleted = delete_collection(&mut conn, "coll-del").unwrap();
+        assert_eq!(deleted, 1);
+
+        let fetched = get_collection_by_id(&mut conn, "coll-del").unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[test]
+    fn collection_list_by_user() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+        insert_test_user(&mut conn, "user-2");
+
+        for i in 0..3 {
+            let new = NewCollection {
+                id: format!("coll-{}", i),
+                user_id: "user-1".to_string(),
+                name: format!("Collection {}", i),
+                description: None,
+                visibility: "private".to_string(),
+                template: None,
+                favorite: false,
+                tags: None,
+                metadata: None,
+                archived: false,
+            };
+            create_collection(&mut conn, &new).unwrap();
+        }
+
+        let colls = get_collections(&mut conn, "user-1").unwrap();
+        assert_eq!(colls.len(), 3);
+
+        let colls2 = get_collections(&mut conn, "user-2").unwrap();
+        assert!(colls2.is_empty());
+    }
+
+    // ========================================================================
+    // Image CRUD
+    // ========================================================================
+
+    fn make_new_image(id: &str, user_id: &str) -> NewImage {
+        NewImage {
+            id: id.to_string(),
+            user_id: user_id.to_string(),
+            collection_id: None,
+            filename: format!("{}.jpg", id),
+            url: Some(format!("/images/{}.jpg", id)),
+            summary: Some("M42".to_string()),
+            description: None,
+            content_type: Some("image/jpeg".to_string()),
+            favorite: false,
+            tags: None,
+            visibility: Some("private".to_string()),
+            location: None,
+            annotations: None,
+            metadata: None,
+            thumbnail: None,
+            fits_url: None,
+        }
+    }
+
+    #[test]
+    fn image_create_and_get_by_id() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_image("img-1", "user-1");
+        let created = create_image(&mut conn, &new).unwrap();
+        assert_eq!(created.filename, "img-1.jpg");
+
+        let fetched = get_image_by_id(&mut conn, "img-1").unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().summary, Some("M42".to_string()));
+    }
+
+    #[test]
+    fn image_get_by_url() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_image("img-url", "user-1");
+        create_image(&mut conn, &new).unwrap();
+
+        let found = get_image_by_url(&mut conn, "/images/img-url.jpg").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "img-url");
+
+        let not_found = get_image_by_url(&mut conn, "/nonexistent.jpg").unwrap();
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn image_delete() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_image("img-del", "user-1");
+        create_image(&mut conn, &new).unwrap();
+
+        let deleted = delete_image(&mut conn, "img-del").unwrap();
+        assert_eq!(deleted, 1);
+
+        let fetched = get_image_by_id(&mut conn, "img-del").unwrap();
+        assert!(fetched.is_none());
+    }
+
+    // ========================================================================
+    // Collection-Image relationships
+    // ========================================================================
+
+    #[test]
+    fn add_and_check_image_in_collection() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let coll = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Session".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &coll).unwrap();
+
+        let img = make_new_image("img-1", "user-1");
+        create_image(&mut conn, &img).unwrap();
+
+        // Not in collection yet
+        assert!(!is_image_in_collection(&mut conn, "coll-1", "img-1").unwrap());
+
+        // Add to collection
+        let entry = NewCollectionImage {
+            id: "ci-1".to_string(),
+            collection_id: "coll-1".to_string(),
+            image_id: "img-1".to_string(),
+        };
+        add_image_to_collection(&mut conn, &entry).unwrap();
+
+        // Now in collection
+        assert!(is_image_in_collection(&mut conn, "coll-1", "img-1").unwrap());
+
+        // Check count
+        let count = get_collection_image_count(&mut conn, "coll-1").unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn remove_image_from_collection_works() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let coll = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Session".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &coll).unwrap();
+
+        let img = make_new_image("img-1", "user-1");
+        create_image(&mut conn, &img).unwrap();
+
+        let entry = NewCollectionImage {
+            id: "ci-1".to_string(),
+            collection_id: "coll-1".to_string(),
+            image_id: "img-1".to_string(),
+        };
+        add_image_to_collection(&mut conn, &entry).unwrap();
+        assert!(is_image_in_collection(&mut conn, "coll-1", "img-1").unwrap());
+
+        remove_image_from_collection(&mut conn, "coll-1", "img-1").unwrap();
+        assert!(!is_image_in_collection(&mut conn, "coll-1", "img-1").unwrap());
+    }
+
+    #[test]
+    fn get_images_in_collection_returns_images() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let coll = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Session".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &coll).unwrap();
+
+        for i in 0..3 {
+            let img = make_new_image(&format!("img-{}", i), "user-1");
+            create_image(&mut conn, &img).unwrap();
+            let entry = NewCollectionImage {
+                id: format!("ci-{}", i),
+                collection_id: "coll-1".to_string(),
+                image_id: format!("img-{}", i),
+            };
+            add_image_to_collection(&mut conn, &entry).unwrap();
+        }
+
+        let images = get_images_in_collection(&mut conn, "coll-1").unwrap();
+        assert_eq!(images.len(), 3);
+    }
+
+    // ========================================================================
+    // Todo CRUD
+    // ========================================================================
+
+    fn make_new_todo(id: &str, user_id: &str, name: &str) -> NewAstronomyTodo {
+        NewAstronomyTodo {
+            id: id.to_string(),
+            user_id: user_id.to_string(),
+            name: name.to_string(),
+            ra: "05h35m17s".to_string(),
+            dec: "-05d23m28s".to_string(),
+            magnitude: "4.0".to_string(),
+            size: "85'".to_string(),
+            object_type: Some("Nebula".to_string()),
+            added_at: "2026-01-15T00:00:00Z".to_string(),
+            completed: false,
+            completed_at: None,
+            goal_time: None,
+            notes: None,
+            flagged: false,
+            last_updated: None,
+            tags: None,
+        }
+    }
+
+    #[test]
+    fn todo_create_and_get() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_todo("todo-1", "user-1", "M42");
+        let created = create_todo(&mut conn, &new).unwrap();
+        assert_eq!(created.name, "M42");
+        assert!(!created.completed);
+
+        let fetched = get_todo_by_id(&mut conn, "todo-1").unwrap();
+        assert!(fetched.is_some());
+    }
+
+    #[test]
+    fn todo_update() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_todo("todo-1", "user-1", "M42");
+        create_todo(&mut conn, &new).unwrap();
+
+        let update = UpdateAstronomyTodo {
+            completed: Some(true),
+            notes: Some("Great view tonight!".to_string()),
+            ..Default::default()
+        };
+        let updated = update_todo(&mut conn, "todo-1", &update).unwrap();
+        assert!(updated.completed);
+        assert_eq!(updated.notes, Some("Great view tonight!".to_string()));
+    }
+
+    #[test]
+    fn todo_delete() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let new = make_new_todo("todo-del", "user-1", "M31");
+        create_todo(&mut conn, &new).unwrap();
+
+        let deleted = delete_todo(&mut conn, "todo-del").unwrap();
+        assert_eq!(deleted, 1);
+
+        let fetched = get_todo_by_id(&mut conn, "todo-del").unwrap();
+        assert!(fetched.is_none());
+    }
+
+    #[test]
+    fn todo_list_by_user() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        for i in 0..3 {
+            let new = make_new_todo(&format!("todo-{}", i), "user-1", &format!("M{}", i + 1));
+            create_todo(&mut conn, &new).unwrap();
+        }
+
+        let todos = get_todos(&mut conn, "user-1").unwrap();
+        assert_eq!(todos.len(), 3);
+    }
+
+    // ========================================================================
+    // Query tests
+    // ========================================================================
+
+    #[test]
+    fn get_targets_with_counts_groups_by_summary() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        // Create 2 images with summary "M42" and 1 with "M31"
+        for i in 0..2 {
+            let mut img = make_new_image(&format!("m42-{}", i), "user-1");
+            img.summary = Some("M42".to_string());
+            create_image(&mut conn, &img).unwrap();
+        }
+        let mut img = make_new_image("m31-0", "user-1");
+        img.summary = Some("M31".to_string());
+        create_image(&mut conn, &img).unwrap();
+
+        let targets = get_targets_with_counts(&mut conn, "user-1").unwrap();
+        assert_eq!(targets.len(), 2);
+        // Sorted by count descending, so M42 first
+        assert_eq!(targets[0].name, "M42");
+        assert_eq!(targets[0].image_count, 2);
+        assert_eq!(targets[1].name, "M31");
+        assert_eq!(targets[1].image_count, 1);
+    }
+
+    #[test]
+    fn search_images_by_target_partial_match() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+
+        let mut img = make_new_image("img-1", "user-1");
+        img.summary = Some("Orion Nebula M42".to_string());
+        create_image(&mut conn, &img).unwrap();
+
+        let mut img2 = make_new_image("img-2", "user-1");
+        img2.summary = Some("Andromeda M31".to_string());
+        create_image(&mut conn, &img2).unwrap();
+
+        let results = search_images_by_target(&mut conn, "user-1", "M42").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "img-1");
+
+        // Partial match
+        let results = search_images_by_target(&mut conn, "user-1", "Nebula").unwrap();
+        assert_eq!(results.len(), 1);
+
+        // No match
+        let results = search_images_by_target(&mut conn, "user-1", "NGC 7000").unwrap();
+        assert!(results.is_empty());
+    }
+}

@@ -576,3 +576,82 @@ pub fn get_unique_cameras(state: State<'_, AppState>) -> Result<Vec<String>, Str
     }
     Ok(unique.into_iter().collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn find_fits_companion_with_fit_extension() {
+        let dir = TempDir::new().unwrap();
+        let jpg_path = dir.path().join("M42.jpg");
+        let fit_path = dir.path().join("M42.fit");
+        fs::write(&jpg_path, b"fake jpg").unwrap();
+        fs::write(&fit_path, b"fake fits").unwrap();
+
+        let result = find_fits_companion(jpg_path.to_str().unwrap());
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("M42.fit"));
+    }
+
+    #[test]
+    fn find_fits_companion_with_fits_extension() {
+        let dir = TempDir::new().unwrap();
+        let png_path = dir.path().join("NGC7000.png");
+        let fits_path = dir.path().join("NGC7000.fits");
+        fs::write(&png_path, b"fake png").unwrap();
+        fs::write(&fits_path, b"fake fits").unwrap();
+
+        let result = find_fits_companion(png_path.to_str().unwrap());
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("NGC7000.fits"));
+    }
+
+    #[test]
+    fn find_fits_companion_prefers_fit_over_fits() {
+        let dir = TempDir::new().unwrap();
+        let jpg_path = dir.path().join("star.jpg");
+        let fit_path = dir.path().join("star.fit");
+        let fits_path = dir.path().join("star.fits");
+        fs::write(&jpg_path, b"fake").unwrap();
+        fs::write(&fit_path, b"fake").unwrap();
+        fs::write(&fits_path, b"fake").unwrap();
+
+        let result = find_fits_companion(jpg_path.to_str().unwrap());
+        assert!(result.is_some());
+        // .fit is tried first
+        assert!(result.unwrap().ends_with("star.fit"));
+    }
+
+    #[test]
+    fn find_fits_companion_no_fits_file() {
+        let dir = TempDir::new().unwrap();
+        let jpg_path = dir.path().join("lonely.jpg");
+        fs::write(&jpg_path, b"fake").unwrap();
+
+        let result = find_fits_companion(jpg_path.to_str().unwrap());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_fits_companion_non_image_file() {
+        let dir = TempDir::new().unwrap();
+        let txt_path = dir.path().join("notes.txt");
+        fs::write(&txt_path, b"text").unwrap();
+
+        let result = find_fits_companion(txt_path.to_str().unwrap());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn find_fits_companion_fits_file_input() {
+        // A .fit file is not jpg/jpeg/png, so should return None
+        let dir = TempDir::new().unwrap();
+        let fit_path = dir.path().join("image.fit");
+        fs::write(&fit_path, b"fake").unwrap();
+
+        let result = find_fits_companion(fit_path.to_str().unwrap());
+        assert!(result.is_none());
+    }
+}
