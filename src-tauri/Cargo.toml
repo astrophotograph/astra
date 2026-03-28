@@ -45,7 +45,7 @@ walkdir = "2"
 dirs = "6"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["rustls-tls-native-roots", "json"] }
+reqwest = { version = "0.13", features = ["rustls-native-certs", "json"] }
 
 # Crypto (for S3 signing)
 hmac = "0.12"
