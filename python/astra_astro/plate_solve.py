@@ -479,6 +479,249 @@ def solve_with_astap(
         )
 
 
+def detect_solvers() -> dict:
+    """Detect which plate solving backends are available.
+
+    Returns:
+        Dictionary with solver names as keys and info dicts as values.
+        Each info dict contains:
+        - available: bool
+        - version: str or None
+        - details: str (human-readable description)
+    """
+    import subprocess
+
+    solvers: dict = {}
+
+    # Nova (astrometry.net remote) — always available if you have an API key
+    solvers["nova"] = {
+        "available": True,
+        "version": None,
+        "details": "nova.astrometry.net remote service (requires API key)",
+    }
+
+    # Local solve-field (astrometry.net CLI)
+    try:
+        result = subprocess.run(
+            ["solve-field", "--version"], capture_output=True, text=True, timeout=5
+        )
+        version = result.stdout.strip().split("\n")[0] if result.stdout else None
+        solvers["local"] = {
+            "available": True,
+            "version": version,
+            "details": "astrometry.net solve-field CLI",
+        }
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        solvers["local"] = {
+            "available": False,
+            "version": None,
+            "details": "astrometry.net solve-field not found (install astrometry.net)",
+        }
+
+    # ASTAP
+    astap_found = False
+    for cmd in ["astap_cli", "astap", "/opt/astap/astap_cli"]:
+        try:
+            result = subprocess.run([cmd, "-h"], capture_output=True, text=True, timeout=5)
+            solvers["astap"] = {
+                "available": True,
+                "version": None,
+                "details": f"ASTAP solver ({cmd})",
+            }
+            astap_found = True
+            break
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    if not astap_found:
+        solvers["astap"] = {
+            "available": False,
+            "version": None,
+            "details": "ASTAP solver not found (install from hnsky.org/astap.htm)",
+        }
+
+    # tetra3 (native Rust solver — bundled with Astra, always available)
+    solvers["tetra3"] = {
+        "available": True,
+        "version": None,
+        "details": "Built-in tetra3rs solver (requires star database file)",
+    }
+
+    return solvers
+
+
+def extract_solve_hints(image_path: str) -> dict:
+    """Extract plate solving hints from FITS headers.
+
+    Reads FITS metadata to determine pixel scale, approximate coordinates,
+    and other hints that speed up plate solving.
+
+    Args:
+        image_path: Path to the FITS file.
+
+    Returns:
+        Dictionary with available hints:
+        - scale_arcsec: pixel scale in arcsec/pixel (if derivable)
+        - scale_lower: lower bound for scale search
+        - scale_upper: upper bound for scale search
+        - ra_hint: approximate RA in degrees (if available)
+        - dec_hint: approximate Dec in degrees (if available)
+        - fov_deg: approximate FOV diagonal in degrees
+        - focal_length_mm: focal length in mm (if in header)
+        - pixel_size_um: pixel size in microns (if in header)
+        - image_width: image width in pixels
+        - image_height: image height in pixels
+    """
+    from astropy.io import fits as astropy_fits
+
+    hints: dict = {}
+    path = Path(image_path)
+
+    if not path.exists():
+        return hints
+
+    try:
+        with astropy_fits.open(path) as hdul:
+            header = None
+            image_width = 0
+            image_height = 0
+
+            for hdu in hdul:
+                if hdu.data is not None and hdu.data.ndim >= 2:
+                    header = hdu.header
+                    if hdu.data.ndim == 3:
+                        image_height, image_width = hdu.data.shape[1], hdu.data.shape[2]
+                        if hdu.data.shape[0] != 3:
+                            image_height, image_width = hdu.data.shape[0], hdu.data.shape[1]
+                    else:
+                        image_height, image_width = hdu.data.shape
+                    break
+
+            if header is None:
+                return hints
+
+            hints["image_width"] = image_width
+            hints["image_height"] = image_height
+
+            # Try to get focal length
+            focal_length = None
+            for key in ["FOCALLEN", "FOCAL", "FOCALLNG"]:
+                if key in header:
+                    try:
+                        focal_length = float(header[key])
+                        hints["focal_length_mm"] = focal_length
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # Try to get pixel size
+            pixel_size = None
+            for key in ["XPIXSZ", "PIXSIZE", "PIXSCALE", "PIXSIZE1"]:
+                if key in header:
+                    try:
+                        pixel_size = float(header[key])
+                        hints["pixel_size_um"] = pixel_size
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # Calculate pixel scale from focal length and pixel size
+            if focal_length and pixel_size and focal_length > 0:
+                # scale = 206.265 * pixel_size_um / focal_length_mm
+                scale_arcsec = 206.265 * pixel_size / focal_length
+                hints["scale_arcsec"] = scale_arcsec
+                # Give 20% margin for search bounds
+                hints["scale_lower"] = scale_arcsec * 0.8
+                hints["scale_upper"] = scale_arcsec * 1.2
+                # FOV estimate
+                diag_pixels = (image_width**2 + image_height**2) ** 0.5
+                hints["fov_deg"] = (scale_arcsec * diag_pixels) / 3600.0
+
+            # Try to get approximate coordinates (from mount/goto)
+            ra_hint = None
+            dec_hint = None
+
+            # RA
+            for key in ["RA", "OBJCTRA", "CRVAL1"]:
+                if key in header:
+                    try:
+                        val = header[key]
+                        if isinstance(val, str):
+                            # Try HMS format: "12 34 56.7" or "12:34:56.7"
+                            ra_hint = _parse_ra_string(val)
+                        else:
+                            ra_hint = float(val)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            # Dec
+            for key in ["DEC", "OBJCTDEC", "CRVAL2"]:
+                if key in header:
+                    try:
+                        val = header[key]
+                        if isinstance(val, str):
+                            dec_hint = _parse_dec_string(val)
+                        else:
+                            dec_hint = float(val)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            if ra_hint is not None:
+                hints["ra_hint"] = ra_hint
+            if dec_hint is not None:
+                hints["dec_hint"] = dec_hint
+
+    except Exception:
+        pass
+
+    return hints
+
+
+def _parse_ra_string(s: str) -> Optional[float]:
+    """Parse RA from string formats like '12 34 56.7' or '12:34:56.7'."""
+    import re
+
+    s = s.strip()
+    parts = re.split(r"[\s:hms]+", s.strip())
+    parts = [p for p in parts if p]
+    if len(parts) >= 3:
+        try:
+            h, m, sec = float(parts[0]), float(parts[1]), float(parts[2])
+            return (h + m / 60.0 + sec / 3600.0) * 15.0  # Convert hours to degrees
+        except ValueError:
+            pass
+    elif len(parts) == 1:
+        try:
+            return float(parts[0])
+        except ValueError:
+            pass
+    return None
+
+
+def _parse_dec_string(s: str) -> Optional[float]:
+    """Parse Dec from string formats like '+41 16 09.0' or '41:16:09.0'."""
+    import re
+
+    s = s.strip()
+    sign = -1 if s.startswith("-") else 1
+    s = s.lstrip("+-")
+    parts = re.split(r"[\s:dms°'\"]+", s.strip())
+    parts = [p for p in parts if p]
+    if len(parts) >= 3:
+        try:
+            d, m, sec = float(parts[0]), float(parts[1]), float(parts[2])
+            return sign * (d + m / 60.0 + sec / 3600.0)
+        except ValueError:
+            pass
+    elif len(parts) == 1:
+        try:
+            return sign * float(parts[0])
+        except ValueError:
+            pass
+    return None
+
+
 def solve_image(
     image_path: str,
     solver: str = "nova",

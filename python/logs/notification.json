@@ -598,5 +598,117 @@
     "hook_event_name": "Notification",
     "message": "Claude needs your permission to use Bash",
     "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Update",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Fetch",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Fetch",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Fetch",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Fetch",
+    "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "e20fa3f1-7279-4f01-935d-b5c7ece03eaa",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/e20fa3f1-7279-4f01-935d-b5c7ece03eaa.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude needs your permission to use Bash",
+    "notification_type": "permission_prompt"
   }
 ]

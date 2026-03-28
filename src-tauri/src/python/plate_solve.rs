@@ -238,6 +238,110 @@ pub fn solve_image(
     })
 }
 
+/// Solver availability info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolverInfo {
+    pub available: bool,
+    pub version: Option<String>,
+    pub details: String,
+}
+
+/// Hints extracted from FITS headers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolveHints {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_arcsec: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_lower: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_upper: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ra_hint: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dec_hint: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fov_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focal_length_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pixel_size_um: Option<f64>,
+    pub image_width: i32,
+    pub image_height: i32,
+}
+
+/// Detect which plate solvers are installed
+pub fn detect_solvers() -> Result<std::collections::HashMap<String, SolverInfo>, String> {
+    Python::with_gil(|py| {
+        let plate_solve = py
+            .import("astra_astro.plate_solve")
+            .map_err(|e| format!("Failed to import astra_astro.plate_solve: {}", e))?;
+
+        let result = plate_solve
+            .call_method0("detect_solvers")
+            .map_err(|e| format!("detect_solvers failed: {}", e))?;
+
+        let dict: &Bound<'_, PyDict> = result
+            .downcast()
+            .map_err(|e| format!("Expected dict: {}", e))?;
+
+        let mut solvers = std::collections::HashMap::new();
+        for (key, value) in dict.iter() {
+            let name: String = key.extract().map_err(|e| format!("Invalid key: {}", e))?;
+            let info_dict: &Bound<'_, PyDict> = value
+                .downcast()
+                .map_err(|e| format!("Expected dict for solver info: {}", e))?;
+
+            let available: bool = info_dict
+                .get_item("available").ok().flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or(false);
+            let version: Option<String> = info_dict
+                .get_item("version").ok().flatten()
+                .and_then(|v| v.extract().ok());
+            let details: String = info_dict
+                .get_item("details").ok().flatten()
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+
+            solvers.insert(name, SolverInfo { available, version, details });
+        }
+
+        Ok(solvers)
+    })
+}
+
+/// Extract plate solving hints from a FITS file
+pub fn extract_solve_hints(image_path: &str) -> Result<SolveHints, String> {
+    Python::with_gil(|py| {
+        let plate_solve = py
+            .import("astra_astro.plate_solve")
+            .map_err(|e| format!("Failed to import astra_astro.plate_solve: {}", e))?;
+
+        let result = plate_solve
+            .call_method1("extract_solve_hints", (image_path,))
+            .map_err(|e| format!("extract_solve_hints failed: {}", e))?;
+
+        let dict: &Bound<'_, PyDict> = result
+            .downcast()
+            .map_err(|e| format!("Expected dict: {}", e))?;
+
+        Ok(SolveHints {
+            scale_arcsec: dict.get_item("scale_arcsec").ok().flatten().and_then(|v| v.extract().ok()),
+            scale_lower: dict.get_item("scale_lower").ok().flatten().and_then(|v| v.extract().ok()),
+            scale_upper: dict.get_item("scale_upper").ok().flatten().and_then(|v| v.extract().ok()),
+            ra_hint: dict.get_item("ra_hint").ok().flatten().and_then(|v| v.extract().ok()),
+            dec_hint: dict.get_item("dec_hint").ok().flatten().and_then(|v| v.extract().ok()),
+            fov_deg: dict.get_item("fov_deg").ok().flatten().and_then(|v| v.extract().ok()),
+            focal_length_mm: dict.get_item("focal_length_mm").ok().flatten().and_then(|v| v.extract().ok()),
+            pixel_size_um: dict.get_item("pixel_size_um").ok().flatten().and_then(|v| v.extract().ok()),
+            image_width: dict.get_item("image_width").ok().flatten().and_then(|v| v.extract().ok()).unwrap_or(0),
+            image_height: dict.get_item("image_height").ok().flatten().and_then(|v| v.extract().ok()).unwrap_or(0),
+        })
+    })
+}
+
 /// Query catalogs for objects in a field of view
 pub fn query_objects_in_fov(
     center_ra: f64,

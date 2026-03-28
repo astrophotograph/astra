@@ -178,6 +178,8 @@ pub fn run() {
             // Plate solving commands
             commands::plate_solve_image,
             commands::query_sky_region,
+            commands::detect_plate_solvers,
+            commands::get_solve_hints,
             // Skymap commands
             commands::generate_skymap,
             commands::generate_wide_skymap,
