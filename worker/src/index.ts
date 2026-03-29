@@ -19,6 +19,15 @@ app.use(
   })
 );
 
+// CORS for downloads (tetra3 databases, etc.)
+app.use(
+  "/downloads/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "OPTIONS"],
+  })
+);
+
 // API routes
 app.route("/api/auth", authRoutes);
 app.route("/api", presignRoutes);

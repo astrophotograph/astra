@@ -8,6 +8,9 @@
     "opener:default",
     "dialog:default",
     "fs:default",
+    "fs:allow-exists",
+    "fs:allow-mkdir",
+    "fs:allow-write-file",
     "geolocation:allow-check-permissions",
     "geolocation:allow-request-permissions",
     "geolocation:allow-get-current-position",
@@ -16,14 +19,34 @@
       "identifier": "fs:allow-read-file",
       "allow": [
         { "path": "$HOME/**" },
+        { "path": "$APPDATA/**" },
         { "path": "/home/**" },
         { "path": "/tmp/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$APPDATA/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$APPDATA/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$APPDATA/**" }
       ]
     },
     {
       "identifier": "fs:scope",
       "allow": [
         "$HOME/**",
+        "$APPDATA/**",
         "/home/**",
         "/tmp/**"
       ]
