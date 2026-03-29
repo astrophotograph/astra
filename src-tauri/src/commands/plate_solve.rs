@@ -88,7 +88,7 @@ fn solve_with_tetra3(
         sigma_threshold: 5.0,
         min_pixels: 3,
         max_pixels: 500,
-        max_centroids: Some(100),
+        max_centroids: Some(50),
         sigma_clip_iterations: 3,
         sigma_clip_factor: 3.0,
         use_8_connectivity: true,
@@ -170,12 +170,23 @@ fn solve_with_tetra3(
         Some(fov_rad * 0.5)
     };
 
+    let timeout = timeout_ms.or(Some(60000));
+
+    log::info!(
+        "tetra3: FOV estimate {:.2}° (error ±{:.2}°), {}x{}, timeout {}s",
+        fov_rad.to_degrees(),
+        fov_max_error.map(|e| e.to_degrees()).unwrap_or(0.0),
+        image_width,
+        image_height,
+        timeout.unwrap_or(0) / 1000,
+    );
+
     let solve_config = tetra3::SolveConfig {
         fov_estimate_rad: fov_rad,
         image_width,
         image_height,
         fov_max_error_rad: fov_max_error,
-        solve_timeout_ms: timeout_ms.or(Some(30000)),
+        solve_timeout_ms: timeout,
         ..Default::default()
     };
 

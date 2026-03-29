@@ -730,6 +730,9 @@ def solve_image(
     scale_lower: Optional[float] = None,
     scale_upper: Optional[float] = None,
     timeout: int = 300,
+    hint_ra: Optional[float] = None,
+    hint_dec: Optional[float] = None,
+    hint_radius: Optional[float] = None,
 ) -> dict:
     """
     Plate solve an image using the specified solver.
@@ -742,6 +745,9 @@ def solve_image(
         scale_lower: Lower bound of image scale (arcsec/pixel), optional hint
         scale_upper: Upper bound of image scale (arcsec/pixel), optional hint
         timeout: Maximum time to wait for solution (seconds)
+        hint_ra: Approximate RA in degrees (speeds up solving)
+        hint_dec: Approximate Dec in degrees (speeds up solving)
+        hint_radius: Search radius in degrees around hint coordinates
 
     Returns:
         Dictionary with plate solve result
