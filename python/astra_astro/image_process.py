@@ -582,6 +582,7 @@ def quick_preview(
             output_path=output_path,
             algorithm=StretchAlgorithm.MTF,
             output_format=fmt,
+            remove_gradient=True,
             bg_percent=bg_percent,
             sigma=sigma,
         )

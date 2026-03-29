@@ -414,12 +414,30 @@ export default function ImageViewerPage() {
     setPlateSolveDialogOpen(false);
 
     try {
+      // Try to extract hints from FITS headers for better solve performance
+      let solveHints: { scaleLower?: number; scaleUpper?: number; fovDeg?: number; hintRa?: number; hintDec?: number } = {};
+      try {
+        const hints = await plateSolveApi.getSolveHints(image.id);
+        if (hints.scaleLower) solveHints.scaleLower = hints.scaleLower;
+        if (hints.scaleUpper) solveHints.scaleUpper = hints.scaleUpper;
+        if (hints.fovDeg) solveHints.fovDeg = hints.fovDeg;
+        if (hints.raHint) solveHints.hintRa = hints.raHint;
+        if (hints.decHint) solveHints.hintDec = hints.decHint;
+      } catch {
+        // No hints available — solve blind
+      }
+
       const result = await plateSolveApi.solve({
         id: image.id,
         solver: plateSolveSolver,
         apiKey: plateSolveApiKey || undefined,
         apiUrl: localAstrometryUrl || undefined,
         tetra3DbPath: localStorage.getItem("tetra3_db_path") || undefined,
+        fovEstimate: solveHints.fovDeg,
+        scaleLower: solveHints.scaleLower,
+        scaleUpper: solveHints.scaleUpper,
+        hintRa: solveHints.hintRa,
+        hintDec: solveHints.hintDec,
         queryCatalogs: true,
         timeout: 300,
       });
