@@ -395,6 +395,21 @@ export default function AdminPage() {
   );
   const [isDownloadingDb, setIsDownloadingDb] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState("");
+  const [downloadedDbs, setDownloadedDbs] = useState<Record<string, boolean>>({});
+
+  // Check which tetra3 databases are already downloaded
+  const checkDownloadedDbs = async () => {
+    try {
+      const { exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+      const results: Record<string, boolean> = {};
+      for (const f of ["tetra3_fov5.rkyv", "tetra3_fov2.rkyv", "tetra3_fov1.rkyv"]) {
+        results[f] = await exists(`tetra3/${f}`, { baseDir: BaseDirectory.AppData });
+      }
+      setDownloadedDbs(results);
+    } catch {
+      // ignore — fs may not be available during SSR or initial load
+    }
+  };
 
   // Load app info and backups
   useEffect(() => {
@@ -403,6 +418,7 @@ export default function AdminPage() {
     loadShareConfig();
     loadAuthSession();
     autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
+    checkDownloadedDbs();
   }, []);
 
   // Poll auto-import status and listen for events
@@ -1269,6 +1285,7 @@ export default function AdminPage() {
       const destPath = `${dir}tetra3/${filename}`;
       saveTetra3DbPath(destPath);
       setDownloadProgress("");
+      await checkDownloadedDbs();
       toast.success(`Downloaded ${label} (${formatSize(bytes.length)})`);
     } catch (err) {
       toast.error(`Download failed: ${err}`);
@@ -1763,51 +1780,34 @@ export default function AdminPage() {
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">Download a database</Label>
                       <div className="grid gap-2">
-                        <div className="flex items-center justify-between p-3 border rounded-md">
-                          <div>
-                            <p className="text-sm font-medium">Wide Field (5°)</p>
-                            <p className="text-xs text-muted-foreground">142 MB — Refractors, camera lenses</p>
+                        {[
+                          { file: "tetra3_fov5.rkyv", label: "Wide Field (5°)", desc: "142 MB — Refractors, camera lenses" },
+                          { file: "tetra3_fov2.rkyv", label: "Medium Field (2°)", desc: "835 MB — SCTs, longer focal lengths" },
+                          { file: "tetra3_fov1.rkyv", label: "Narrow Field (1°)", desc: "1.5 GB — Seestar, long focal length scopes" },
+                        ].map(({ file, label, desc }) => (
+                          <div key={file} className="flex items-center justify-between p-3 border rounded-md">
+                            <div>
+                              <p className="text-sm font-medium">{label}</p>
+                              <p className="text-xs text-muted-foreground">{desc}</p>
+                            </div>
+                            {downloadedDbs[file] ? (
+                              <Badge variant="secondary" className="gap-1">
+                                <Check className="w-3 h-3" />
+                                Downloaded
+                              </Badge>
+                            ) : (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={isDownloadingDb}
+                                onClick={() => downloadTetra3Db(file, label)}
+                              >
+                                <Download className="w-4 h-4 mr-1" />
+                                Download
+                              </Button>
+                            )}
                           </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isDownloadingDb}
-                            onClick={() => downloadTetra3Db("tetra3_fov5.rkyv", "Wide Field (5°)")}
-                          >
-                            <Download className="w-4 h-4 mr-1" />
-                            Download
-                          </Button>
-                        </div>
-                        <div className="flex items-center justify-between p-3 border rounded-md">
-                          <div>
-                            <p className="text-sm font-medium">Medium Field (2°)</p>
-                            <p className="text-xs text-muted-foreground">835 MB — SCTs, longer focal lengths</p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isDownloadingDb}
-                            onClick={() => downloadTetra3Db("tetra3_fov2.rkyv", "Medium Field (2°)")}
-                          >
-                            <Download className="w-4 h-4 mr-1" />
-                            Download
-                          </Button>
-                        </div>
-                        <div className="flex items-center justify-between p-3 border rounded-md">
-                          <div>
-                            <p className="text-sm font-medium">Narrow Field (1°)</p>
-                            <p className="text-xs text-muted-foreground">1.5 GB — Seestar, long focal length scopes</p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isDownloadingDb}
-                            onClick={() => downloadTetra3Db("tetra3_fov1.rkyv", "Narrow Field (1°)")}
-                          >
-                            <Download className="w-4 h-4 mr-1" />
-                            Download
-                          </Button>
-                        </div>
+                        ))}
                       </div>
                       {downloadProgress && (
                         <p className="text-xs text-muted-foreground">{downloadProgress}</p>
