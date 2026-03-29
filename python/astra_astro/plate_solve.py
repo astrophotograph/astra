@@ -115,6 +115,15 @@ def _extract_wcs_info(wcs: WCS, image_width: int, image_height: int) -> dict:
     width_deg = ra_span
     height_deg = max(dec_coords) - min(dec_coords)
 
+    # Store raw WCS parameters for accurate reconstruction
+    wcs_params: dict = {}
+    if hasattr(wcs.wcs, "crpix") and wcs.wcs.crpix is not None:
+        wcs_params["crpix"] = [float(v) for v in wcs.wcs.crpix]
+    if hasattr(wcs.wcs, "crval") and wcs.wcs.crval is not None:
+        wcs_params["crval"] = [float(v) for v in wcs.wcs.crval]
+    if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
+        wcs_params["cd"] = [[float(v) for v in row] for row in wcs.wcs.cd]
+
     return {
         "center_ra": center_ra,
         "center_dec": center_dec,
@@ -122,6 +131,7 @@ def _extract_wcs_info(wcs: WCS, image_width: int, image_height: int) -> dict:
         "rotation": rotation,
         "width_deg": width_deg,
         "height_deg": height_deg,
+        "wcs": wcs_params,
     }
 
 

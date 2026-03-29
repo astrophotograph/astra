@@ -23,6 +23,9 @@ pub struct PlateSolveResult {
     pub solve_time: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_message: Option<String>,
+    /// Raw WCS parameters (CRPIX, CRVAL, CD matrix) for accurate reconstruction
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wcs: Option<serde_json::Value>,
 }
 
 /// An astronomical object found in the field of view
@@ -221,6 +224,22 @@ pub fn solve_image(
             .flatten()
             .and_then(|v| v.extract().ok());
 
+        // Extract raw WCS params if present
+        let wcs: Option<serde_json::Value> = dict
+            .get_item("wcs")
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                // Convert Python dict to serde_json::Value via JSON string
+                let json_mod = py.import("json").ok()?;
+                let json_str: String = json_mod
+                    .call_method1("dumps", (v,))
+                    .ok()?
+                    .extract()
+                    .ok()?;
+                serde_json::from_str(&json_str).ok()
+            });
+
         Ok(PlateSolveResult {
             success,
             center_ra,
@@ -234,6 +253,7 @@ pub fn solve_image(
             solver: solver_name,
             solve_time,
             error_message,
+            wcs,
         })
     })
 }
@@ -410,6 +430,16 @@ pub fn query_objects_in_fov(
                 d.set_item("heightDeg", sr.height_deg).ok();
                 d.set_item("imageWidth", sr.image_width).ok();
                 d.set_item("imageHeight", sr.image_height).ok();
+                // Pass raw WCS params if available — convert JSON to Python dict
+                if let Some(ref wcs) = sr.wcs {
+                    let json_mod = py.import("json")
+                        .map_err(|e| format!("Failed to import json: {}", e))?;
+                    let wcs_str = serde_json::to_string(wcs).unwrap_or_default();
+                    let py_wcs = json_mod
+                        .call_method1("loads", (wcs_str,))
+                        .map_err(|e| format!("Failed to convert WCS to Python: {}", e))?;
+                    d.set_item("wcs", py_wcs).ok();
+                }
                 Some(d)
             } else {
                 None

@@ -126,6 +126,7 @@ fn solve_with_tetra3(
             image_height: image_height as i32,
             solver: "tetra3".to_string(),
             solve_time: start.elapsed().as_secs_f64(),
+            wcs: None,
             error_message: Some(format!(
                 "Too few stars detected ({}) — need at least 4 for plate solving",
                 centroids.len()
@@ -246,6 +247,7 @@ fn solve_with_tetra3(
                 solver: "tetra3".to_string(),
                 solve_time: elapsed,
                 error_message: None,
+                wcs: None,
             })
         }
         tetra3::SolveStatus::NoMatch => Ok(PlateSolveResult {
@@ -261,6 +263,7 @@ fn solve_with_tetra3(
             solver: "tetra3".to_string(),
             solve_time: elapsed,
             error_message: Some("No match found".to_string()),
+            wcs: None,
         }),
         tetra3::SolveStatus::Timeout => Ok(PlateSolveResult {
             success: false,
@@ -275,6 +278,7 @@ fn solve_with_tetra3(
             solver: "tetra3".to_string(),
             solve_time: elapsed,
             error_message: Some("Solve timed out".to_string()),
+            wcs: None,
         }),
         tetra3::SolveStatus::TooFew => Ok(PlateSolveResult {
             success: false,
@@ -289,6 +293,7 @@ fn solve_with_tetra3(
             solver: "tetra3".to_string(),
             solve_time: elapsed,
             error_message: Some("Too few stars for pattern matching".to_string()),
+            wcs: None,
         }),
     }
 }
@@ -520,6 +525,7 @@ pub async fn plate_solve_image(
                 "width_deg": solve_result.width_deg,
                 "height_deg": solve_result.height_deg,
                 "solve_time": solve_result.solve_time,
+                "wcs": solve_result.wcs,
             }
         });
 

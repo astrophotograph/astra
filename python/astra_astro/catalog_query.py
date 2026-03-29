@@ -1117,26 +1117,33 @@ def add_pixel_positions(
         row_order = str(header.get("ROWORDER", "")).upper()
         is_top_down = "TOP" in row_order
 
-        if solve_result and solve_result.get("centerRa") is not None:
-            # Build WCS from the solve result (accurate, from plate solving)
+        if solve_result and solve_result.get("wcs"):
+            # Use stored raw WCS parameters (CRPIX, CRVAL, CD) from the solve
+            wcs_params = solve_result["wcs"]
+            wcs = WCS(naxis=2)
+            wcs.wcs.crpix = np.array(wcs_params["crpix"])
+            wcs.wcs.crval = np.array(wcs_params["crval"])
+            wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+            if "cd" in wcs_params:
+                wcs.wcs.cd = np.array(wcs_params["cd"])
+
+            # For TOP-DOWN FITS, flip the Y pixel coordinates after projection
+            # since the WCS was computed with standard FITS convention (Y=0 at bottom)
+        elif solve_result and solve_result.get("centerRa") is not None:
+            # Fallback: build approximate WCS from center/scale/rotation
             wcs = WCS(naxis=2)
             wcs.wcs.crpix = [naxis1 / 2.0, naxis2 / 2.0]
             wcs.wcs.crval = [solve_result["centerRa"], solve_result["centerDec"]]
             wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
 
-            # Build CD matrix from pixel scale and rotation
             pixel_scale_deg = solve_result["pixelScale"] / 3600.0
             rotation_rad = np.radians(solve_result.get("rotation", 0))
-
-            # For TOP-DOWN FITS, the Y pixel direction is flipped relative to
-            # standard FITS convention, so we negate the Y scale in the CD matrix.
-            y_sign = -1.0 if is_top_down else 1.0
 
             cos_r = np.cos(rotation_rad)
             sin_r = np.sin(rotation_rad)
             wcs.wcs.cd = np.array([
                 [-pixel_scale_deg * cos_r, pixel_scale_deg * sin_r],
-                [y_sign * pixel_scale_deg * sin_r, y_sign * pixel_scale_deg * cos_r],
+                [pixel_scale_deg * sin_r, pixel_scale_deg * cos_r],
             ])
         else:
             # Fall back to FITS header WCS
@@ -1163,6 +1170,11 @@ def add_pixel_positions(
 
                 px = float(px)
                 py = float(py)
+
+                # For TOP-DOWN FITS, the WCS Y=0 is at the bottom but
+                # the image Y=0 is at the top — flip Y
+                if is_top_down:
+                    py = naxis2 - 1 - py
 
                 # Check if within image bounds (with margin)
                 if -50 < px < naxis1 + 50 and -50 < py < naxis2 + 50:
