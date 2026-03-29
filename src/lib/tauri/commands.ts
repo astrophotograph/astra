@@ -720,12 +720,43 @@ export interface PlateSolveResponse extends PlateSolveResult {
 // Plate Solving Commands
 // =============================================================================
 
+export interface SolverInfo {
+  available: boolean;
+  version: string | null;
+  details: string;
+}
+
+export interface SolveHints {
+  scaleArcsec?: number;
+  scaleLower?: number;
+  scaleUpper?: number;
+  raHint?: number;
+  decHint?: number;
+  fovDeg?: number;
+  focalLengthMm?: number;
+  pixelSizeUm?: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
 export const plateSolveApi = {
   /**
    * Plate solve an image and optionally query catalogs for objects
    */
   solve: (input: PlateSolveInput) =>
     invoke<PlateSolveResponse>("plate_solve_image", { input }),
+
+  /**
+   * Detect which plate solvers are installed
+   */
+  detectSolvers: () =>
+    invoke<Record<string, SolverInfo>>("detect_plate_solvers"),
+
+  /**
+   * Extract plate solving hints from a FITS file's headers
+   */
+  getSolveHints: (imageId: string) =>
+    invoke<SolveHints>("get_solve_hints", { imageId }),
 
   /**
    * Query catalogs for objects in a given sky region

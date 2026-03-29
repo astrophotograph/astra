@@ -390,6 +390,11 @@ export default function AdminPage() {
     () => localStorage.getItem("local_astrometry_url") || "",
   );
   const [showApiKey, setShowApiKey] = useState(false);
+  const [tetra3DbPath, setTetra3DbPath] = useState(
+    () => localStorage.getItem("tetra3_db_path") || "",
+  );
+  const [isDownloadingDb, setIsDownloadingDb] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState("");
 
   // Load app info and backups
   useEffect(() => {
@@ -1216,6 +1221,61 @@ export default function AdminPage() {
     toast.success("Local API URL saved");
   };
 
+  // Save tetra3 database path
+  const saveTetra3DbPath = (path: string) => {
+    setTetra3DbPath(path);
+    localStorage.setItem("tetra3_db_path", path);
+    toast.success("Tetra3 database path saved");
+  };
+
+  // Browse for tetra3 database file
+  const browseTetra3Db = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "Tetra3 Database", extensions: ["rkyv"] }],
+    });
+    if (selected) {
+      saveTetra3DbPath(selected as string);
+    }
+  };
+
+  // Download a tetra3 database from astra.gallery
+  const downloadTetra3Db = async (filename: string, label: string) => {
+    setIsDownloadingDb(true);
+    setDownloadProgress(`Downloading ${label}...`);
+    try {
+      const url = `https://astra.gallery/downloads/tetra3/${filename}`;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+
+      // Save to app data directory
+      const { appDataDir } = await import("@tauri-apps/api/path");
+      const { writeFile, mkdir, exists } = await import("@tauri-apps/plugin-fs");
+
+      const dir = await appDataDir();
+      const tetra3Dir = `${dir}tetra3`;
+      if (!(await exists(tetra3Dir))) {
+        await mkdir(tetra3Dir, { recursive: true });
+      }
+
+      const destPath = `${tetra3Dir}/${filename}`;
+      await writeFile(destPath, bytes);
+
+      saveTetra3DbPath(destPath);
+      setDownloadProgress("");
+      toast.success(`Downloaded ${label} (${formatSize(bytes.length)})`);
+    } catch (err) {
+      toast.error(`Download failed: ${err}`);
+      setDownloadProgress("");
+    } finally {
+      setIsDownloadingDb(false);
+    }
+  };
+
   // Format file size
   const formatSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -1646,6 +1706,9 @@ export default function AdminPage() {
                     <SelectValue placeholder="Select solver" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="tetra3">
+                      Tetra3 (built-in)
+                    </SelectItem>
                     <SelectItem value="nova">
                       Nova (astrometry.net API)
                     </SelectItem>
@@ -1654,6 +1717,8 @@ export default function AdminPage() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
+                  {plateSolveSolver === "tetra3" &&
+                    "Built-in blind solver. Requires a star pattern database (download below)."}
                   {plateSolveSolver === "nova" &&
                     "Uses the free nova.astrometry.net web API. Requires API key."}
                   {plateSolveSolver === "local" &&
@@ -1662,6 +1727,98 @@ export default function AdminPage() {
                     "Requires ASTAP solver installed with star database."}
                 </p>
               </div>
+
+              {plateSolveSolver === "tetra3" && (
+                <Card className="border-dashed">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <HardDrive className="w-4 h-4" />
+                      Star Pattern Database
+                    </CardTitle>
+                    <CardDescription>
+                      Tetra3 needs a star pattern database for your telescope's field of view.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {tetra3DbPath ? (
+                      <div className="space-y-2">
+                        <Label className="text-muted-foreground text-xs">Current database</Label>
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs bg-muted px-2 py-1 rounded flex-1 truncate">
+                            {tetra3DbPath}
+                          </code>
+                          <Button variant="outline" size="sm" onClick={browseTetra3Db}>
+                            Change
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-sm text-muted-foreground">
+                        No database configured. Download one below or browse for an existing file.
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <Label className="text-xs text-muted-foreground">Download a database</Label>
+                      <div className="grid gap-2">
+                        <div className="flex items-center justify-between p-3 border rounded-md">
+                          <div>
+                            <p className="text-sm font-medium">Wide Field (5°)</p>
+                            <p className="text-xs text-muted-foreground">142 MB — Refractors, camera lenses</p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isDownloadingDb}
+                            onClick={() => downloadTetra3Db("tetra3_fov5.rkyv", "Wide Field (5°)")}
+                          >
+                            <Download className="w-4 h-4 mr-1" />
+                            Download
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between p-3 border rounded-md">
+                          <div>
+                            <p className="text-sm font-medium">Medium Field (2°)</p>
+                            <p className="text-xs text-muted-foreground">835 MB — SCTs, longer focal lengths</p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isDownloadingDb}
+                            onClick={() => downloadTetra3Db("tetra3_fov2.rkyv", "Medium Field (2°)")}
+                          >
+                            <Download className="w-4 h-4 mr-1" />
+                            Download
+                          </Button>
+                        </div>
+                        <div className="flex items-center justify-between p-3 border rounded-md">
+                          <div>
+                            <p className="text-sm font-medium">Narrow Field (1°)</p>
+                            <p className="text-xs text-muted-foreground">1.5 GB — Seestar, long focal length scopes</p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={isDownloadingDb}
+                            onClick={() => downloadTetra3Db("tetra3_fov1.rkyv", "Narrow Field (1°)")}
+                          >
+                            <Download className="w-4 h-4 mr-1" />
+                            Download
+                          </Button>
+                        </div>
+                      </div>
+                      {downloadProgress && (
+                        <p className="text-xs text-muted-foreground">{downloadProgress}</p>
+                      )}
+                    </div>
+
+                    <Button variant="outline" size="sm" onClick={browseTetra3Db}>
+                      <FolderSearch className="w-4 h-4 mr-2" />
+                      Browse for existing database file
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
 
               {plateSolveSolver === "nova" && (
                 <>
