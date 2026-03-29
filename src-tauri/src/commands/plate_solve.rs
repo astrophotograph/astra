@@ -155,17 +155,18 @@ fn solve_with_tetra3(
         (2.0_f32).to_radians()
     };
 
-    // Calculate FOV error range for search
+    // Calculate FOV error range for search.
+    // Use a wide range because single-scale databases are built at one FOV
+    // and the actual image FOV may differ significantly.
     let fov_max_error = if let (Some(lower), Some(upper)) = (scale_lower, scale_upper) {
+        // Use the full scale range, plus extra margin for single-scale DB mismatch
         let fov_lower = (lower * image_width as f64 / 3600.0) as f32;
         let fov_upper = (upper * image_width as f64 / 3600.0) as f32;
         let fov_center = (fov_lower + fov_upper) / 2.0;
-        Some((fov_upper - fov_center).to_radians())
-    } else if fov_estimate_deg.is_some() {
-        // If explicit FOV given, search +/- 20%
-        Some(fov_rad * 0.2)
+        // At least ±50% to handle single-scale database mismatch
+        Some((fov_center * 0.5).to_radians().max((fov_upper - fov_center).to_radians()))
     } else {
-        // Wide search range if no FOV information at all
+        // Wide search: ±50% of estimated FOV
         Some(fov_rad * 0.5)
     };
 
