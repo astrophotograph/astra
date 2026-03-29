@@ -805,14 +805,27 @@ export default function ImageViewerPage() {
             onMouseLeave={handlePanEnd}
             style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default" }}
           >
-            {zoom > 1 && (
+            <div className="absolute top-2 right-2 z-30 flex items-center gap-1">
               <button
-                onClick={resetZoom}
-                className="absolute top-2 right-2 z-30 bg-black/60 hover:bg-black/80 text-white text-xs px-2 py-1 rounded"
-              >
-                {Math.round(zoom * 100)}% — Reset
-              </button>
-            )}
+                onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
+                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                title="Zoom in"
+              >+</button>
+              <button
+                onClick={() => setZoom((z) => { const nz = z / 1.25; if (nz <= 1.05) { setPan({ x: 0, y: 0 }); return 1; } return nz; })}
+                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                title="Zoom out"
+                disabled={zoom <= 1}
+              >−</button>
+              {zoom > 1 && (
+                <button
+                  onClick={resetZoom}
+                  className="bg-black/60 hover:bg-black/80 text-white text-xs px-2 h-7 rounded"
+                >
+                  {Math.round(zoom * 100)}% — Reset
+                </button>
+              )}
+            </div>
             {isRegenerating && (
               <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />

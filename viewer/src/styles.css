@@ -337,18 +337,43 @@ a:hover { text-decoration: underline; }
 
 .lightbox .lb-body img.lb-loading { opacity: 0.3; }
 
-.lb-zoom-badge {
+.lb-zoom-controls {
   position: absolute;
   top: 0.75rem;
   right: 0.75rem;
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.lb-zoom-btn {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+  color: #e8ecf4;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.lb-zoom-btn:hover { background: rgba(0,0,0,0.8); }
+.lb-zoom-btn:disabled { opacity: 0.3; cursor: default; }
+
+.lb-zoom-badge {
   background: rgba(0,0,0,0.6);
   color: #e8ecf4;
   border: none;
   padding: 0.3rem 0.6rem;
+  height: 1.75rem;
   border-radius: 4px;
   font-size: 0.75rem;
   cursor: pointer;
+  display: flex;
+  align-items: center;
 }
 .lb-zoom-badge:hover { background: rgba(0,0,0,0.8); }
 

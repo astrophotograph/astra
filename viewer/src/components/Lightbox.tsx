@@ -157,14 +157,27 @@ export function Lightbox({ images, currentIndex, onClose, onNav }: Props) {
         onMouseLeave={handlePanEnd}
         style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default" }}
       >
-        {zoom > 1 && (
+        <div class="lb-zoom-controls">
           <button
-            class="lb-zoom-badge"
-            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
-          >
-            {Math.round(zoom * 100)}% — Reset
-          </button>
-        )}
+            class="lb-zoom-btn"
+            onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
+            title="Zoom in"
+          >+</button>
+          <button
+            class="lb-zoom-btn"
+            onClick={() => setZoom((z) => { const nz = z / 1.25; if (nz <= 1.05) { setPan({ x: 0, y: 0 }); return 1; } return nz; })}
+            title="Zoom out"
+            disabled={zoom <= 1}
+          >−</button>
+          {zoom > 1 && (
+            <button
+              class="lb-zoom-badge"
+              onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+            >
+              {Math.round(zoom * 100)}% — Reset
+            </button>
+          )}
+        </div>
         <button class="nav prev" onClick={() => onNav(-1)} aria-label="Previous">
           &#8249;
         </button>
