@@ -38,6 +38,7 @@ class PlateSolveResult:
     solver: str = ""
     solve_time: float = 0.0  # seconds
     error_message: Optional[str] = None
+    wcs: Optional[dict] = None  # Raw WCS params (crpix, crval, cd)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -56,6 +57,8 @@ class PlateSolveResult:
         }
         if self.error_message:
             result["errorMessage"] = self.error_message
+        if self.wcs:
+            result["wcs"] = self.wcs
         return result
 
 
@@ -235,6 +238,7 @@ def solve_with_nova(
             image_height=image_height,
             solver="nova",
             solve_time=time.time() - start_time,
+            wcs=info.get("wcs"),
         )
 
     except Exception as e:
@@ -349,6 +353,7 @@ def solve_with_local(
                 image_height=image_height,
                 solver="local",
                 solve_time=time.time() - start_time,
+                wcs=info.get("wcs"),
             )
 
     except subprocess.TimeoutExpired:
@@ -465,6 +470,7 @@ def solve_with_astap(
                 image_height=image_height,
                 solver="astap",
                 solve_time=time.time() - start_time,
+                wcs=info.get("wcs"),
             )
         finally:
             # Clean up WCS file
