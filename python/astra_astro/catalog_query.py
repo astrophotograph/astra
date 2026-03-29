@@ -1113,12 +1113,12 @@ def add_pixel_positions(
         naxis1 = header.get("NAXIS1", 0)
         naxis2 = header.get("NAXIS2", 0)
 
-        # Skip WCS pixel positions for TOP-DOWN FITS (SharpCap)
-        # The WCS pixel coords are inconsistent with the saved preview orientation.
-        # The frontend RA/Dec projection fallback works better for these.
+        # Check if FITS uses TOP-DOWN row order (SharpCap convention)
+        # Standard FITS is BOTTOM-UP, but SharpCap saves TOP-DOWN.
+        # The preview image matches the FITS storage order, so for TOP-DOWN
+        # FITS the WCS Y-axis needs flipping relative to the preview.
         row_order = str(header.get("ROWORDER", "")).upper()
-        if "TOP" in row_order:
-            return objects
+        is_top_down = "TOP" in row_order
 
         # Compute pixel scale (deg/pixel) for size conversion
         if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
@@ -1141,6 +1141,11 @@ def add_pixel_positions(
 
                 px = float(px)
                 py = float(py)
+
+                # For TOP-DOWN FITS (SharpCap), WCS Y=0 is at the bottom
+                # but the preview image has Y=0 at the top. Flip Y.
+                if is_top_down:
+                    py = naxis2 - 1 - py
 
                 # Check if within image bounds (with margin)
                 if -50 < px < naxis1 + 50 and -50 < py < naxis2 + 50:
