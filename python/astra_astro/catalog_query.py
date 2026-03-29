@@ -1085,16 +1085,20 @@ def query_objects_in_fov(
 def add_pixel_positions(
     objects: list[dict],
     fits_path: str,
+    solve_result: Optional[dict] = None,
 ) -> list[dict]:
     """
-    Add pixel positions to catalog objects using WCS from a plate-solved FITS file.
+    Add pixel positions to catalog objects.
 
-    This uses astropy's WCS to do proper world_to_pixel conversion, which handles
-    all projection types (TAN-SIP, etc.) correctly.
+    If solve_result is provided, builds a TAN WCS from the solve result
+    (more accurate than the FITS header WCS). Otherwise falls back to the
+    FITS header WCS.
 
     Args:
         objects: List of catalog object dicts (from query_objects_in_fov)
-        fits_path: Path to the plate-solved FITS file with WCS headers
+        fits_path: Path to the FITS file (for dimensions and ROWORDER)
+        solve_result: Plate solve result dict with centerRa, centerDec,
+                      pixelScale, rotation, widthDeg, heightDeg, imageWidth, imageHeight
 
     Returns:
         Same list with pixelX, pixelY, and radiusPx fields added
@@ -1103,24 +1107,42 @@ def add_pixel_positions(
         from astropy.io import fits
         from astropy.wcs import WCS
         from astropy.coordinates import SkyCoord
+        import numpy as np
 
         with fits.open(fits_path) as hdul:
             header = hdul[0].header
-            # Use naxis=2 to handle 3D (RGB) FITS with SIP distortion
-            wcs = WCS(header, naxis=2)
 
-        # Get image dimensions
         naxis1 = header.get("NAXIS1", 0)
         naxis2 = header.get("NAXIS2", 0)
-
-        # Check if FITS uses TOP-DOWN row order (SharpCap convention)
-        # Standard FITS is BOTTOM-UP, but SharpCap saves TOP-DOWN.
-        # The preview image matches the FITS storage order, so for TOP-DOWN
-        # FITS the WCS Y-axis needs flipping relative to the preview.
         row_order = str(header.get("ROWORDER", "")).upper()
         is_top_down = "TOP" in row_order
 
-        # Compute pixel scale (deg/pixel) for size conversion
+        if solve_result and solve_result.get("centerRa") is not None:
+            # Build WCS from the solve result (accurate, from plate solving)
+            wcs = WCS(naxis=2)
+            wcs.wcs.crpix = [naxis1 / 2.0, naxis2 / 2.0]
+            wcs.wcs.crval = [solve_result["centerRa"], solve_result["centerDec"]]
+            wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+
+            # Build CD matrix from pixel scale and rotation
+            pixel_scale_deg = solve_result["pixelScale"] / 3600.0
+            rotation_rad = np.radians(solve_result.get("rotation", 0))
+
+            # For TOP-DOWN FITS, the Y pixel direction is flipped relative to
+            # standard FITS convention, so we negate the Y scale in the CD matrix.
+            y_sign = -1.0 if is_top_down else 1.0
+
+            cos_r = np.cos(rotation_rad)
+            sin_r = np.sin(rotation_rad)
+            wcs.wcs.cd = np.array([
+                [-pixel_scale_deg * cos_r, pixel_scale_deg * sin_r],
+                [y_sign * pixel_scale_deg * sin_r, y_sign * pixel_scale_deg * cos_r],
+            ])
+        else:
+            # Fall back to FITS header WCS
+            wcs = WCS(header, naxis=2)
+
+        # Compute pixel scale for size conversion
         if hasattr(wcs.wcs, "cd") and wcs.wcs.cd is not None:
             cd = wcs.wcs.cd
             pixel_scale_deg = abs(cd[0, 0] * cd[1, 1] - cd[0, 1] * cd[1, 0]) ** 0.5
@@ -1141,11 +1163,6 @@ def add_pixel_positions(
 
                 px = float(px)
                 py = float(py)
-
-                # For TOP-DOWN FITS (SharpCap), WCS Y=0 is at the bottom
-                # but the preview image has Y=0 at the top. Flip Y.
-                if is_top_down:
-                    py = naxis2 - 1 - py
 
                 # Check if within image bounds (with margin)
                 if -50 < px < naxis1 + 50 and -50 < py < naxis2 + 50:

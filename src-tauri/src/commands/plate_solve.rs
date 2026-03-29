@@ -498,6 +498,7 @@ pub async fn plate_solve_image(
             input.catalogs,
             input.star_mag_limit,
             fits_for_wcs,
+            Some(&solve_result),
         )
         .unwrap_or_else(|e| {
             log::warn!("Failed to query catalogs: {}", e);
@@ -656,6 +657,7 @@ pub fn query_sky_region(
         height_deg,
         catalogs,
         star_mag_limit,
+        None,
         None,
     )
 }

@@ -351,6 +351,7 @@ pub fn query_objects_in_fov(
     catalogs: Option<Vec<String>>,
     star_mag_limit: Option<f64>,
     fits_path: Option<&str>,
+    solve_result: Option<&PlateSolveResult>,
 ) -> Result<Vec<CatalogObject>, String> {
     Python::with_gil(|py| {
         // Import our module
@@ -392,13 +393,31 @@ pub fn query_objects_in_fov(
             .call_method("query_objects_in_fov", (), Some(&kwargs))
             .map_err(|e| format!("Catalog query failed: {}", e))?;
 
-        // Add pixel positions from WCS if FITS path provided
+        // Add pixel positions using solve result WCS (or FITS header WCS as fallback)
         if let Some(fpath) = fits_path {
             let catalog_query = astra_astro
                 .getattr("catalog_query")
                 .map_err(|e| format!("Failed to get catalog_query: {}", e))?;
+
+            // Build solve_result dict for Python if available
+            let py_solve_result = if let Some(sr) = solve_result {
+                let d = PyDict::new(py);
+                d.set_item("centerRa", sr.center_ra).ok();
+                d.set_item("centerDec", sr.center_dec).ok();
+                d.set_item("pixelScale", sr.pixel_scale).ok();
+                d.set_item("rotation", sr.rotation).ok();
+                d.set_item("widthDeg", sr.width_deg).ok();
+                d.set_item("heightDeg", sr.height_deg).ok();
+                d.set_item("imageWidth", sr.image_width).ok();
+                d.set_item("imageHeight", sr.image_height).ok();
+                Some(d)
+            } else {
+                None
+            };
+
+            let args = (result, fpath, py_solve_result);
             result = catalog_query
-                .call_method1("add_pixel_positions", (result, fpath))
+                .call_method1("add_pixel_positions", args)
                 .map_err(|e| format!("Failed to add pixel positions: {}", e))?;
         }
 
