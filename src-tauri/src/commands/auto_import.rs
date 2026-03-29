@@ -593,6 +593,7 @@ fn run_scan_cycle(
                                     result.width_deg, result.height_deg,
                                     None, None,
                                     Some(&fits_path_str),
+                                    Some(&result),
                                 ).unwrap_or_default();
 
                                 // Build annotations JSON
