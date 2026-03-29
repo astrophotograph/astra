@@ -23,12 +23,19 @@ export function Lightbox({ images, currentIndex, onClose, onNav }: Props) {
   const [imgLoading, setImgLoading] = useState(true);
   const bodyRef = useRef<HTMLDivElement>(null);
   const touchRef = useRef({ startX: 0, startY: 0, deltaX: 0, swiping: false });
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const panOrigin = useRef({ x: 0, y: 0 });
 
   const img = images[currentIndex];
 
-  // Reset loading state on image change
+  // Reset loading state and zoom on image change
   useEffect(() => {
     setImgLoading(true);
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   }, [currentIndex]);
 
   // Lock body scroll
@@ -39,18 +46,51 @@ export function Lightbox({ images, currentIndex, onClose, onNav }: Props) {
     };
   }, []);
 
+  // Zoom handlers
+  const handleWheel = useCallback((e: WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom((z) => {
+      const nz = Math.min(10, Math.max(1, z * delta));
+      if (nz <= 1) { setPan({ x: 0, y: 0 }); return 1; }
+      return nz;
+    });
+  }, []);
+
+  const handlePanStart = useCallback((e: MouseEvent) => {
+    if (zoom <= 1) return;
+    e.preventDefault();
+    setIsPanning(true);
+    panStart.current = { x: e.clientX, y: e.clientY };
+    panOrigin.current = { ...pan };
+  }, [zoom, pan]);
+
+  const handlePanMove = useCallback((e: MouseEvent) => {
+    if (!isPanning) return;
+    setPan({
+      x: panOrigin.current.x + e.clientX - panStart.current.x,
+      y: panOrigin.current.y + e.clientY - panStart.current.y,
+    });
+  }, [isPanning]);
+
+  const handlePanEnd = useCallback(() => setIsPanning(false), []);
+
   // Keyboard navigation
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        if (zoom > 1) { setZoom(1); setPan({ x: 0, y: 0 }); }
+        else onClose();
+      }
       else if (e.key === "ArrowLeft") onNav(-1);
       else if (e.key === "ArrowRight") onNav(1);
       else if (e.key === "i" || e.key === "I")
         setDetailsOpen((v) => !v);
+      else if (e.key === "0") { setZoom(1); setPan({ x: 0, y: 0 }); }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose, onNav]);
+  }, [onClose, onNav, zoom]);
 
   // Touch swipe handlers
   const onTouchStart = useCallback((e: TouchEvent) => {
@@ -110,7 +150,21 @@ export function Lightbox({ images, currentIndex, onClose, onNav }: Props) {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onWheel={handleWheel}
+        onMouseDown={handlePanStart}
+        onMouseMove={handlePanMove}
+        onMouseUp={handlePanEnd}
+        onMouseLeave={handlePanEnd}
+        style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default" }}
       >
+        {zoom > 1 && (
+          <button
+            class="lb-zoom-badge"
+            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+          >
+            {Math.round(zoom * 100)}% — Reset
+          </button>
+        )}
         <button class="nav prev" onClick={() => onNav(-1)} aria-label="Previous">
           &#8249;
         </button>
@@ -122,6 +176,11 @@ export function Lightbox({ images, currentIndex, onClose, onNav }: Props) {
           alt={img.summary || img.filename}
           class={imgLoading ? "lb-loading" : ""}
           onLoad={() => setImgLoading(false)}
+          draggable={false}
+          style={{
+            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+            transition: isPanning ? "none" : "transform 0.1s ease-out",
+          }}
         />
       </div>
       <div class="lb-details">

@@ -133,6 +133,13 @@ export default function ImageViewerPage() {
   const [skymapExpanded, setSkymapExpanded] = useState(false);
   const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
 
+  // Zoom and pan state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0 });
+  const panOrigin = useRef({ x: 0, y: 0 });
+
   const queryClient = useQueryClient();
   const { data: image, isLoading, error, refetch } = useImage(id || "");
   const updateImage = useUpdateImage();
@@ -469,6 +476,45 @@ export default function ImageViewerPage() {
     }
   };
 
+  // Zoom/pan handlers
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    setZoom((z) => {
+      const newZoom = Math.min(10, Math.max(1, z * delta));
+      // Reset pan when zooming back to 1x
+      if (newZoom <= 1) {
+        setPan({ x: 0, y: 0 });
+        return 1;
+      }
+      return newZoom;
+    });
+  }, []);
+
+  const handlePanStart = useCallback((e: React.MouseEvent) => {
+    if (zoom <= 1) return;
+    e.preventDefault();
+    setIsPanning(true);
+    panStart.current = { x: e.clientX, y: e.clientY };
+    panOrigin.current = { ...pan };
+  }, [zoom, pan]);
+
+  const handlePanMove = useCallback((e: React.MouseEvent) => {
+    if (!isPanning) return;
+    const dx = e.clientX - panStart.current.x;
+    const dy = e.clientY - panStart.current.y;
+    setPan({ x: panOrigin.current.x + dx, y: panOrigin.current.y + dy });
+  }, [isPanning]);
+
+  const handlePanEnd = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
   // Start editing mode
   const handleStartEdit = () => {
     if (image) {
@@ -749,7 +795,24 @@ export default function ImageViewerPage() {
       <div className="grid lg:grid-cols-3 gap-6">
         {/* Image Display */}
         <div className="lg:col-span-2 space-y-2">
-          <div ref={imageContainerRef} className="rounded-lg overflow-hidden bg-muted relative">
+          <div
+            ref={imageContainerRef}
+            className="rounded-lg overflow-hidden bg-muted relative"
+            onWheel={handleWheel}
+            onMouseDown={handlePanStart}
+            onMouseMove={handlePanMove}
+            onMouseUp={handlePanEnd}
+            onMouseLeave={handlePanEnd}
+            style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default" }}
+          >
+            {zoom > 1 && (
+              <button
+                onClick={resetZoom}
+                className="absolute top-2 right-2 z-30 bg-black/60 hover:bg-black/80 text-white text-xs px-2 py-1 rounded"
+              >
+                {Math.round(zoom * 100)}% — Reset
+              </button>
+            )}
             {isRegenerating && (
               <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3">
                 <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
@@ -762,11 +825,19 @@ export default function ImageViewerPage() {
               </div>
             ) : imageDataUrl ? (
               <>
-                <div className="relative inline-block w-full">
+                <div
+                  className="relative inline-block w-full"
+                  style={{
+                    transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
+                    transformOrigin: "center center",
+                    transition: isPanning ? "none" : "transform 0.1s ease-out",
+                  }}
+                >
                   <img
                     src={imageDataUrl}
                     alt={image.filename}
                     className="w-full h-auto block"
+                    draggable={false}
                     onLoad={(e) => {
                       const img = e.currentTarget;
                       setImageDisplaySize({ width: img.clientWidth, height: img.clientHeight });
