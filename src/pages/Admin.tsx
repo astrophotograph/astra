@@ -1254,17 +1254,19 @@ export default function AdminPage() {
 
       // Save to app data directory
       const { appDataDir } = await import("@tauri-apps/api/path");
-      const { writeFile, mkdir, exists } = await import("@tauri-apps/plugin-fs");
+      const { writeFile, mkdir, exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
 
-      const dir = await appDataDir();
-      const tetra3Dir = `${dir}tetra3`;
-      if (!(await exists(tetra3Dir))) {
-        await mkdir(tetra3Dir, { recursive: true });
+      const tetra3Rel = "tetra3";
+      if (!(await exists(tetra3Rel, { baseDir: BaseDirectory.AppData }))) {
+        await mkdir(tetra3Rel, { recursive: true, baseDir: BaseDirectory.AppData });
       }
 
-      const destPath = `${tetra3Dir}/${filename}`;
-      await writeFile(destPath, bytes);
+      const relPath = `tetra3/${filename}`;
+      await writeFile(relPath, bytes, { baseDir: BaseDirectory.AppData });
 
+      // Store the absolute path for the Rust solver
+      const dir = await appDataDir();
+      const destPath = `${dir}tetra3/${filename}`;
       saveTetra3DbPath(destPath);
       setDownloadProgress("");
       toast.success(`Downloaded ${label} (${formatSize(bytes.length)})`);
