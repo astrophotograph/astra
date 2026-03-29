@@ -419,6 +419,7 @@ export default function ImageViewerPage() {
         solver: plateSolveSolver,
         apiKey: plateSolveApiKey || undefined,
         apiUrl: localAstrometryUrl || undefined,
+        tetra3DbPath: localStorage.getItem("tetra3_db_path") || undefined,
         queryCatalogs: true,
         timeout: 300,
       });

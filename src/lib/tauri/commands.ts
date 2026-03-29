@@ -680,6 +680,10 @@ export interface PlateSolveInput {
   hintDec?: number;
   /** Hint search radius in degrees (default: 10) */
   hintRadius?: number;
+  /** Path to tetra3 database file (.rkyv) — required for "tetra3" solver */
+  tetra3DbPath?: string;
+  /** FOV estimate in degrees for tetra3 solver */
+  fovEstimate?: number;
 }
 
 export interface PlateSolveResult {
