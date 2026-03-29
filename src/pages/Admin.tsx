@@ -1282,7 +1282,7 @@ export default function AdminPage() {
 
       // Store the absolute path for the Rust solver
       const dir = await appDataDir();
-      const destPath = `${dir}tetra3/${filename}`;
+      const destPath = dir.endsWith("/") ? `${dir}tetra3/${filename}` : `${dir}/tetra3/${filename}`;
       saveTetra3DbPath(destPath);
       setDownloadProgress("");
       await checkDownloadedDbs();
