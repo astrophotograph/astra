@@ -5,6 +5,7 @@ import { landingRoutes } from "./routes/landing";
 import { galleryRoutes } from "./routes/gallery";
 import { authRoutes } from "./routes/auth";
 import { presignRoutes } from "./routes/presign";
+import { downloadRoutes } from "./routes/downloads";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -21,6 +22,9 @@ app.use(
 // API routes
 app.route("/api/auth", authRoutes);
 app.route("/api", presignRoutes);
+
+// Static downloads (tetra3 databases, etc.)
+app.route("/", downloadRoutes);
 
 // Gallery routes (serves shares and user profiles)
 app.route("/", galleryRoutes);
