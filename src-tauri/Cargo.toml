@@ -6,6 +6,7 @@ authors = ["erewhon"]
 license = "AGPL-3.0"
 repository = ""
 edition = "2021"
+default-run = "astra"
 
 [lib]
 name = "astra_lib"
