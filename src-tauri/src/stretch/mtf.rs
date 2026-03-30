@@ -117,21 +117,29 @@ fn apply_mtf(data: &mut [f64], m: f64) {
 }
 
 fn channel_stats(data: &[f64]) -> (f64, f64) {
-    let mut valid: Vec<f64> = data.iter().copied().filter(|&v| v > 0.0).collect();
-    if valid.is_empty() {
+    // Count positives first to size the allocation exactly
+    let count = data.iter().filter(|&&v| v > 0.0).count();
+    if count == 0 {
         return (0.0, 0.01);
     }
+    let mut valid: Vec<f64> = Vec::with_capacity(count);
+    valid.extend(data.iter().copied().filter(|&v| v > 0.0));
     let med = fast_median(&mut valid);
-    let mut deviations: Vec<f64> = valid.iter().map(|v| (v - med).abs()).collect();
-    let mad = fast_median(&mut deviations).max(1e-6);
+    // Reuse the vec for deviations
+    for v in valid.iter_mut() {
+        *v = (*v - med).abs();
+    }
+    let mad = fast_median(&mut valid).max(1e-6);
     (med, mad)
 }
 
 fn median_positive(data: &[f64]) -> f64 {
-    let mut valid: Vec<f64> = data.iter().copied().filter(|&v| v > 0.0).collect();
-    if valid.is_empty() {
+    let count = data.iter().filter(|&&v| v > 0.0).count();
+    if count == 0 {
         return 0.0;
     }
+    let mut valid: Vec<f64> = Vec::with_capacity(count);
+    valid.extend(data.iter().copied().filter(|&v| v > 0.0));
     fast_median(&mut valid)
 }
 

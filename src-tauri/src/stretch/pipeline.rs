@@ -104,7 +104,7 @@ pub fn generate_preview(
             ch.clone()
         };
 
-        let (vmin, vmax) = percentiles(&interior, 0.001, 0.9999);
+        let (vmin, vmax) = percentiles_in_place(&mut interior, 0.001, 0.9999);
         let range = vmax - vmin;
         if range > 0.0 {
             for v in ch.iter_mut() {
@@ -211,19 +211,19 @@ fn extract_dims(shape: &[usize]) -> (usize, usize) {
 }
 
 /// Compute two percentiles using quickselect (O(n) each).
-fn percentiles(data: &[f64], lo_frac: f64, hi_frac: f64) -> (f64, f64) {
-    let mut valid: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
-    if valid.is_empty() {
+/// Reuses the input slice to avoid allocation when possible.
+fn percentiles_in_place(data: &mut [f64], lo_frac: f64, hi_frac: f64) -> (f64, f64) {
+    if data.is_empty() {
         return (0.0, 1.0);
     }
     let cmp = |a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
-    let lo_idx = ((valid.len() as f64 * lo_frac) as usize).min(valid.len() - 1);
-    valid.select_nth_unstable_by(lo_idx, cmp);
-    let lo_val = valid[lo_idx];
+    let lo_idx = ((data.len() as f64 * lo_frac) as usize).min(data.len() - 1);
+    data.select_nth_unstable_by(lo_idx, cmp);
+    let lo_val = data[lo_idx];
 
-    let hi_idx = ((valid.len() as f64 * hi_frac) as usize).min(valid.len() - 1);
-    valid.select_nth_unstable_by(hi_idx, cmp);
-    let hi_val = valid[hi_idx];
+    let hi_idx = ((data.len() as f64 * hi_frac) as usize).min(data.len() - 1);
+    data.select_nth_unstable_by(hi_idx, cmp);
+    let hi_val = data[hi_idx];
 
     (lo_val, hi_val)
 }

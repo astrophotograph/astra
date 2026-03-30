@@ -100,33 +100,36 @@ pub fn remove_gradient(data: &[f64], width: usize, height: usize, order: usize) 
         }
     }
 
-    // Bilinear upsample to full resolution and subtract
-    let mut result = Vec::with_capacity(data.len());
-    for y in 0..height {
-        let sy = y as f64 / h_max * (eval_size - 1) as f64;
-        let sy0 = sy.floor() as usize;
-        let sy1 = std::cmp::min(sy0 + 1, eval_size - 1);
-        let fy = sy - sy0 as f64;
+    // Bilinear upsample to full resolution and subtract (parallel by row)
+    use rayon::prelude::*;
 
-        for x in 0..width {
-            let sx = x as f64 / w_max * (eval_size - 1) as f64;
-            let sx0 = sx.floor() as usize;
-            let sx1 = std::cmp::min(sx0 + 1, eval_size - 1);
-            let fx = sx - sx0 as f64;
+    let es_f = (eval_size - 1) as f64;
+    let result: Vec<f64> = (0..height)
+        .into_par_iter()
+        .flat_map(|y| {
+            let sy = y as f64 / h_max * es_f;
+            let sy0 = sy.floor() as usize;
+            let sy1 = std::cmp::min(sy0 + 1, eval_size - 1);
+            let fy = sy - sy0 as f64;
+            let fy_inv = 1.0 - fy;
 
-            let v00 = small_model[sy0 * eval_size + sx0];
-            let v10 = small_model[sy0 * eval_size + sx1];
-            let v01 = small_model[sy1 * eval_size + sx0];
-            let v11 = small_model[sy1 * eval_size + sx1];
+            (0..width)
+                .map(|x| {
+                    let sx = x as f64 / w_max * es_f;
+                    let sx0 = sx.floor() as usize;
+                    let sx1 = std::cmp::min(sx0 + 1, eval_size - 1);
+                    let fx = sx - sx0 as f64;
 
-            let model_val = v00 * (1.0 - fx) * (1.0 - fy)
-                + v10 * fx * (1.0 - fy)
-                + v01 * (1.0 - fx) * fy
-                + v11 * fx * fy;
+                    let model_val = small_model[sy0 * eval_size + sx0] * (1.0 - fx) * fy_inv
+                        + small_model[sy0 * eval_size + sx1] * fx * fy_inv
+                        + small_model[sy1 * eval_size + sx0] * (1.0 - fx) * fy
+                        + small_model[sy1 * eval_size + sx1] * fx * fy;
 
-            result.push(data[y * width + x] - model_val);
-        }
-    }
+                    data[y * width + x] - model_val
+                })
+                .collect::<Vec<f64>>()
+        })
+        .collect();
 
     // Shift so 1st percentile is near zero
     let mut valid: Vec<f64> = result.iter().copied().filter(|x| x.is_finite()).collect();
