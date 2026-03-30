@@ -265,6 +265,10 @@ export default function AdminPage() {
   const [isRemapping, setIsRemapping] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
 
+  // Library scan
+  const [isScanningLibrary, setIsScanningLibrary] = useState(false);
+  const [libraryScanResult, setLibraryScanResult] = useState<Awaited<ReturnType<typeof imageApi.scanUnimportedFiles>> | null>(null);
+
   // Location management
   const {
     locations,
@@ -2497,6 +2501,83 @@ export default function AdminPage() {
                     )}
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Unimported Files Scanner */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FolderSearch className="w-5 h-5" />
+                  Find Unimported Images
+                </CardTitle>
+                <CardDescription>
+                  Scan known image directories for files not yet in your library.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Button
+                  onClick={async () => {
+                    setIsScanningLibrary(true);
+                    try {
+                      const result = await imageApi.scanUnimportedFiles();
+                      setLibraryScanResult(result);
+                      if (result.totalFiles === 0) {
+                        toast.success("All images in known directories are already imported.");
+                      } else {
+                        toast.info(`Found ${result.totalFiles} unimported files (${formatSize(result.totalBytes)})`);
+                      }
+                    } catch (e) {
+                      toast.error("Scan failed: " + e);
+                    } finally {
+                      setIsScanningLibrary(false);
+                    }
+                  }}
+                  disabled={isScanningLibrary}
+                >
+                  <Search className="w-4 h-4 mr-2" />
+                  {isScanningLibrary ? "Scanning..." : "Scan for Unimported Files"}
+                </Button>
+
+                {libraryScanResult && libraryScanResult.totalFiles > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex gap-4 text-sm text-muted-foreground">
+                      <span>{libraryScanResult.totalFiles} files</span>
+                      <span>{formatSize(libraryScanResult.totalBytes)}</span>
+                      <span>{libraryScanResult.directoriesScanned} directories scanned</span>
+                    </div>
+                    <div className="border rounded-lg divide-y max-h-64 overflow-y-auto">
+                      {libraryScanResult.groups.map((group) => (
+                        <div key={group.path} className="p-3 hover:bg-muted/30">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="font-mono text-sm truncate max-w-md" title={group.path}>
+                                {group.path}
+                              </p>
+                              <div className="flex gap-3 text-xs text-muted-foreground mt-1">
+                                <span>{group.fileCount} files</span>
+                                <span>{formatSize(group.totalBytes)}</span>
+                                <span>{group.extensions.join(", ")}</span>
+                              </div>
+                            </div>
+                          </div>
+                          {group.samples.length > 0 && (
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {group.samples.join(", ")}
+                              {group.fileCount > 5 && ` ... and ${group.fileCount - 5} more`}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {libraryScanResult && libraryScanResult.totalFiles === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    All images in known directories are already in your library.
+                  </p>
+                )}
               </CardContent>
             </Card>
 

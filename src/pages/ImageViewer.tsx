@@ -133,6 +133,7 @@ export default function ImageViewerPage() {
   const [isLoadingSkymap, setIsLoadingSkymap] = useState(false);
   const [skymapExpanded, setSkymapExpanded] = useState(false);
   const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
+  const [detailsPanelOpen, setDetailsPanelOpen] = useState(true);
 
   // Zoom and pan state
   const [zoom, setZoom] = useState(1);
@@ -803,9 +804,9 @@ export default function ImageViewerPage() {
         </div>
       </div>
 
-      <div className="grid lg:grid-cols-3 gap-6">
+      <div className="grid lg:grid-cols-3 gap-6 relative">
         {/* Image Display */}
-        <div className="lg:col-span-2 space-y-2">
+        <div className={`${detailsPanelOpen ? "lg:col-span-2" : "lg:col-span-3"} space-y-2 transition-all`}>
           <div
             ref={imageContainerRef}
             className="rounded-lg overflow-hidden bg-muted relative"
@@ -817,17 +818,6 @@ export default function ImageViewerPage() {
             style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default" }}
           >
             <div className="absolute top-2 right-2 z-30 flex items-center gap-1">
-              <button
-                onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
-                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
-                title="Zoom in"
-              >+</button>
-              <button
-                onClick={() => setZoom((z) => { const nz = z / 1.25; if (nz <= 1.05) { setPan({ x: 0, y: 0 }); return 1; } return nz; })}
-                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
-                title="Zoom out"
-                disabled={zoom <= 1}
-              >−</button>
               {zoom > 1 && (
                 <button
                   onClick={resetZoom}
@@ -836,6 +826,17 @@ export default function ImageViewerPage() {
                   {Math.round(zoom * 100)}% — Reset
                 </button>
               )}
+              <button
+                onClick={() => setZoom((z) => { const nz = z / 1.25; if (nz <= 1.05) { setPan({ x: 0, y: 0 }); return 1; } return nz; })}
+                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                title="Zoom out"
+                disabled={zoom <= 1}
+              >−</button>
+              <button
+                onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
+                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                title="Zoom in"
+              >+</button>
             </div>
             {isRegenerating && (
               <div className="absolute inset-0 z-20 bg-black/60 flex flex-col items-center justify-center gap-3">
@@ -978,8 +979,22 @@ export default function ImageViewerPage() {
           </div>
         </div>
 
+        {/* Panel Toggle */}
+        <button
+          onClick={() => setDetailsPanelOpen((v) => !v)}
+          className="hidden lg:flex absolute top-0 items-center justify-center w-6 h-12 bg-muted hover:bg-muted/80 rounded-l-md border border-r-0 z-10 transition-all"
+          style={{ right: detailsPanelOpen ? "33.333%" : 0 }}
+          title={detailsPanelOpen ? "Hide details" : "Show details"}
+        >
+          {detailsPanelOpen ? (
+            <ChevronRight className="w-4 h-4" />
+          ) : (
+            <ChevronLeft className="w-4 h-4" />
+          )}
+        </button>
+
         {/* Metadata Panel */}
-        <div className="space-y-6">
+        {detailsPanelOpen && <div className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="text-lg">Details</CardTitle>
@@ -1392,7 +1407,7 @@ export default function ImageViewerPage() {
             </CardContent>
           </Card>
 
-        </div>
+        </div>}
       </div>
 
       {/* Delete Confirmation Dialog */}

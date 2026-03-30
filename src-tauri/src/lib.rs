@@ -194,6 +194,7 @@ pub fn run() {
             commands::get_unique_cameras,
             commands::check_source_health,
             commands::migrate_previews_to_local,
+            commands::scan_unimported_files,
             // Target browser commands
             commands::get_targets,
             commands::search_images_by_target,

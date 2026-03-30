@@ -309,6 +309,20 @@ export const imageApi = {
 
   checkSourceHealth: () => invoke<[string, boolean, number][]>("check_source_health"),
 
+  scanUnimportedFiles: (scanPaths?: string[]) =>
+    invoke<{
+      directoriesScanned: number;
+      totalFiles: number;
+      totalBytes: number;
+      groups: Array<{
+        path: string;
+        fileCount: number;
+        totalBytes: number;
+        samples: string[];
+        extensions: string[];
+      }>;
+    }>("scan_unimported_files", { scanPaths }),
+
   migratePreviewsToLocal: () => invoke<[number, number]>("migrate_previews_to_local"),
 };
 
