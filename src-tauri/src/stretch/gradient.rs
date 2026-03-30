@@ -129,9 +129,14 @@ pub fn remove_gradient(data: &[f64], width: usize, height: usize, order: usize) 
     }
 
     // Shift so 1st percentile is near zero
-    let mut sorted: Vec<f64> = result.iter().copied().filter(|x| x.is_finite()).collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let bg_level = if sorted.is_empty() { 0.0 } else { sorted[sorted.len() / 100] };
+    let mut valid: Vec<f64> = result.iter().copied().filter(|x| x.is_finite()).collect();
+    let bg_level = if valid.is_empty() {
+        0.0
+    } else {
+        let idx = valid.len() / 100;
+        valid.select_nth_unstable_by(idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        valid[idx]
+    };
 
     result.iter_mut().for_each(|v| {
         *v = (*v - bg_level).clamp(0.0, 1.0);
@@ -141,9 +146,13 @@ pub fn remove_gradient(data: &[f64], width: usize, height: usize, order: usize) 
 }
 
 fn vec_median(data: &[f64]) -> f64 {
-    let mut sorted: Vec<f64> = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if sorted.is_empty() { 0.0 } else { sorted[sorted.len() / 2] }
+    let mut buf = data.to_vec();
+    if buf.is_empty() {
+        return 0.0;
+    }
+    let mid = buf.len() / 2;
+    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    buf[mid]
 }
 
 /// Generate polynomial term values for 2D fitting.

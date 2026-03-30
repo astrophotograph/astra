@@ -117,13 +117,13 @@ fn apply_mtf(data: &mut [f64], m: f64) {
 }
 
 fn channel_stats(data: &[f64]) -> (f64, f64) {
-    let valid: Vec<f64> = data.iter().copied().filter(|&v| v > 0.0).collect();
+    let mut valid: Vec<f64> = data.iter().copied().filter(|&v| v > 0.0).collect();
     if valid.is_empty() {
         return (0.0, 0.01);
     }
-    let med = vec_median(&valid);
-    let deviations: Vec<f64> = valid.iter().map(|v| (v - med).abs()).collect();
-    let mad = vec_median(&deviations).max(1e-6);
+    let med = fast_median(&mut valid);
+    let mut deviations: Vec<f64> = valid.iter().map(|v| (v - med).abs()).collect();
+    let mad = fast_median(&mut deviations).max(1e-6);
     (med, mad)
 }
 
@@ -132,12 +132,15 @@ fn median_positive(data: &[f64]) -> f64 {
     if valid.is_empty() {
         return 0.0;
     }
-    valid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    valid[valid.len() / 2]
+    fast_median(&mut valid)
 }
 
-fn vec_median(data: &[f64]) -> f64 {
-    let mut sorted = data.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if sorted.is_empty() { 0.0 } else { sorted[sorted.len() / 2] }
+/// O(n) median using select_nth_unstable (quickselect algorithm).
+fn fast_median(data: &mut [f64]) -> f64 {
+    if data.is_empty() {
+        return 0.0;
+    }
+    let mid = data.len() / 2;
+    data.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    data[mid]
 }

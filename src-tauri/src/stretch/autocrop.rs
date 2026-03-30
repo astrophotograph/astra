@@ -80,10 +80,11 @@ fn median(data: &[f64]) -> f64 {
     if data.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if sorted.is_empty() {
+    let mut buf: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    if buf.is_empty() {
         return 0.0;
     }
-    sorted[sorted.len() / 2]
+    let mid = buf.len() / 2;
+    buf.select_nth_unstable_by(mid, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    buf[mid]
 }

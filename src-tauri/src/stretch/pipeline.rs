@@ -210,14 +210,20 @@ fn extract_dims(shape: &[usize]) -> (usize, usize) {
     }
 }
 
-/// Compute two percentiles from sorted data.
+/// Compute two percentiles using quickselect (O(n) each).
 fn percentiles(data: &[f64], lo_frac: f64, hi_frac: f64) -> (f64, f64) {
-    let mut sorted: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    if sorted.is_empty() {
+    let mut valid: Vec<f64> = data.iter().copied().filter(|x| x.is_finite()).collect();
+    if valid.is_empty() {
         return (0.0, 1.0);
     }
-    let lo_idx = ((sorted.len() as f64 * lo_frac) as usize).min(sorted.len() - 1);
-    let hi_idx = ((sorted.len() as f64 * hi_frac) as usize).min(sorted.len() - 1);
-    (sorted[lo_idx], sorted[hi_idx])
+    let cmp = |a: &f64, b: &f64| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal);
+    let lo_idx = ((valid.len() as f64 * lo_frac) as usize).min(valid.len() - 1);
+    valid.select_nth_unstable_by(lo_idx, cmp);
+    let lo_val = valid[lo_idx];
+
+    let hi_idx = ((valid.len() as f64 * hi_frac) as usize).min(valid.len() - 1);
+    valid.select_nth_unstable_by(hi_idx, cmp);
+    let hi_val = valid[hi_idx];
+
+    (lo_val, hi_val)
 }
