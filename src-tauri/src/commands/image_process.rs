@@ -481,10 +481,23 @@ pub async fn regenerate_preview(
     let preview_path = preview_dir.join(format!("{}.jpg", id));
     let preview_path_str = preview_path.to_string_lossy().to_string();
 
+    // Use native Rust stretching pipeline (no Python/PyO3 overhead)
     let output = tokio::task::spawn_blocking({
         let fits = fits_path.clone();
         let out = preview_path_str.clone();
-        move || image_process::quick_preview(&fits, &out, bg_percent, sigma)
+        move || {
+            let params = crate::stretch::StretchParams {
+                bg_percent: bg_percent.unwrap_or(0.15),
+                sigma: sigma.unwrap_or(3.0),
+                gradient_removal: true,
+                autocrop: true,
+            };
+            crate::stretch::generate_preview(
+                std::path::Path::new(&fits),
+                std::path::Path::new(&out),
+                &params,
+            )
+        }
     })
     .await
     .map_err(|e| format!("Task panicked: {}", e))?

@@ -63,6 +63,9 @@ open = "5"
 # FITS file parsing
 fitrs = "0.5"
 
+# Native image processing
+rayon = "1"
+
 # Native plate solver
 tetra3 = { version = "0.4", features = ["image"] }
 

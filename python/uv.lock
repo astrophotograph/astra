@@ -50,7 +50,7 @@ requires-dist = [
     { name = "erewhon-astro", marker = "extra == 'platesolve'", specifier = ">=0.7" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pillow", specifier = ">=12.1.0" },
-    { name = "processinator", specifier = ">=0.4.0" },
+    { name = "processinator", specifier = ">=0.5.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "scipy", specifier = ">=1.16.3" },

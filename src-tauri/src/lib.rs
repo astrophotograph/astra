@@ -10,6 +10,7 @@ mod db;
 mod python;
 mod share;
 mod state;
+pub mod stretch;
 
 use state::AppState;
 
