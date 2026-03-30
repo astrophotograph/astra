@@ -482,6 +482,8 @@ pub async fn regenerate_preview(
     let preview_path_str = preview_path.to_string_lossy().to_string();
 
     // Use native Rust stretching pipeline (no Python/PyO3 overhead)
+    let app_handle = app.clone();
+    let image_id = id.clone();
     let output = tokio::task::spawn_blocking({
         let fits = fits_path.clone();
         let out = preview_path_str.clone();
@@ -492,18 +494,26 @@ pub async fn regenerate_preview(
                 gradient_removal: true,
                 autocrop: true,
             };
-            crate::stretch::generate_preview(
+            let result = crate::stretch::generate_preview(
                 std::path::Path::new(&fits),
                 std::path::Path::new(&out),
                 &params,
-            )
+            )?;
+
+            // Emit event immediately so frontend can show the preview
+            let _ = app_handle.emit("preview-ready", serde_json::json!({
+                "imageId": image_id,
+                "previewPath": result,
+            }));
+
+            Ok::<String, String>(result)
         }
     })
     .await
     .map_err(|e| format!("Task panicked: {}", e))?
     .map_err(|e| format!("Preview generation failed: {}", e))?;
 
-    // Generate thumbnail from the preview
+    // Generate thumbnail and update DB (can happen after preview is shown)
     let thumb = tokio::task::spawn_blocking({
         let path = output.clone();
         move || generate_thumbnail(Path::new(&path))
@@ -525,4 +535,151 @@ pub async fn regenerate_preview(
         preview_path: output,
         thumbnail: thumb,
     })
+}
+
+/// Bulk regenerate previews for multiple images with pipelined I/O.
+///
+/// Processes images concurrently: reads the next FITS while stretching the current one.
+/// Emits "bulk-preview-progress" events with { current, total, imageId, status }.
+#[tauri::command]
+pub async fn bulk_regenerate_previews(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    image_ids: Vec<String>,
+    bg_percent: Option<f64>,
+    sigma: Option<f64>,
+) -> Result<serde_json::Value, String> {
+    let total = image_ids.len();
+    let preview_dir = app.path().app_data_dir()
+        .map(|d| d.join("previews"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/astra-previews"));
+    let _ = std::fs::create_dir_all(&preview_dir);
+
+    let bg = bg_percent.unwrap_or(0.15);
+    let sig = sigma.unwrap_or(3.0);
+
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+
+    // Process with pipelining: up to 2 concurrent (1 reading + 1 stretching)
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+
+    let mut tasks = Vec::new();
+
+    for (idx, image_id) in image_ids.into_iter().enumerate() {
+        let permit = semaphore.clone().acquire_owned().await
+            .map_err(|e| format!("Semaphore error: {}", e))?;
+
+        let app_h = app.clone();
+        let state_db = state.db.clone();
+        let prev_dir = preview_dir.clone();
+
+        let task = tokio::task::spawn(async move {
+            let _permit = permit;
+
+            // Look up image
+            let mut conn = match state_db.get() {
+                Ok(c) => c,
+                Err(e) => {
+                    log::error!("DB error for {}: {}", image_id, e);
+                    return (image_id, false);
+                }
+            };
+
+            let image = match crate::db::repository::get_image_by_id(&mut conn, &image_id) {
+                Ok(Some(img)) => img,
+                _ => {
+                    log::error!("Image not found: {}", image_id);
+                    return (image_id, false);
+                }
+            };
+
+            let fits_path = match image.fits_url.as_ref().or_else(|| {
+                image.url.as_ref().filter(|u| {
+                    let l = u.to_lowercase();
+                    l.ends_with(".fit") || l.ends_with(".fits")
+                })
+            }) {
+                Some(p) => p.clone(),
+                None => return (image_id, false),
+            };
+
+            let preview_path = prev_dir.join(format!("{}.jpg", image_id));
+
+            // Stretch
+            let result = tokio::task::spawn_blocking({
+                let fits = fits_path.clone();
+                let out = preview_path.clone();
+                let app_c = app_h.clone();
+                let img_id = image_id.clone();
+                move || {
+                    let params = crate::stretch::StretchParams {
+                        bg_percent: bg,
+                        sigma: sig,
+                        gradient_removal: true,
+                        autocrop: true,
+                    };
+                    let r = crate::stretch::generate_preview(
+                        std::path::Path::new(&fits),
+                        &out,
+                        &params,
+                    );
+                    if let Ok(ref path) = r {
+                        let _ = app_c.emit("preview-ready", serde_json::json!({
+                            "imageId": img_id,
+                            "previewPath": path,
+                        }));
+                    }
+                    r
+                }
+            })
+            .await;
+
+            let ok = match result {
+                Ok(Ok(output)) => {
+                    // Generate thumbnail and update DB
+                    if let Ok(Ok(thumb)) = tokio::task::spawn_blocking({
+                        let p = output.clone();
+                        move || generate_thumbnail(std::path::Path::new(&p))
+                    }).await {
+                        let update = crate::db::models::UpdateImage {
+                            url: Some(output),
+                            thumbnail: Some(thumb),
+                            ..Default::default()
+                        };
+                        let _ = crate::db::repository::update_image(&mut conn, &image_id, &update);
+                    }
+                    true
+                }
+                _ => false,
+            };
+
+            // Emit progress
+            let _ = app_h.emit("bulk-preview-progress", serde_json::json!({
+                "current": idx + 1,
+                "total": total,
+                "imageId": image_id,
+                "status": if ok { "success" } else { "failed" },
+            }));
+
+            (image_id, ok)
+        });
+
+        tasks.push(task);
+    }
+
+    // Await all tasks
+    for task in tasks {
+        match task.await {
+            Ok((_, true)) => succeeded += 1,
+            Ok((_, false)) => failed += 1,
+            Err(_) => failed += 1,
+        }
+    }
+
+    Ok(serde_json::json!({
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+    }))
 }

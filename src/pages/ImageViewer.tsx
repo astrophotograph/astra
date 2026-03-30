@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
+import { listen } from "@tauri-apps/api/event";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { useSettings } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
@@ -582,6 +583,18 @@ export default function ImageViewerPage() {
   ];
 
   // Delete image
+  // Listen for streaming preview-ready events
+  useEffect(() => {
+    const unlisten = listen<{ imageId: string; previewPath: string }>("preview-ready", (event) => {
+      if (event.payload.imageId === id) {
+        // Immediately show the new preview without waiting for command to return
+        setImageVersion((v) => v + 1);
+        setIsRegenerating(false);
+      }
+    });
+    return () => { unlisten.then((fn) => fn()); };
+  }, [id]);
+
   const handleRegeneratePreview = async (bgPercent?: number, sigma?: number) => {
     if (!image) return;
     setIsRegenerating(true);
@@ -589,10 +602,8 @@ export default function ImageViewerPage() {
     try {
       await imageApi.regeneratePreview(image.id, bgPercent, sigma);
       toast.success("Preview regenerated");
-      // Refetch image record and force reload of image data
       await refetch();
       setImageVersion((v) => v + 1);
-      // Invalidate the images list so thumbnails update in grid views
       queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
     } catch (e) {
       toast.error("Failed to regenerate preview: " + e);
