@@ -71,7 +71,7 @@ pub fn remove_gradient(data: &[f64], width: usize, height: usize, order: usize) 
 
     // Build design matrix and solve least squares
     let terms = poly_terms_2d(&xn, &yn, order);
-    let n_terms = terms[0].len();
+    let n_terms = terms.len();
     let n_samples = sample_v.len();
 
     let coeffs = match lstsq(&terms, &sample_v, n_samples, n_terms) {

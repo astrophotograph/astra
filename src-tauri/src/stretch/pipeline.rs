@@ -172,29 +172,21 @@ fn read_fits_pixels(path: &Path) -> Result<(usize, usize, Vec<f64>, bool), Strin
 
     let (width, height, pixels) = match hdu.read_data() {
         fitrs::FitsData::FloatingPoint32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
+            let (w, h) = extract_dims(&data.shape);
             let pixels: Vec<f64> = data.data.iter().map(|&x| x as f64).collect();
             (w, h, pixels)
         }
         fitrs::FitsData::FloatingPoint64(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
+            let (w, h) = extract_dims(&data.shape);
             (w, h, data.data.clone())
         }
         fitrs::FitsData::IntegersI32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
+            let (w, h) = extract_dims(&data.shape);
             let pixels: Vec<f64> = data.data.iter().map(|x| x.unwrap_or(0) as f64).collect();
             (w, h, pixels)
         }
         fitrs::FitsData::IntegersU32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
+            let (w, h) = extract_dims(&data.shape);
             let pixels: Vec<f64> = data.data.iter().map(|x| x.unwrap_or(0) as f64).collect();
             (w, h, pixels)
         }
@@ -205,6 +197,17 @@ fn read_fits_pixels(path: &Path) -> Result<(usize, usize, Vec<f64>, bool), Strin
     let is_color = pixels.len() >= channel_size * 3;
 
     Ok((width, height, pixels, is_color))
+}
+
+/// Extract width and height from FITS shape.
+/// fitrs shape is in FITS axis order: [NAXIS1, NAXIS2] or [NAXIS1, NAXIS2, NAXIS3].
+/// For 3D (RGB) FITS, the shape is [width, height, 3] in fitrs order.
+fn extract_dims(shape: &[usize]) -> (usize, usize) {
+    match shape.len() {
+        2 => (shape[0], shape[1]),       // [width, height]
+        3 => (shape[0], shape[1]),       // [width, height, channels]
+        _ => (shape[0], shape.get(1).copied().unwrap_or(1)),
+    }
 }
 
 /// Compute two percentiles from sorted data.
