@@ -104,7 +104,7 @@ pub fn remove_gradient(data: &[f64], width: usize, height: usize, order: usize) 
     use rayon::prelude::*;
 
     let es_f = (eval_size - 1) as f64;
-    let result: Vec<f64> = (0..height)
+    let mut result: Vec<f64> = (0..height)
         .into_par_iter()
         .flat_map(|y| {
             let sy = y as f64 / h_max * es_f;

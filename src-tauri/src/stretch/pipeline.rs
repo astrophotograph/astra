@@ -92,7 +92,7 @@ pub fn generate_preview(
 
     channels.par_iter_mut().for_each(|ch| {
         // Extract interior for statistics
-        let interior: Vec<f64> = if top > 0 || bottom > 0 || left > 0 || right > 0 {
+        let mut interior: Vec<f64> = if top > 0 || bottom > 0 || left > 0 || right > 0 {
             let mut v = Vec::new();
             for y in interior_y0..interior_y1 {
                 for x in interior_x0..interior_x1 {
