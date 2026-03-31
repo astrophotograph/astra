@@ -49,7 +49,7 @@ dirs = "6"
 reqwest = { version = "0.13", features = ["rustls-native-certs", "json"] }
 
 # Crypto (for S3 signing)
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 
 # Image handling
