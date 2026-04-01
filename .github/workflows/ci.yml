@@ -68,6 +68,10 @@ jobs:
         working-directory: src-tauri
         run: cargo check
 
+      - name: Cargo test
+        working-directory: src-tauri
+        run: cargo test
+
       - name: Cargo clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings || true
@@ -88,4 +92,4 @@ jobs:
 
       - name: Run tests
         working-directory: python
-        run: uv run --extra dev pytest -x || true
+        run: uv run --extra dev pytest -x
