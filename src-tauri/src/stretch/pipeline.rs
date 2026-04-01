@@ -39,6 +39,9 @@ pub fn generate_preview(
 ) -> Result<String, String> {
     let start = std::time::Instant::now();
 
+    log::info!("stretch: params bg_percent={}, sigma={}, gradient={}, autocrop={}",
+        params.bg_percent, params.sigma, params.gradient_removal, params.autocrop);
+
     // Step 1: Read FITS
     let (width, height, pixels, is_color) = read_fits_pixels(fits_path)?;
     let channel_size = width * height;
