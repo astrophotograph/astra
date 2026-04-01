@@ -604,6 +604,8 @@ export default function ImageViewerPage() {
       await imageApi.regeneratePreview(image.id, bgPercent, sigma);
       toast.success("Preview regenerated");
       await refetch();
+      // Force clear and reload the image data
+      setImageDataUrl(null);
       setImageVersion((v) => v + 1);
       queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
     } catch (e) {

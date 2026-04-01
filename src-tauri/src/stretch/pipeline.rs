@@ -158,7 +158,8 @@ pub fn generate_preview(
     img.save(output_path)
         .map_err(|e| format!("Failed to save JPEG: {}", e))?;
 
-    log::info!("stretch: save in {:?}", t_save.elapsed());
+    let file_size = std::fs::metadata(output_path).map(|m| m.len()).unwrap_or(0);
+    log::info!("stretch: save in {:?} ({} bytes)", t_save.elapsed(), file_size);
     log::info!("stretch: total pipeline in {:?}", start.elapsed());
 
     Ok(output_path.to_string_lossy().to_string())
