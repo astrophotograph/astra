@@ -42,6 +42,7 @@ import {
   Compass,
   ExternalLink,
   FolderDown,
+  FolderInput,
   FolderOpen,
   Globe,
   ImageIcon,
@@ -67,7 +68,8 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { authApi, imageApi, plateSolveApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
+import { authApi, imageApi, plateSolveApi, scanApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -114,6 +116,7 @@ export default function CollectionDetailPage() {
   const deleteCollection = useDeleteCollection();
   const updateImage = useUpdateImage();
   const [isAddingImages, setIsAddingImages] = useState(false);
+  const [isImportingDir, setIsImportingDir] = useState(false);
   const [collectDialogOpen, setCollectDialogOpen] = useState(false);
   const [skyMapOpen, setSkyMapOpen] = useState(false);
   const [slideshowDialogOpen, setSlideshowDialogOpen] = useState(false);
@@ -406,6 +409,40 @@ export default function CollectionDetailPage() {
     } catch (err) {
       toast.error("Failed to delete collection");
       console.error(err);
+    }
+  };
+
+  // Import images from a directory into this collection
+  const handleImportDirectory = async () => {
+    if (!collection) return;
+    const selected = await open({ directory: true, multiple: false });
+    if (!selected) return;
+
+    setIsImportingDir(true);
+    toast.info(`Importing from ${selected}...`);
+    try {
+      const result = await scanApi.scan({
+        directory: selected as string,
+        stacked_only: true,
+      });
+
+      if (result.images_imported > 0) {
+        // The scan creates images but doesn't add them to this collection.
+        // Refresh and get the newly imported images, then add them.
+        // The scan emits events — we just need to refresh.
+        await queryClient.invalidateQueries({ queryKey: imageKeys.byCollection(collection.id) });
+        toast.success(
+          `Imported ${result.images_imported} images, created ${result.collections_created} collections`
+        );
+      } else if (result.images_skipped > 0) {
+        toast.info(`All ${result.images_skipped} images already imported`);
+      } else {
+        toast.info("No images found in that directory");
+      }
+    } catch (err) {
+      toast.error("Import failed: " + err);
+    } finally {
+      setIsImportingDir(false);
     }
   };
 
@@ -891,14 +928,25 @@ export default function CollectionDetailPage() {
                 </Button>
               )}
               {!isCatalogCollection && (
-                <Button
-                  variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                  onClick={() => setAddImagesDialogOpen(true)}
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Image
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                    onClick={() => setAddImagesDialogOpen(true)}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Add Image
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                    onClick={handleImportDirectory}
+                    disabled={isImportingDir}
+                  >
+                    <FolderInput className="w-4 h-4 mr-2" />
+                    {isImportingDir ? "Importing..." : "Import Directory"}
+                  </Button>
+                </>
               )}
               <Button
                 variant="outline"
