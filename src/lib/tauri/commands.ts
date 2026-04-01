@@ -578,6 +578,7 @@ export interface BulkScanInput {
   tags?: string;
   stacked_only: boolean;
   max_files?: number;
+  add_to_collection?: string;
 }
 
 export interface BulkScanResult {

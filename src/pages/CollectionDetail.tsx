@@ -424,6 +424,7 @@ export default function CollectionDetailPage() {
       const result = await scanApi.scan({
         directory: selected as string,
         stacked_only: true,
+        add_to_collection: collection.id,
       });
 
       if (result.images_imported > 0) {

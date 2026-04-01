@@ -204,6 +204,8 @@ pub struct BulkScanInput {
     pub stacked_only: bool,
     /// Maximum number of files to import (None = unlimited)
     pub max_files: Option<usize>,
+    /// If set, also add all imported images to this collection
+    pub add_to_collection: Option<String>,
 }
 
 /// Result of a bulk scan operation
@@ -1278,6 +1280,18 @@ pub async fn bulk_scan_directory(
                 "Failed to add image to collection: {}",
                 e
             ));
+        }
+
+        // Also add to the user-specified target collection if provided
+        if let Some(ref target_coll_id) = input.add_to_collection {
+            let target_ci = NewCollectionImage {
+                collection_id: target_coll_id.clone(),
+                image_id: image.id.clone(),
+            };
+            if let Err(e) = repository::add_image_to_collection(&mut conn, &target_ci) {
+                // Not fatal — might already be in the collection
+                log::warn!("Failed to add image to target collection: {}", e);
+            }
         }
 
             result.images_imported += 1;
