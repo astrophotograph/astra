@@ -1285,6 +1285,7 @@ pub async fn bulk_scan_directory(
         // Also add to the user-specified target collection if provided
         if let Some(ref target_coll_id) = input.add_to_collection {
             let target_ci = NewCollectionImage {
+                id: uuid::Uuid::new_v4().to_string(),
                 collection_id: target_coll_id.clone(),
                 image_id: image.id.clone(),
             };
