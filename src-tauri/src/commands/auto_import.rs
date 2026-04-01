@@ -547,7 +547,18 @@ fn run_scan_cycle(
                     let preview_path_str = preview_path.to_string_lossy().to_string();
 
                     emit("stretching", &format!("Stretching: {}", new_image.filename), Some(&new_image.filename), imported, 0);
-                    match py_image::quick_preview(&fits_path_str, &preview_path_str, config.stretch_bg_percent, config.stretch_sigma) {
+                    // Use native Rust stretch pipeline (no Python/PyO3 overhead)
+                    let stretch_params = crate::stretch::StretchParams {
+                        bg_percent: config.stretch_bg_percent.unwrap_or(0.15),
+                        sigma: config.stretch_sigma.unwrap_or(3.0),
+                        gradient_removal: true,
+                        autocrop: true,
+                    };
+                    match crate::stretch::generate_preview(
+                        Path::new(&fits_path_str),
+                        Path::new(&preview_path_str),
+                        &stretch_params,
+                    ) {
                         Ok(output_path) => {
                             log::info!("Generated preview: {}", output_path);
                             // Update the image URL to point to the preview JPEG

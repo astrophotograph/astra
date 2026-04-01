@@ -1325,7 +1325,7 @@ export default function AdminPage() {
         </div>
         <nav className="space-y-1">
           {SETTINGS_SECTIONS.filter((s) => {
-            if (!developerMode && (s.id === "plate-solving" || s.id === "auto-import")) return false;
+            if (!developerMode && s.id === "plate-solving") return false;
             return true;
           }).map((section) => (
             <button
@@ -1675,7 +1675,7 @@ export default function AdminPage() {
                 <div>
                   <Label className="text-base font-medium">Developer Mode</Label>
                   <p className="text-sm text-muted-foreground">
-                    Show experimental features: image processing, plate solving, and auto-import
+                    Show experimental features: image processing and plate solving settings
                   </p>
                 </div>
                 <Button
@@ -1698,7 +1698,6 @@ export default function AdminPage() {
                   <ul className="list-disc list-inside space-y-1">
                     <li>Plate Solving settings and image plate solving</li>
                     <li>Image Processing (FITS stretch and enhancements)</li>
-                    <li>Auto-Import from watch folders</li>
                   </ul>
                 </div>
               )}
