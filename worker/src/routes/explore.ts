@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Env } from "../lib/types";
+import type { Env, GalleryIndexEntry } from "../lib/types";
 
 const exploreRoutes = new Hono<{ Bindings: Env }>();
 
@@ -33,15 +33,6 @@ const MESSIER_COMMON_NAMES: Record<string, string> = {
   m110: "Satellite of Andromeda",
 };
 
-interface GalleryIndexEntry {
-  userId: string;
-  username: string;
-  collectionSlug: string;
-  collectionName: string;
-  shareId: string;
-  createdAt?: string;
-}
-
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -50,16 +41,14 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function renderCard(entry: GalleryIndexEntry, createdAt?: string): string {
-  const pubDate = createdAt
-    ? new Date(createdAt).toLocaleDateString("en-US", {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
-    : "";
+function renderCardVisual(entry: GalleryIndexEntry): string {
+  if (entry.thumbnailUrl) {
+    return `
+      <div class="card-image">
+        <img src="${escapeHtml(entry.thumbnailUrl)}" alt="${escapeHtml(entry.collectionName)}" loading="lazy" />
+      </div>`;
+  }
   return `
-    <a href="/@${escapeHtml(entry.username)}/${escapeHtml(entry.collectionSlug)}" class="gallery-card">
       <div class="card-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/>
@@ -70,11 +59,27 @@ function renderCard(entry: GalleryIndexEntry, createdAt?: string): string {
           <circle cx="7" cy="16" r="0.5" fill="currentColor" stroke="none"/>
           <circle cx="15" cy="14" r="0.5" fill="currentColor" stroke="none"/>
         </svg>
-      </div>
+      </div>`;
+}
+
+function renderCard(entry: GalleryIndexEntry, createdAt?: string): string {
+  const pubDate = createdAt
+    ? new Date(createdAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    : "";
+  const countBadge = entry.imageCount
+    ? `<span class="card-count">${entry.imageCount} image${entry.imageCount === 1 ? "" : "s"}</span>`
+    : "";
+  return `
+    <a href="/@${escapeHtml(entry.username)}/${escapeHtml(entry.collectionSlug)}" class="gallery-card">
+      ${renderCardVisual(entry)}
       <div class="card-content">
         <h3>${escapeHtml(entry.collectionName)}</h3>
         <span class="card-username">@${escapeHtml(entry.username)}</span>
-        ${pubDate ? `<span class="card-date">${pubDate}</span>` : ""}
+        <span class="card-meta">${pubDate}${pubDate && countBadge ? " · " : ""}${countBadge}</span>
       </div>
     </a>`;
 }
@@ -287,10 +292,33 @@ nav .nav-links a.active { color: var(--text-bright); }
   margin-bottom: 0.2rem;
 }
 
-.card-date {
+.card-meta {
   font-size: 0.78rem;
   color: var(--text-dim);
   letter-spacing: 0.03em;
+  display: block;
+}
+
+.card-count {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+.card-image {
+  height: 160px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+}
+
+.card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s;
+}
+
+.gallery-card:hover .card-image img {
+  transform: scale(1.03);
 }
 
 /* Search */

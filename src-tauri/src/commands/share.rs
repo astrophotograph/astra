@@ -893,6 +893,23 @@ pub async fn publish_collection_gallery(
         .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
     files_to_upload.push(("manifest.json".to_string(), "application/json".to_string(), manifest_json.into_bytes()));
 
+    // Add cover thumbnail (first image's thumbnail) for gallery cards
+    if let Some(first_image) = images.first() {
+        if let Some(file_path) = &first_image.url {
+            let path = std::path::Path::new(file_path);
+            if path.exists() {
+                match std::fs::read(path) {
+                    Ok(file_data) => {
+                        if let Ok(thumb_data) = generate_thumbnail(&file_data) {
+                            files_to_upload.push(("cover.jpg".to_string(), "image/jpeg".to_string(), thumb_data));
+                        }
+                    }
+                    Err(e) => log::warn!("Failed to read cover image: {}", e),
+                }
+            }
+        }
+    }
+
     // Use catalog viewer for catalog collections, regular viewer otherwise
     let viewer_html = match collection.template.as_deref() {
         Some("messier") | Some("caldwell") => viewer::CATALOG_VIEWER_HTML,
@@ -907,6 +924,7 @@ pub async fn publish_collection_gallery(
         "shareId": share_id,
         "collectionSlug": collection_slug,
         "collectionName": collection.name,
+        "collectionDescription": collection.description,
         "files": files_to_upload.iter().map(|(key, ct, data)| {
             serde_json::json!({
                 "key": key,

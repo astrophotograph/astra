@@ -3,7 +3,7 @@
  */
 
 import { Hono } from "hono";
-import type { Env, PresignRequest, PresignResponse, ShareRecord } from "../lib/types";
+import type { Env, GalleryIndexEntry, PresignRequest, PresignResponse, ShareRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
 import { generatePresignedPutUrl } from "../lib/r2";
 
@@ -101,16 +101,29 @@ presignRoutes.post("/presign", requireApiToken, async (c) => {
     JSON.stringify({ ...shareRecord, shareId: body.shareId })
   );
 
+  // Build thumbnail URL — the desktop app uploads cover.jpg alongside other files
+  const hasCover = body.files.some(f => f.key === "cover.jpg");
+  const thumbnailUrl = hasCover
+    ? `https://astra.gallery/shares/${body.shareId}/cover.jpg`
+    : undefined;
+
+  // Count actual image files (not thumbs, manifest, etc.)
+  const imageCount = body.files.filter(f => f.key.startsWith("images/")).length;
+
   // Gallery index for explore feed (time-sorted)
   const galleryIndexKey = `gallery-index/${new Date().toISOString()}_${body.shareId}`;
-  await c.env.GALLERY_KV.put(galleryIndexKey, JSON.stringify({
+  const indexEntry: GalleryIndexEntry = {
     userId: apiToken.userId,
     username: apiToken.username,
     collectionSlug: body.collectionSlug,
     collectionName: body.collectionName,
     shareId: body.shareId,
     createdAt: new Date().toISOString(),
-  }));
+    thumbnailUrl,
+    imageCount: imageCount > 0 ? imageCount : undefined,
+    description: body.collectionDescription,
+  };
+  await c.env.GALLERY_KV.put(galleryIndexKey, JSON.stringify(indexEntry));
 
   // Object index for browsing by target
   const objectNames = extractObjectNames(body.collectionName);

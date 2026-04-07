@@ -32,10 +32,23 @@ export interface ApiToken {
   exp: number;
 }
 
+export interface GalleryIndexEntry {
+  userId: string;
+  username: string;
+  collectionSlug: string;
+  collectionName: string;
+  shareId: string;
+  createdAt: string;
+  thumbnailUrl?: string;
+  imageCount?: number;
+  description?: string;
+}
+
 export interface PresignRequest {
   shareId: string;
   collectionSlug: string;
   collectionName: string;
+  collectionDescription?: string;
   files: PresignFile[];
 }
 

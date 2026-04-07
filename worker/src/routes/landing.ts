@@ -1,16 +1,7 @@
 import { Hono } from "hono";
-import type { Env } from "../lib/types";
+import type { Env, GalleryIndexEntry } from "../lib/types";
 
 const landingRoutes = new Hono<{ Bindings: Env }>();
-
-interface GalleryIndexEntry {
-  userId: string;
-  username: string;
-  collectionSlug: string;
-  collectionName: string;
-  shareId: string;
-  createdAt: string;
-}
 
 function escapeHtml(s: string): string {
   return s
@@ -47,9 +38,11 @@ landingRoutes.get("/", async (c) => {
           day: "numeric",
           year: "numeric",
         });
-        return `
-        <a href="/@${escapeHtml(e.username)}/${escapeHtml(e.collectionSlug)}" class="recent-card">
-          <div class="recent-card-placeholder">
+        const visual = e.thumbnailUrl
+          ? `<div class="recent-card-image">
+              <img src="${escapeHtml(e.thumbnailUrl)}" alt="${escapeHtml(e.collectionName)}" loading="lazy" />
+            </div>`
+          : `<div class="recent-card-placeholder">
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
@@ -59,7 +52,10 @@ landingRoutes.get("/", async (c) => {
               <circle cx="7" cy="16" r="0.5" fill="currentColor" stroke="none"/>
               <circle cx="15" cy="14" r="0.5" fill="currentColor" stroke="none"/>
             </svg>
-          </div>
+          </div>`;
+        return `
+        <a href="/@${escapeHtml(e.username)}/${escapeHtml(e.collectionSlug)}" class="recent-card">
+          ${visual}
           <div class="recent-card-content">
             <h3>${escapeHtml(e.collectionName)}</h3>
             <span class="recent-card-user">@${escapeHtml(e.username)}</span>
@@ -504,6 +500,23 @@ footer .footer-links {
 .recent-card:hover .recent-card-placeholder svg {
   color: var(--accent);
   opacity: 0.6;
+}
+
+.recent-card-image {
+  height: 140px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+}
+
+.recent-card-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.3s;
+}
+
+.recent-card:hover .recent-card-image img {
+  transform: scale(1.03);
 }
 
 .recent-card-placeholder {
