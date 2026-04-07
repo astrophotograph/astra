@@ -527,13 +527,16 @@ export function AladinLite({
 
       const halfWidth = widthDeg / 2;
       const halfHeight = heightDeg / 2;
+      // Apply cos(dec) correction for RA to handle convergence near poles
+      const cosDec = Math.cos((targetDec * Math.PI) / 180);
+      const raHalf = cosDec > 0.01 ? halfWidth / cosDec : halfWidth;
 
       const fovRect = window.A.polygon(
         [
-          [targetRa - halfWidth, targetDec + halfHeight],
-          [targetRa + halfWidth, targetDec + halfHeight],
-          [targetRa + halfWidth, targetDec - halfHeight],
-          [targetRa - halfWidth, targetDec - halfHeight],
+          [targetRa - raHalf, targetDec + halfHeight],
+          [targetRa + raHalf, targetDec + halfHeight],
+          [targetRa + raHalf, targetDec - halfHeight],
+          [targetRa - raHalf, targetDec - halfHeight],
         ],
         {
           color: "#ff0000",

@@ -120,3 +120,17 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Aladin Lite fixes */
+/* Ensure Select dropdowns render above the Aladin sky map canvas */
+[data-radix-popper-content-wrapper] {
+  z-index: 100 !important;
+}
+
+/* Fix Aladin fullscreen: hide external controls that would overlap */
+.aladin-lite-div:-webkit-full-screen ~ * {
+  display: none;
+}
+.aladin-lite-div:fullscreen ~ * {
+  display: none;
+}
