@@ -101,6 +101,30 @@ presignRoutes.post("/presign", requireApiToken, async (c) => {
     JSON.stringify({ ...shareRecord, shareId: body.shareId })
   );
 
+  // Gallery index for explore feed (time-sorted)
+  const galleryIndexKey = `gallery-index/${new Date().toISOString()}_${body.shareId}`;
+  await c.env.GALLERY_KV.put(galleryIndexKey, JSON.stringify({
+    userId: apiToken.userId,
+    username: apiToken.username,
+    collectionSlug: body.collectionSlug,
+    collectionName: body.collectionName,
+    shareId: body.shareId,
+    createdAt: new Date().toISOString(),
+  }));
+
+  // Object index for browsing by target
+  const objectNames = extractObjectNames(body.collectionName);
+  for (const objName of objectNames) {
+    const normalizedName = normalizeObjectName(objName);
+    await c.env.GALLERY_KV.put(`object-index/${normalizedName}/${body.shareId}`, JSON.stringify({
+      userId: apiToken.userId,
+      username: apiToken.username,
+      collectionSlug: body.collectionSlug,
+      collectionName: body.collectionName,
+      shareId: body.shareId,
+    }));
+  }
+
   const publicUrl = `https://astra.gallery/@${apiToken.username}/${slug}`;
 
   const response: PresignResponse = {
@@ -111,5 +135,39 @@ presignRoutes.post("/presign", requireApiToken, async (c) => {
 
   return c.json(response);
 });
+
+function extractObjectNames(collectionName: string): string[] {
+  const names: string[] = [];
+  // Match Messier: M1, M 42, Messier 42
+  const messier = collectionName.match(/\b(M\s?\d{1,3}|Messier\s?\d{1,3})\b/gi);
+  if (messier) names.push(...messier);
+  // Match NGC: NGC1234, NGC 1234
+  const ngc = collectionName.match(/\bNGC\s?\d{1,5}\b/gi);
+  if (ngc) names.push(...ngc);
+  // Match IC: IC1234, IC 1234
+  const ic = collectionName.match(/\bIC\s?\d{1,5}\b/gi);
+  if (ic) names.push(...ic);
+  // Match Sharpless: Sh2-123, SH2 123
+  const sh = collectionName.match(/\bSh2[\s-]?\d{1,3}\b/gi);
+  if (sh) names.push(...sh);
+  // If no catalog IDs found, use the full name as-is
+  if (names.length === 0) names.push(collectionName);
+  return names;
+}
+
+function normalizeObjectName(name: string): string {
+  let n = name.trim().toLowerCase();
+  // Normalize Messier: "m 42", "messier 42" -> "m42"
+  n = n.replace(/^messier\s*/i, "m").replace(/^m\s+/i, "m");
+  // Normalize NGC: "ngc 1234" -> "ngc1234"
+  n = n.replace(/^ngc\s*/i, "ngc");
+  // Normalize IC: "ic 1234" -> "ic1234"
+  n = n.replace(/^ic\s*/i, "ic");
+  // Normalize Sharpless
+  n = n.replace(/^sh2[\s-]*/i, "sh2-");
+  // Replace spaces with hyphens for URL friendliness
+  n = n.replace(/\s+/g, "-");
+  return n;
+}
 
 export { presignRoutes };

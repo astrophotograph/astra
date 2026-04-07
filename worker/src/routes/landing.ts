@@ -3,11 +3,94 @@ import type { Env } from "../lib/types";
 
 const landingRoutes = new Hono<{ Bindings: Env }>();
 
-landingRoutes.get("/", (c) => {
-  return c.html(LANDING_HTML);
+interface GalleryIndexEntry {
+  userId: string;
+  username: string;
+  collectionSlug: string;
+  collectionName: string;
+  shareId: string;
+  createdAt: string;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+landingRoutes.get("/", async (c) => {
+  // Fetch recent galleries for the landing page
+  const listResult = await c.env.GALLERY_KV.list({
+    prefix: "gallery-index/",
+    limit: 6,
+  });
+
+  const entries: GalleryIndexEntry[] = [];
+  for (const key of listResult.keys) {
+    const json = await c.env.GALLERY_KV.get(key.name);
+    if (json) {
+      entries.push(JSON.parse(json));
+    }
+  }
+
+  // Sort newest first
+  entries.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+
+  let recentGalleriesSection = "";
+  if (entries.length > 0) {
+    const cards = entries
+      .map((e) => {
+        const pubDate = new Date(e.createdAt).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        });
+        return `
+        <a href="/@${escapeHtml(e.username)}/${escapeHtml(e.collectionSlug)}" class="recent-card">
+          <div class="recent-card-placeholder">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
+              <path d="M2 12h20"/>
+              <circle cx="12" cy="5" r="0.5" fill="currentColor" stroke="none"/>
+              <circle cx="18" cy="9" r="0.5" fill="currentColor" stroke="none"/>
+              <circle cx="7" cy="16" r="0.5" fill="currentColor" stroke="none"/>
+              <circle cx="15" cy="14" r="0.5" fill="currentColor" stroke="none"/>
+            </svg>
+          </div>
+          <div class="recent-card-content">
+            <h3>${escapeHtml(e.collectionName)}</h3>
+            <span class="recent-card-user">@${escapeHtml(e.username)}</span>
+            <span class="recent-card-date">${pubDate}</span>
+          </div>
+        </a>`;
+      })
+      .join("");
+
+    recentGalleriesSection = `
+  <section class="recent-galleries">
+    <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">Community</div>
+        <h2>Recent Galleries</h2>
+      </div>
+      <div class="gallery-grid">
+        ${cards}
+      </div>
+      <div style="text-align: center; margin-top: 2rem;">
+        <a href="/explore" class="btn btn-ghost">Explore All &rarr;</a>
+      </div>
+    </div>
+  </section>`;
+  }
+
+  return c.html(buildLandingHtml(recentGalleriesSection));
 });
 
-const LANDING_HTML = `<!DOCTYPE html>
+function buildLandingHtml(recentGalleriesSection: string): string {
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -373,6 +456,104 @@ footer .footer-links {
   }
 }
 
+/* Recent galleries section */
+.recent-galleries { padding: 8rem 0; }
+
+.section-header {
+  margin-bottom: 2.5rem;
+}
+
+.recent-galleries .section-label {
+  margin-bottom: 0.75rem;
+}
+
+.recent-galleries h2 {
+  font-family: var(--serif);
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  font-weight: 300;
+  color: var(--text-bright);
+  letter-spacing: 0.02em;
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.1);
+}
+
+.recent-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--void);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.3s, box-shadow 0.3s;
+}
+
+.recent-card:hover {
+  background: var(--deep);
+  box-shadow: inset 0 0 30px rgba(99, 102, 241, 0.06);
+}
+
+.recent-card:hover .recent-card-placeholder {
+  border-bottom-color: rgba(99, 102, 241, 0.2);
+}
+
+.recent-card:hover .recent-card-placeholder svg {
+  color: var(--accent);
+  opacity: 0.6;
+}
+
+.recent-card-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100px;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+  background:
+    radial-gradient(ellipse at 30% 40%, rgba(99, 102, 241, 0.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 70% 70%, rgba(128, 203, 196, 0.03) 0%, transparent 50%);
+  transition: border-color 0.3s;
+}
+
+.recent-card-placeholder svg {
+  color: var(--text-dim);
+  opacity: 0.3;
+  transition: color 0.3s, opacity 0.3s;
+}
+
+.recent-card-content {
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.recent-card h3 {
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  font-weight: 400;
+  color: var(--text-bright);
+  margin-bottom: 0.3rem;
+  line-height: 1.3;
+}
+
+.recent-card-user {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.recent-card-date {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
+
+@media (max-width: 768px) {
+  .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
 @media (max-width: 480px) {
   .hero-cta {
     flex-direction: column;
@@ -380,6 +561,7 @@ footer .footer-links {
     max-width: 280px;
   }
   .btn { justify-content: center; }
+  .gallery-grid { grid-template-columns: 1fr; }
 }
 </style>
 </head>
@@ -428,6 +610,8 @@ footer .footer-links {
       </div>
     </div>
   </section>
+
+  ${recentGalleriesSection}
 
   <section class="open-source">
     <div class="container reveal">
@@ -545,5 +729,6 @@ footer .footer-links {
 
 </body>
 </html>`;
+}
 
 export { landingRoutes };

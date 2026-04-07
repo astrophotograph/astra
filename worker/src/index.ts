@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./lib/types";
 import { landingRoutes } from "./routes/landing";
+import { exploreRoutes } from "./routes/explore";
 import { galleryRoutes } from "./routes/gallery";
 import { authRoutes } from "./routes/auth";
 import { presignRoutes } from "./routes/presign";
@@ -34,6 +35,9 @@ app.route("/api", presignRoutes);
 
 // Static downloads (tetra3 databases, etc.)
 app.route("/", downloadRoutes);
+
+// Discovery & browse
+app.route("/", exploreRoutes);
 
 // Gallery routes (serves shares and user profiles)
 app.route("/", galleryRoutes);
