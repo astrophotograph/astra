@@ -134,6 +134,7 @@ pub struct Image {
     pub updated_at: NaiveDateTime,
     pub thumbnail: Option<String>,
     pub fits_url: Option<String>,
+    pub blob_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -155,6 +156,7 @@ pub struct NewImage {
     pub metadata: Option<String>,
     pub thumbnail: Option<String>,
     pub fits_url: Option<String>,
+    pub blob_id: Option<String>,
 }
 
 // Note: For Insertable, field order doesn't strictly matter as Diesel uses field names,
@@ -177,6 +179,7 @@ pub struct UpdateImage {
     pub metadata: Option<String>,
     pub thumbnail: Option<String>,
     pub fits_url: Option<String>,
+    pub blob_id: Option<String>,
 }
 
 // ============================================================================

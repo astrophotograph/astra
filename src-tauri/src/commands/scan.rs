@@ -1253,6 +1253,7 @@ pub async fn bulk_scan_directory(
             metadata: metadata_json,
             thumbnail: processed.thumbnail,
             fits_url,
+            blob_id: None,
         };
 
         // Insert image

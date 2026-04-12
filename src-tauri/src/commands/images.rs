@@ -98,6 +98,7 @@ pub fn create_image(
         metadata: input.metadata,
         thumbnail: input.thumbnail,
         fits_url: None,
+        blob_id: None,
     };
 
     repository::create_image(&mut conn, &new_image)
@@ -126,6 +127,7 @@ pub fn update_image(
         metadata: input.metadata,
         thumbnail: input.thumbnail,
         fits_url: None,
+        blob_id: None,
     };
 
     repository::update_image(&mut conn, &input.id, &update)

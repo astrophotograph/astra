@@ -471,6 +471,7 @@ fn run_scan_cycle(
                 metadata: meta_json,
                 thumbnail,
                 fits_url: Some(fits_final_path),
+                blob_id: None,
             };
 
             let fits_path_str = new_image.fits_url.clone().unwrap_or_default();

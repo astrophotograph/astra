@@ -84,6 +84,7 @@ diesel::table! {
         updated_at -> Timestamp,
         thumbnail -> Nullable<Text>,
         fits_url -> Nullable<Text>,
+        blob_id -> Nullable<Text>,
     }
 }
 

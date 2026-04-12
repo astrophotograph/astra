@@ -358,6 +358,7 @@ pub async fn process_fits_image(
                     metadata: Some(processed_metadata.to_string()),
                     thumbnail,
                     fits_url: Some(result.output_fits_path.clone()),
+                    blob_id: None,
                 };
 
                 match repository::create_image(&mut conn, &new_image) {

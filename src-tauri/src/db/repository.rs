@@ -1020,6 +1020,7 @@ mod tests {
             metadata: None,
             thumbnail: None,
             fits_url: None,
+            blob_id: None,
         }
     }
 
