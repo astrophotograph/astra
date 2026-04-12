@@ -111,7 +111,7 @@ pub fn run() {
                                 .with_image_generator()
                         );
                         log::info!("HoardFS initialized at {}", hoardfs_dir.display());
-                        Some(std::sync::Arc::new(tokio::sync::Mutex::new(hfs)))
+                        Some(std::sync::Arc::new(std::sync::Mutex::new(hfs)))
                     }
                     Err(e) => {
                         log::error!("Failed to initialize HoardFS: {}. Image storage features will be limited.", e);
@@ -248,6 +248,8 @@ pub fn run() {
             // Gallery publish (authenticated)
             commands::publish_collection_gallery,
             commands::unpublish_collection_gallery,
+            // HoardFS import
+            commands::import_images_hoardfs,
             // Auto-import commands
             commands::start_auto_import,
             commands::stop_auto_import,

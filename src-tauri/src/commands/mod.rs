@@ -12,6 +12,7 @@ pub mod scan;
 pub mod schedules;
 pub mod skymap;
 pub mod targets;
+pub mod hoardfs;
 pub mod share;
 pub mod todos;
 
@@ -20,6 +21,7 @@ pub use astronomy::*;
 pub use auto_import::*;
 pub use backup::*;
 pub use collections::*;
+pub use hoardfs::*;
 pub use image_process::*;
 pub use images::*;
 pub use library_scan::*;

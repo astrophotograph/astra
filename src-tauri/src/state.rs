@@ -32,12 +32,13 @@ pub struct AppState {
     /// Current auto-import status (Arc for sharing with background task)
     pub auto_import_status: Arc<Mutex<AutoImportStatus>>,
     /// HoardFS content-addressed storage (None if init failed — graceful degradation)
-    /// Wrapped in tokio::sync::Mutex because rusqlite::Connection is not Sync
-    pub hoardfs: Option<Arc<tokio::sync::Mutex<HoardFs>>>,
+    /// Wrapped in std::sync::Mutex because rusqlite::Connection is not Sync.
+    /// Lock must NOT be held across .await points.
+    pub hoardfs: Option<Arc<Mutex<HoardFs>>>,
 }
 
 impl AppState {
-    pub fn new(db: DbPool, hoardfs: Option<Arc<tokio::sync::Mutex<HoardFs>>>) -> Self {
+    pub fn new(db: DbPool, hoardfs: Option<Arc<Mutex<HoardFs>>>) -> Self {
         Self {
             db,
             user_id: "local-user".to_string(),
