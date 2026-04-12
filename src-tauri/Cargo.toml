@@ -77,6 +77,7 @@ hoardfs-core = { path = "../../hoardfs/crates/hoardfs-core" }
 hoardfs-volume = { path = "../../hoardfs/crates/hoardfs-volume" }
 hoardfs-variant = { path = "../../hoardfs/crates/hoardfs-variant" }
 hoardfs-backend = { path = "../../hoardfs/crates/hoardfs-backend" }
+hoardfs-fuse = { path = "../../hoardfs/crates/hoardfs-fuse", optional = true }
 
 # Python integration
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
@@ -90,3 +91,4 @@ opt-level = 2
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+fuse = ["hoardfs-fuse"]

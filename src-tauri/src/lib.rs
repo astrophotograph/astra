@@ -126,6 +126,10 @@ pub fn run() {
             let app_state = AppState::new(db_pool, hoardfs);
             app.manage(app_state);
 
+            // FUSE mount state (only with `fuse` feature)
+            #[cfg(feature = "fuse")]
+            app.manage(commands::hoardfs::FuseMountState::new());
+
             // Initialize Python with path to astra_astro module
             // In development, the module is in ../python relative to src-tauri
             // In production, it should be bundled with the app
@@ -256,6 +260,11 @@ pub fn run() {
             commands::get_image_thumbnail_hoardfs,
             commands::get_image_preview_hoardfs,
             commands::get_image_variants_hoardfs,
+            // FUSE mount (only available with `fuse` feature)
+            #[cfg(feature = "fuse")]
+            commands::start_fuse_mount,
+            #[cfg(feature = "fuse")]
+            commands::stop_fuse_mount,
             // Auto-import commands
             commands::start_auto_import,
             commands::stop_auto_import,

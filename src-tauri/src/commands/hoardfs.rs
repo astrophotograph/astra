@@ -6,7 +6,7 @@ use base64::prelude::*;
 use hoardfs_core::{ExternalLocationType, ExternalRef, Quality};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{models::{NewCollectionImage, NewImage}, repository};
 use crate::state::AppState;
@@ -555,4 +555,139 @@ pub async fn migrate_images_to_hoardfs(
     );
 
     Ok(report)
+}
+
+// ============================================================================
+// FUSE Mount (feature-gated)
+// ============================================================================
+
+/// Start a FUSE mount exposing HoardFS images as a regular filesystem.
+/// The mount runs on a dedicated thread with its own HoardFS connection.
+/// Only available when compiled with the `fuse` feature.
+#[cfg(feature = "fuse")]
+#[tauri::command]
+pub async fn start_fuse_mount(
+    app: AppHandle,
+    _state: State<'_, AppState>,
+    fuse_state: State<'_, FuseMountState>,
+    mount_point: String,
+) -> Result<(), String> {
+    let mount_path = std::path::PathBuf::from(&mount_point);
+
+    // Create mount point directory if needed
+    std::fs::create_dir_all(&mount_path)
+        .map_err(|e| format!("Failed to create mount point: {}", e))?;
+
+    // Check if already mounted
+    {
+        let guard = fuse_state.handle.lock().unwrap();
+        if guard.is_some() {
+            return Err("FUSE mount is already active. Stop it first.".into());
+        }
+    }
+
+    // Open a separate HoardFS instance for the FUSE thread
+    let hoardfs_dir = app.path()
+        .app_data_dir()
+        .map(|d| d.join("hoardfs"))
+        .map_err(|e| format!("App data dir: {}", e))?;
+
+    let rt = tokio::runtime::Handle::current();
+    let hfs = rt.block_on(async {
+        hoardfs_volume::HoardFs::open(&hoardfs_dir).await
+    }).map_err(|e| format!("Failed to open HoardFS for FUSE: {}", e))?;
+
+    // Get volume ID
+    let volumes = hfs.list_volumes().map_err(|e| format!("{}", e))?;
+    let vol = volumes.iter().find(|v| v.name == "default")
+        .ok_or("Default volume not found")?;
+    let volume_id = vol.id.clone();
+
+    // Spawn mount on a dedicated thread (mount() is blocking)
+    let mount_path_clone = mount_path.clone();
+    let handle = std::thread::spawn(move || {
+        log::info!("FUSE mount starting at {}", mount_path_clone.display());
+        if let Err(e) = hoardfs_fuse::mount(hfs, "default", &volume_id, &mount_path_clone, true) {
+            log::error!("FUSE mount error: {}", e);
+        }
+        log::info!("FUSE mount stopped");
+    });
+
+    // Store the handle and mount point for later cleanup
+    {
+        let mut guard = fuse_state.handle.lock().unwrap();
+        *guard = Some(FuseHandle {
+            thread: handle,
+            mount_point: mount_path,
+        });
+    }
+
+    log::info!("FUSE mount started at {} (beta)", mount_point);
+    Ok(())
+}
+
+/// Stop the FUSE mount.
+#[cfg(feature = "fuse")]
+#[tauri::command]
+pub async fn stop_fuse_mount(
+    fuse_state: State<'_, FuseMountState>,
+) -> Result<(), String> {
+    let handle = {
+        let mut guard = fuse_state.handle.lock().unwrap();
+        guard.take()
+    };
+
+    if let Some(fuse) = handle {
+        // Unmount by calling fusermount -u (Linux) or umount (macOS)
+        let unmount_result = if cfg!(target_os = "macos") {
+            std::process::Command::new("umount")
+                .arg(fuse.mount_point.to_string_lossy().as_ref())
+                .output()
+        } else {
+            std::process::Command::new("fusermount")
+                .arg("-u")
+                .arg(fuse.mount_point.to_string_lossy().as_ref())
+                .output()
+        };
+
+        match unmount_result {
+            Ok(output) if output.status.success() => {
+                log::info!("FUSE unmount successful");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                log::warn!("FUSE unmount returned error: {}", stderr);
+            }
+            Err(e) => {
+                log::warn!("Failed to run unmount command: {}", e);
+            }
+        }
+
+        // Wait for the mount thread to finish
+        let _ = fuse.thread.join();
+        Ok(())
+    } else {
+        Err("No FUSE mount is active".into())
+    }
+}
+
+/// State for tracking the FUSE mount thread
+#[cfg(feature = "fuse")]
+pub struct FuseMountState {
+    handle: std::sync::Mutex<Option<FuseHandle>>,
+}
+
+#[cfg(feature = "fuse")]
+struct FuseHandle {
+    thread: std::thread::JoinHandle<()>,
+    mount_point: std::path::PathBuf,
+}
+
+#[cfg(feature = "fuse")]
+impl FuseMountState {
+    pub fn new() -> Self {
+        Self {
+            handle: std::sync::Mutex::new(None),
+        }
+    }
 }
