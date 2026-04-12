@@ -10,7 +10,7 @@ import { downloadRoutes } from "./routes/downloads";
 import { uploadRoutes } from "./routes/upload";
 import { webAuthRoutes } from "./routes/web-auth";
 import { socialRoutes } from "./routes/social";
-import { listRoutes } from "./routes/lists";
+import { listRoutes, listPageRoutes } from "./routes/lists";
 import { commentRoutes } from "./routes/comments";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -50,6 +50,9 @@ app.route("/", webAuthRoutes);
 
 // Upload page
 app.route("/", uploadRoutes);
+
+// Public list pages
+app.route("/", listPageRoutes);
 
 // Discovery & browse
 app.route("/", exploreRoutes);
