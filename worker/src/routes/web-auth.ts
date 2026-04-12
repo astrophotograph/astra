@@ -18,10 +18,15 @@ webAuthRoutes.get("/auth/callback", async (c) => {
   const returnUrl = c.req.query("return") || "/explore";
 
   // Derive FAPI URL from publishable key (pk_test_<base64-encoded-fapi>)
-  const keyParts = clerkPubKey.replace("pk_test_", "").replace("pk_live_", "");
+  // The key is pk_test_ or pk_live_ followed by base64(fapi_url + "$")
   let fapiUrl: string;
   try {
-    fapiUrl = atob(keyParts.replace(/\$+$/, "")).replace(/\$$/, "");
+    const encoded = clerkPubKey.replace(/^pk_(test|live)_/, "");
+    // Clerk uses base64 with $ padding instead of = padding
+    const b64 = encoded.replace(/\$/g, "=");
+    const decoded = atob(b64);
+    fapiUrl = decoded.replace(/\$$/, ""); // strip trailing $
+    if (!fapiUrl.includes(".")) throw new Error("invalid");
   } catch {
     fapiUrl = "wired-walrus-5.clerk.accounts.dev";
   }
