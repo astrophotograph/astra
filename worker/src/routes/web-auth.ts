@@ -98,6 +98,11 @@ body { min-height: 100vh; display: flex; align-items: center; justify-content: c
   </div>
 </div>
 
+<script>
+var CLERK_PUB_KEY = ${JSON.stringify(clerkPubKey)};
+var FAPI_URL = ${JSON.stringify(fapiUrl)};
+var RETURN_URL = ${JSON.stringify(returnUrl)};
+</script>
 <script
   async
   crossorigin="anonymous"
@@ -107,7 +112,6 @@ body { min-height: 100vh; display: flex; align-items: center; justify-content: c
   onerror="showError('Failed to load authentication. Please try again.')"
 ></script>
 <script>
-var RETURN_URL = decodeURIComponent('${encodeURIComponent(returnUrl)}');
 
 function showError(msg) {
   document.getElementById('loading').style.display = 'none';
@@ -124,7 +128,7 @@ async function initClerk() {
     // If Clerk is a constructor (not already initialized), create instance
     var Clerk;
     if (typeof ClerkConstructor === 'function' && !ClerkConstructor.session) {
-      Clerk = new ClerkConstructor('${clerkPubKey}');
+      Clerk = new ClerkConstructor(CLERK_PUB_KEY);
     } else {
       Clerk = ClerkConstructor;
     }
@@ -142,8 +146,9 @@ async function initClerk() {
         });
         document.getElementById('sign-in-link').href = signInUrl;
       } catch(e) {
+        var portalUrl = FAPI_URL.replace('clerk.', '');
         document.getElementById('sign-in-link').href =
-          'https://${fapiUrl.replace("clerk.", "")}' +
+          'https://' + portalUrl +
           '/sign-in?redirect_url=' + encodeURIComponent(window.location.href);
       }
       return;
