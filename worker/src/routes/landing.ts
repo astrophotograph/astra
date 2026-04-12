@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import type { Env, GalleryIndexEntry } from "../lib/types";
-import { authNavItem, authNavScript } from "../lib/auth-nav";
+import { authNavItem, authNavScript, faviconLink } from "../lib/auth-nav";
 
 const landingRoutes = new Hono<{ Bindings: Env }>();
 
@@ -94,6 +94,7 @@ function buildLandingHtml(recentGalleriesSection: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Astra Gallery — Share your astrophotography</title>
 <meta name="description" content="Publish and share your astrophotography collections. Auto-refreshing galleries, direct from your desktop.">
+${faviconLink()}
 <script defer data-domain="astra.gallery" src="https://pulse.steve.net/js/script.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

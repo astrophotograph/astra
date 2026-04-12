@@ -5,6 +5,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../lib/types";
+import { faviconLink } from "../lib/auth-nav";
 
 const webAuthRoutes = new Hono<{ Bindings: Env }>();
 
@@ -37,6 +38,7 @@ webAuthRoutes.get("/auth/callback", async (c) => {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Signing in... — Astra Gallery</title>
+${faviconLink()}
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
@@ -115,8 +117,17 @@ function showError(msg) {
 
 async function initClerk() {
   try {
-    var Clerk = window.Clerk;
-    if (!Clerk) { showError('Auth library not available'); return; }
+    // Clerk browser bundle exports a constructor when loaded async
+    var ClerkConstructor = window.Clerk;
+    if (!ClerkConstructor) { showError('Auth library not available'); return; }
+
+    // If Clerk is a constructor (not already initialized), create instance
+    var Clerk;
+    if (typeof ClerkConstructor === 'function' && !ClerkConstructor.session) {
+      Clerk = new ClerkConstructor('${clerkPubKey}');
+    } else {
+      Clerk = ClerkConstructor;
+    }
 
     await Clerk.load();
 

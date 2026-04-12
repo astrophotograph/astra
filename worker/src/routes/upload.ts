@@ -5,7 +5,7 @@
 import { Hono } from "hono";
 import type { Env, ShareRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
-import { authNavItem, authNavScript } from "../lib/auth-nav";
+import { authNavItem, authNavScript, faviconLink } from "../lib/auth-nav";
 
 const uploadRoutes = new Hono<{ Bindings: Env }>();
 
@@ -129,6 +129,7 @@ function buildUploadPage(): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Upload — Astra Gallery</title>
+${faviconLink()}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300;1,9..40,400&display=swap" rel="stylesheet">
