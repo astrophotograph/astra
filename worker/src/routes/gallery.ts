@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import type { Env, UserRecord } from "../lib/types";
+import type { Env, ShareRecord, UserRecord } from "../lib/types";
+import { requireApiToken } from "../middleware/clerk";
 
 const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -141,6 +142,81 @@ galleryRoutes.get("/api/galleries/:shareId/views", async (c) => {
   const shareId = c.req.param("shareId");
   const count = parseInt(await c.env.GALLERY_KV.get(`view-counts/${shareId}`) || "0", 10);
   return c.json({ shareId, views: count });
+});
+
+/**
+ * DELETE /api/galleries/:shareId
+ * Fully delete a gallery: R2 objects, all KV entries.
+ * Requires API token. Only the gallery owner can delete.
+ */
+galleryRoutes.delete("/api/galleries/:shareId", requireApiToken, async (c) => {
+  const shareId = c.req.param("shareId");
+  const apiToken = c.get("apiToken" as never) as {
+    userId: string;
+    username: string;
+  };
+
+  // Verify ownership
+  const shareJson = await c.env.GALLERY_KV.get(`shares/${shareId}`);
+  if (!shareJson) {
+    return c.json({ error: "Gallery not found" }, 404);
+  }
+  const share: ShareRecord = JSON.parse(shareJson);
+  if (share.userId !== apiToken.userId) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
+
+  let filesRemoved = 0;
+
+  // Delete R2 objects under users/{userId}/{shareId}/
+  const r2Prefix = `users/${apiToken.userId}/${shareId}/`;
+  let r2Cursor: string | undefined;
+  do {
+    const listed = await c.env.GALLERY_BUCKET.list({ prefix: r2Prefix, cursor: r2Cursor });
+    if (listed.objects.length > 0) {
+      await c.env.GALLERY_BUCKET.delete(listed.objects.map(o => o.key));
+      filesRemoved += listed.objects.length;
+    }
+    r2Cursor = listed.truncated ? listed.cursor : undefined;
+  } while (r2Cursor);
+
+  // Delete KV: shares/{shareId}
+  await c.env.GALLERY_KV.delete(`shares/${shareId}`);
+
+  // Delete KV: user-shares/{userId}/{slug}
+  const slug = share.collectionSlug;
+  await c.env.GALLERY_KV.delete(`user-shares/${apiToken.userId}/${slug}`);
+
+  // Delete KV: view-counts/{shareId}
+  await c.env.GALLERY_KV.delete(`view-counts/${shareId}`);
+
+  // Delete KV: gallery-index entries matching this shareId
+  // Scan gallery-index/ for entries containing this shareId
+  let indexCursor: string | undefined;
+  do {
+    const listed = await c.env.GALLERY_KV.list({ prefix: "gallery-index/", cursor: indexCursor, limit: 500 });
+    for (const key of listed.keys) {
+      if (key.name.includes(shareId)) {
+        await c.env.GALLERY_KV.delete(key.name);
+      }
+    }
+    indexCursor = listed.list_complete ? undefined : listed.cursor;
+  } while (indexCursor);
+
+  // Delete KV: object-index entries matching this shareId
+  // Object index keys end with /{shareId}
+  let objCursor: string | undefined;
+  do {
+    const listed = await c.env.GALLERY_KV.list({ prefix: "object-index/", cursor: objCursor, limit: 500 });
+    for (const key of listed.keys) {
+      if (key.name.endsWith(`/${shareId}`)) {
+        await c.env.GALLERY_KV.delete(key.name);
+      }
+    }
+    objCursor = listed.list_complete ? undefined : listed.cursor;
+  } while (objCursor);
+
+  return c.json({ deleted: true, filesRemoved });
 });
 
 function contentTypeForPath(path: string): string {

@@ -530,6 +530,64 @@ pub async fn unpublish_collection(
     Ok(())
 }
 
+/// Unpublish a gallery from astra.gallery — calls DELETE API to remove R2 + KV entries
+#[tauri::command]
+pub async fn unpublish_collection_gallery(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    collection_id: String,
+) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let session = auth::load_session(&data_dir)?
+        .ok_or("Not signed in to astra.gallery. Sign in first.")?;
+
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Collection not found")?;
+    drop(conn);
+
+    let status = get_publish_status_from_metadata(&collection.metadata)
+        .ok_or("Collection is not published")?;
+
+    // Call DELETE API on the worker
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(format!("https://astra.gallery/api/galleries/{}", status.share_id))
+        .header("Authorization", format!("Bearer {}", session.api_token))
+        .send()
+        .await
+        .map_err(|e| format!("Delete request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        log::warn!("Gallery delete API returned error: {}", body);
+        // Continue anyway to clear local metadata
+    }
+
+    // Clear local publish status
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let mut meta: serde_json::Value = collection
+        .metadata
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    meta.as_object_mut().map(|m| m.remove("share"));
+    let meta_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
+    let update = crate::db::models::UpdateCollection {
+        metadata: Some(meta_str),
+        ..Default::default()
+    };
+    repository::update_collection(&mut conn, &collection_id, &update)
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_publish_status(
     state: State<'_, AppState>,

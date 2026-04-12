@@ -214,6 +214,7 @@ pub fn run() {
             commands::get_auth_session,
             // Gallery publish (authenticated)
             commands::publish_collection_gallery,
+            commands::unpublish_collection_gallery,
             // Auto-import commands
             commands::start_auto_import,
             commands::stop_auto_import,
