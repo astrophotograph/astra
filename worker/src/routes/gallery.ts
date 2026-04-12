@@ -43,6 +43,73 @@ galleryRoutes.get("/shares/:shareId", async (c) => {
   return new Response(object.body, { headers });
 });
 
+function buildLikeWidget(shareId: string): string {
+  return `
+<style>
+.like-widget {
+  position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 1000;
+  display: flex; align-items: center; gap: 0.5rem;
+  background: rgba(10, 14, 26, 0.9); backdrop-filter: blur(8px);
+  border: 1px solid rgba(99, 102, 241, 0.2); border-radius: 2rem;
+  padding: 0.5rem 1rem; font-family: 'DM Sans', -apple-system, sans-serif;
+}
+.like-btn {
+  background: none; border: none; cursor: pointer; font-size: 1.4rem;
+  padding: 0; line-height: 1; transition: transform 0.2s;
+}
+.like-btn:hover { transform: scale(1.15); }
+.like-btn.liked { animation: like-pop 0.3s ease; }
+@keyframes like-pop { 0% { transform: scale(1); } 50% { transform: scale(1.3); } 100% { transform: scale(1); } }
+.like-count { font-size: 0.85rem; color: #c8cdd8; }
+</style>
+<div class="like-widget">
+  <button class="like-btn" id="like-btn" title="Like this gallery">&#9825;</button>
+  <span class="like-count" id="like-count"></span>
+</div>
+<script>
+(function() {
+  var shareId = ${JSON.stringify(shareId)};
+  var btn = document.getElementById('like-btn');
+  var countEl = document.getElementById('like-count');
+  var token = localStorage.getItem('astra_api_token');
+  var expires = localStorage.getItem('astra_token_expires');
+  var isAuthed = token && expires && new Date(expires) > new Date();
+  var isLiked = false;
+
+  // Load count
+  fetch('/api/social/likes/' + shareId)
+    .then(function(r) { return r.json(); })
+    .then(function(d) { countEl.textContent = d.count > 0 ? d.count : ''; })
+    .catch(function() {});
+
+  // Check liked state
+  if (isAuthed) {
+    fetch('/api/social/liked/' + shareId, { headers: { 'Authorization': 'Bearer ' + token } })
+      .then(function(r) { return r.json(); })
+      .then(function(d) { if (d.liked) { isLiked = true; btn.innerHTML = '&#9829;'; btn.classList.add('liked'); } })
+      .catch(function() {});
+  }
+
+  btn.addEventListener('click', function() {
+    if (!isAuthed) { location.href = '/auth/callback?return=' + encodeURIComponent(location.pathname); return; }
+    var method = isLiked ? 'DELETE' : 'POST';
+    fetch('/api/social/' + (isLiked ? 'like/' : 'like/') + shareId, {
+      method: method,
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: '{}'
+    }).then(function(r) { return r.json(); }).then(function(d) {
+      isLiked = d.liked;
+      btn.innerHTML = isLiked ? '&#9829;' : '&#9825;';
+      if (isLiked) btn.classList.add('liked'); else btn.classList.remove('liked');
+      var cur = parseInt(countEl.textContent) || 0;
+      var n = isLiked ? cur + 1 : Math.max(0, cur - 1);
+      countEl.textContent = n > 0 ? n : '';
+    }).catch(function() {});
+  });
+})();
+</script>`;
+}
+
 async function incrementViewCount(kv: KVNamespace, shareId: string): Promise<void> {
   const key = `view-counts/${shareId}`;
   const current = parseInt(await kv.get(key) || "0", 10);
@@ -129,6 +196,12 @@ async function handleUserGallery(c: any) {
         incrementViewCount(c.env.GALLERY_KV, share.shareId)
       );
     }
+
+    // Inject like widget into gallery HTML
+    const html = await object.text();
+    const likeWidget = buildLikeWidget(share.shareId);
+    const injected = html.replace("</body>", likeWidget + "</body>");
+    return new Response(injected, { headers });
   }
   object.writeHttpMetadata(headers);
 

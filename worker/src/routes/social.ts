@@ -218,4 +218,63 @@ socialRoutes.get("/subscriptions", requireApiToken, async (c) => {
   return c.json({ subscriptions: subs });
 });
 
+// ============================================================================
+// Gallery Likes (follow edge on collection entity)
+// ============================================================================
+
+/**
+ * POST /api/social/like/:shareId — Like a gallery
+ */
+socialRoutes.post("/like/:shareId", requireApiToken, async (c) => {
+  const { userId } = getToken(c);
+  const shareId = c.req.param("shareId");
+
+  const graph = new D1GraphStore(c.env.SOCIAL_DB);
+  await graph.addEdge({
+    actorId: userId,
+    targetKind: "collection",
+    targetId: shareId,
+    edgeKind: "follow",
+    weight: 1.0,
+    metadata: null,
+    createdAt: new Date().toISOString(),
+  });
+
+  return c.json({ liked: true });
+});
+
+/**
+ * DELETE /api/social/like/:shareId — Unlike a gallery
+ */
+socialRoutes.delete("/like/:shareId", requireApiToken, async (c) => {
+  const { userId } = getToken(c);
+  const shareId = c.req.param("shareId");
+
+  const graph = new D1GraphStore(c.env.SOCIAL_DB);
+  await graph.removeEdge(userId, "collection", shareId, "follow");
+
+  return c.json({ liked: false });
+});
+
+/**
+ * GET /api/social/likes/:shareId — Get like count (public)
+ */
+socialRoutes.get("/likes/:shareId", async (c) => {
+  const shareId = c.req.param("shareId");
+  const graph = new D1GraphStore(c.env.SOCIAL_DB);
+  const count = await graph.countFollowers("collection", shareId);
+  return c.json({ count });
+});
+
+/**
+ * GET /api/social/liked/:shareId — Check if current user liked (authenticated)
+ */
+socialRoutes.get("/liked/:shareId", requireApiToken, async (c) => {
+  const { userId } = getToken(c);
+  const shareId = c.req.param("shareId");
+  const graph = new D1GraphStore(c.env.SOCIAL_DB);
+  const liked = await graph.edgeExists(userId, "collection", shareId, "follow");
+  return c.json({ liked });
+});
+
 export { socialRoutes };
