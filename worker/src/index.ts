@@ -11,6 +11,7 @@ import { uploadRoutes } from "./routes/upload";
 import { webAuthRoutes } from "./routes/web-auth";
 import { socialRoutes } from "./routes/social";
 import { listRoutes } from "./routes/lists";
+import { commentRoutes } from "./routes/comments";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -39,6 +40,7 @@ app.route("/api", presignRoutes);
 app.route("/api", uploadRoutes);
 app.route("/api/social", socialRoutes);
 app.route("/api/lists", listRoutes);
+app.route("/api/comments", commentRoutes);
 
 // Static downloads (tetra3 databases, etc.)
 app.route("/", downloadRoutes);

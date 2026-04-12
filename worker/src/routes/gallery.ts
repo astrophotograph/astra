@@ -110,6 +110,131 @@ function buildLikeWidget(shareId: string): string {
 </script>`;
 }
 
+function buildCommentWidget(shareId: string): string {
+  return `
+<style>
+.comments-section {
+  max-width: 640px; margin: 2rem auto; padding: 0 1rem;
+  font-family: 'DM Sans', -apple-system, sans-serif;
+}
+.comments-header {
+  font-size: 0.7rem; font-weight: 500; letter-spacing: 0.15em;
+  text-transform: uppercase; color: #6366f1; margin-bottom: 1rem;
+}
+.comment-list { list-style: none; padding: 0; }
+.comment-item {
+  padding: 0.75rem 0; border-bottom: 1px solid rgba(99,102,241,0.08);
+}
+.comment-meta { font-size: 0.78rem; color: #6b7280; margin-bottom: 0.25rem; }
+.comment-meta a { color: #6366f1; text-decoration: none; }
+.comment-meta a:hover { color: #c4b5fd; }
+.comment-body { font-size: 0.9rem; color: #c8cdd8; line-height: 1.5; }
+.comment-actions { margin-top: 0.25rem; }
+.comment-actions button {
+  background: none; border: none; color: #6b7280; font-size: 0.75rem;
+  cursor: pointer; padding: 0; margin-right: 0.75rem;
+}
+.comment-actions button:hover { color: #ef4444; }
+.comment-form { margin-top: 1rem; }
+.comment-input {
+  width: 100%; padding: 0.6rem 0.8rem; background: #0f1424;
+  border: 1px solid rgba(99,102,241,0.2); color: #e8ecf4;
+  font-family: inherit; font-size: 0.9rem; border-radius: 2px;
+  resize: vertical; min-height: 60px;
+}
+.comment-input:focus { outline: none; border-color: #6366f1; }
+.comment-submit {
+  margin-top: 0.5rem; padding: 0.4rem 1rem; background: #6366f1;
+  color: #fff; border: none; border-radius: 2px; font-size: 0.8rem;
+  font-weight: 500; cursor: pointer; letter-spacing: 0.06em;
+}
+.comment-submit:hover { background: #8b5cf6; }
+.comment-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.comment-signin { font-size: 0.85rem; color: #6b7280; }
+.comment-signin a { color: #6366f1; }
+</style>
+<div class="comments-section">
+  <div class="comments-header">Comments</div>
+  <ul class="comment-list" id="comment-list"></ul>
+  <div id="comment-form-area"></div>
+</div>
+<script>
+(function() {
+  var shareId = ${JSON.stringify(shareId)};
+  var list = document.getElementById('comment-list');
+  var formArea = document.getElementById('comment-form-area');
+  var token = localStorage.getItem('astra_api_token');
+  var expires = localStorage.getItem('astra_token_expires');
+  var username = localStorage.getItem('astra_username');
+  var userId = localStorage.getItem('astra_user_id');
+  var isAuthed = token && expires && new Date(expires) > new Date();
+
+  function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+  function timeAgo(iso) {
+    var s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s/60) + 'm ago';
+    if (s < 86400) return Math.floor(s/3600) + 'h ago';
+    return Math.floor(s/86400) + 'd ago';
+  }
+
+  // Load comments
+  fetch('/api/comments/' + shareId)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.items || data.items.length === 0) return;
+      data.items.forEach(function(c) { appendComment(c); });
+    }).catch(function() {});
+
+  function appendComment(c) {
+    var li = document.createElement('li');
+    li.className = 'comment-item';
+    li.id = 'comment-' + c.id;
+    var meta = '<span class="comment-meta"><a href="/@' + esc(c.authorUsername) + '">@' + esc(c.authorUsername) + '</a> · ' + timeAgo(c.createdAt) + (c.editedAt ? ' (edited)' : '') + '</span>';
+    var body = '<div class="comment-body">' + esc(c.body) + '</div>';
+    var actions = '';
+    if (isAuthed && (c.authorId === userId)) {
+      actions = '<div class="comment-actions"><button onclick="deleteComment(\\'' + c.id + '\\')">delete</button></div>';
+    }
+    li.innerHTML = meta + body + actions;
+    list.appendChild(li);
+  }
+
+  window.deleteComment = function(id) {
+    if (!confirm('Delete this comment?')) return;
+    fetch('/api/comments/' + id, {
+      method: 'DELETE',
+      headers: { 'Authorization': 'Bearer ' + token }
+    }).then(function(r) {
+      if (r.ok) { var el = document.getElementById('comment-' + id); if (el) el.remove(); }
+    });
+  };
+
+  // Comment form
+  if (isAuthed) {
+    formArea.innerHTML = '<div class="comment-form"><textarea class="comment-input" id="comment-input" placeholder="Add a comment..." maxlength="2000"></textarea><button class="comment-submit" id="comment-submit">Post</button></div>';
+    var input = document.getElementById('comment-input');
+    var submit = document.getElementById('comment-submit');
+    submit.addEventListener('click', function() {
+      var body = input.value.trim();
+      if (!body) return;
+      submit.disabled = true;
+      fetch('/api/comments/' + shareId, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body: body })
+      }).then(function(r) { return r.json(); }).then(function(c) {
+        if (c.id) { appendComment(c); input.value = ''; }
+        submit.disabled = false;
+      }).catch(function() { submit.disabled = false; });
+    });
+  } else {
+    formArea.innerHTML = '<p class="comment-signin"><a href="/auth/callback?return=' + encodeURIComponent(location.pathname) + '">Sign in</a> to comment</p>';
+  }
+})();
+</script>`;
+}
+
 async function incrementViewCount(kv: KVNamespace, shareId: string): Promise<void> {
   const key = `view-counts/${shareId}`;
   const current = parseInt(await kv.get(key) || "0", 10);
@@ -197,10 +322,11 @@ async function handleUserGallery(c: any) {
       );
     }
 
-    // Inject like widget into gallery HTML
+    // Inject like widget + comment section into gallery HTML
     const html = await object.text();
     const likeWidget = buildLikeWidget(share.shareId);
-    const injected = html.replace("</body>", likeWidget + "</body>");
+    const commentWidget = buildCommentWidget(share.shareId);
+    const injected = html.replace("</body>", likeWidget + commentWidget + "</body>");
     return new Response(injected, { headers });
   }
   object.writeHttpMetadata(headers);
