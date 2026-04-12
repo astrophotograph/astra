@@ -1,8 +1,9 @@
-//! HoardFS-based image import commands.
+//! HoardFS image storage commands.
 //!
-//! Imports images into HoardFS content-addressed storage with automatic
-//! variant generation (thumbnail + preview) and EXIF metadata extraction.
+//! Import, variant serving, and content-addressed storage operations.
 
+use base64::prelude::*;
+use hoardfs_core::Quality;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{AppHandle, Emitter, State};
@@ -238,4 +239,150 @@ pub async fn import_images_hoardfs(
     );
 
     Ok(result)
+}
+
+/// Helper: resolve HoardFS path for an image from its metadata
+fn resolve_hfs_path(image: &crate::db::models::Image) -> Option<String> {
+    image.metadata.as_ref().and_then(|m| {
+        serde_json::from_str::<serde_json::Value>(m).ok()
+    }).and_then(|v| {
+        v.get("hoardfs")?.get("hfs_path")?.as_str().map(String::from)
+    })
+}
+
+/// Get a thumbnail for an image, preferring HoardFS variant with filesystem fallback.
+/// Returns raw JPEG bytes.
+#[tauri::command]
+pub async fn get_image_thumbnail_hoardfs(
+    state: State<'_, AppState>,
+    image_id: String,
+) -> Result<Vec<u8>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = repository::get_image_by_id(&mut conn, &image_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", image_id))?;
+    drop(conn);
+
+    // Try HoardFS variant first
+    if let (Some(ref hfs_arc), Some(hfs_path)) = (&state.hoardfs, resolve_hfs_path(&image)) {
+        let hfs_arc = hfs_arc.clone();
+        let rt = tokio::runtime::Handle::current();
+        let result = tokio::task::spawn_blocking(move || {
+            let hfs = hfs_arc.lock().map_err(|e| format!("Lock: {}", e))?;
+            rt.block_on(hfs.get_file_quality("default", &hfs_path, Quality::Thumbnail))
+                .map(|(data, _quality, _ct)| data)
+                .map_err(|e| format!("{}", e))
+        }).await.map_err(|e| format!("Task: {}", e))?;
+
+        if let Ok(data) = result {
+            return Ok(data);
+        }
+    }
+
+    // Fall back to base64 thumbnail in DB
+    if let Some(ref thumb) = image.thumbnail {
+        if let Some(b64_data) = thumb.strip_prefix("data:image/jpeg;base64,") {
+            if let Ok(bytes) = BASE64_STANDARD.decode(b64_data) {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    // Fall back to reading the file and generating a thumbnail
+    if let Some(ref url) = image.url {
+        let path = Path::new(url);
+        if path.exists() {
+            let data = std::fs::read(path).map_err(|e| format!("Read: {}", e))?;
+            let img = image::load_from_memory(&data).map_err(|e| format!("Decode: {}", e))?;
+            let thumb = img.resize(256, 256, image::imageops::FilterType::Lanczos3);
+            let mut buf = std::io::Cursor::new(Vec::new());
+            thumb.write_to(&mut buf, image::ImageFormat::Jpeg)
+                .map_err(|e| format!("Encode: {}", e))?;
+            return Ok(buf.into_inner());
+        }
+    }
+
+    Err("No thumbnail available".into())
+}
+
+/// Get a preview-quality image, preferring HoardFS variant.
+/// Returns raw image bytes (JPEG).
+#[tauri::command]
+pub async fn get_image_preview_hoardfs(
+    state: State<'_, AppState>,
+    image_id: String,
+) -> Result<Vec<u8>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = repository::get_image_by_id(&mut conn, &image_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", image_id))?;
+    drop(conn);
+
+    // Try HoardFS variant first
+    if let (Some(ref hfs_arc), Some(hfs_path)) = (&state.hoardfs, resolve_hfs_path(&image)) {
+        let hfs_arc = hfs_arc.clone();
+        let rt = tokio::runtime::Handle::current();
+        let result = tokio::task::spawn_blocking(move || {
+            let hfs = hfs_arc.lock().map_err(|e| format!("Lock: {}", e))?;
+            rt.block_on(hfs.get_file_quality("default", &hfs_path, Quality::Preview))
+                .map(|(data, _quality, _ct)| data)
+                .map_err(|e| format!("{}", e))
+        }).await.map_err(|e| format!("Task: {}", e))?;
+
+        if let Ok(data) = result {
+            return Ok(data);
+        }
+    }
+
+    // Fall back to filesystem path
+    if let Some(ref url) = image.url {
+        let path = Path::new(url);
+        if path.exists() {
+            return std::fs::read(path).map_err(|e| format!("Read: {}", e));
+        }
+    }
+
+    Err("No preview available".into())
+}
+
+/// List available quality variants for an image.
+#[tauri::command]
+pub async fn get_image_variants_hoardfs(
+    state: State<'_, AppState>,
+    image_id: String,
+) -> Result<Vec<String>, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = repository::get_image_by_id(&mut conn, &image_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", image_id))?;
+    drop(conn);
+
+    let mut variants = Vec::new();
+
+    // Always has "original" if url or blob_id exists
+    if image.url.is_some() || image.blob_id.is_some() {
+        variants.push("original".to_string());
+    }
+
+    // Check HoardFS for quality variants
+    if let (Some(ref hfs_arc), Some(hfs_path)) = (&state.hoardfs, resolve_hfs_path(&image)) {
+        let hfs_arc = hfs_arc.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let hfs = hfs_arc.lock().map_err(|e| format!("Lock: {}", e))?;
+            hfs.list_variants("default", &hfs_path)
+                .map(|vs| vs.into_iter().map(|v| format!("{:?}", v.quality).to_lowercase()).collect::<Vec<_>>())
+                .map_err(|e| format!("{}", e))
+        }).await.map_err(|e| format!("Task: {}", e))?;
+
+        if let Ok(hfs_variants) = result {
+            variants.extend(hfs_variants);
+        }
+    }
+
+    // Has legacy thumbnail?
+    if image.thumbnail.is_some() && !variants.iter().any(|v| v == "thumbnail") {
+        variants.push("thumbnail".to_string());
+    }
+
+    Ok(variants)
 }

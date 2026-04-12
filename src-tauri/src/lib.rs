@@ -248,8 +248,11 @@ pub fn run() {
             // Gallery publish (authenticated)
             commands::publish_collection_gallery,
             commands::unpublish_collection_gallery,
-            // HoardFS import
+            // HoardFS storage
             commands::import_images_hoardfs,
+            commands::get_image_thumbnail_hoardfs,
+            commands::get_image_preview_hoardfs,
+            commands::get_image_variants_hoardfs,
             // Auto-import commands
             commands::start_auto_import,
             commands::stop_auto_import,
