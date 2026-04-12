@@ -399,3 +399,160 @@ pub async fn get_image_variants_hoardfs(
 
     Ok(variants)
 }
+
+/// Result of the legacy migration operation
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationReport {
+    pub total: u32,
+    pub migrated: u32,
+    pub skipped: u32,
+    pub unreachable: u32,
+    pub errors: Vec<String>,
+}
+
+/// Migrate existing images to HoardFS as external references.
+///
+/// Walks all images where blob_id is NULL and url is set, registers each
+/// as an external reference in HoardFS with variant generation. Idempotent —
+/// images with blob_id already set are skipped. Unreachable files (NAS offline)
+/// are skipped and can be retried later.
+#[tauri::command]
+pub async fn migrate_images_to_hoardfs(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<MigrationReport, String> {
+    let hoardfs_arc = state.hoardfs.as_ref()
+        .ok_or("HoardFS is not initialized.")?
+        .clone();
+
+    // Query all images without blob_id
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let all_images = repository::get_images_by_user(&mut conn, &state.user_id)
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let to_migrate: Vec<_> = all_images.into_iter()
+        .filter(|img| img.blob_id.is_none() && (img.url.is_some() || img.fits_url.is_some()))
+        .collect();
+
+    let total = to_migrate.len() as u32;
+    let mut report = MigrationReport {
+        total,
+        migrated: 0,
+        skipped: 0,
+        unreachable: 0,
+        errors: Vec::new(),
+    };
+
+    if total == 0 {
+        return Ok(report);
+    }
+
+    let user_id = state.user_id.clone();
+
+    for (idx, image) in to_migrate.iter().enumerate() {
+        let _ = app.emit("hoardfs-migration-progress", serde_json::json!({
+            "current": idx + 1,
+            "total": total,
+            "filename": &image.filename,
+            "status": "migrating",
+        }));
+
+        // Prefer fits_url (higher quality source), fall back to url
+        let source_path = image.fits_url.as_ref()
+            .or(image.url.as_ref());
+
+        let Some(source_path) = source_path else {
+            report.skipped += 1;
+            continue;
+        };
+
+        let path = std::path::Path::new(source_path);
+        if !path.exists() {
+            report.unreachable += 1;
+            log::info!("Migration: source unreachable, skipping: {}", source_path);
+            continue;
+        }
+
+        // Build HoardFS path from image creation date + filename
+        let date_prefix = image.created_at.format("%Y-%m").to_string();
+        let hfs_path = format!("/{}/{}", date_prefix, image.filename);
+
+        let abs_path = std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string();
+        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+        let hfs_clone = hoardfs_arc.clone();
+        let hfs_path_clone = hfs_path.clone();
+        let rt = tokio::runtime::Handle::current();
+
+        let result = tokio::task::spawn_blocking(move || {
+            let external = ExternalRef {
+                location: abs_path,
+                location_type: ExternalLocationType::FilesystemPath,
+                size: file_size,
+                content_hash: None,
+            };
+            let hfs = hfs_clone.lock().map_err(|e| format!("Lock: {}", e))?;
+            let (_file_record, _variants) = rt.block_on(hfs.register_external(
+                "default",
+                &hfs_path_clone,
+                &external,
+                true,
+            )).map_err(|e| format!("{}", e))?;
+            let blob_id = hfs.get_file_info("default", &hfs_path_clone)
+                .ok()
+                .map(|info| info.current_version.blob_id.clone());
+            Ok::<_, String>(blob_id)
+        }).await
+            .map_err(|e| format!("Task: {}", e))?;
+
+        match result {
+            Ok(blob_id) => {
+                // Update the Astra image record with blob_id and hfs metadata
+                let mut conn = state.db.get().map_err(|e| e.to_string())?;
+
+                let mut existing_meta: serde_json::Value = image.metadata.as_ref()
+                    .and_then(|m| serde_json::from_str(m).ok())
+                    .unwrap_or_else(|| serde_json::json!({}));
+
+                existing_meta["hoardfs"] = serde_json::json!({
+                    "blob_id": blob_id,
+                    "hfs_path": hfs_path,
+                    "migrated_at": chrono::Utc::now().to_rfc3339(),
+                });
+
+                let update = crate::db::models::UpdateImage {
+                    blob_id,
+                    metadata: Some(serde_json::to_string(&existing_meta).unwrap_or_default()),
+                    ..Default::default()
+                };
+                if let Err(e) = repository::update_image(&mut conn, &image.id, &update) {
+                    report.errors.push(format!("{}: DB update failed: {}", image.filename, e));
+                } else {
+                    report.migrated += 1;
+                }
+            }
+            Err(e) => {
+                report.errors.push(format!("{}: {}", image.filename, e));
+            }
+        }
+    }
+
+    let _ = app.emit("hoardfs-migration-progress", serde_json::json!({
+        "current": total,
+        "total": total,
+        "filename": "",
+        "status": "done",
+    }));
+
+    log::info!(
+        "Migration complete: {}/{} migrated, {} unreachable, {} errors",
+        report.migrated, report.total, report.unreachable, report.errors.len()
+    );
+
+    Ok(report)
+}

@@ -252,6 +252,7 @@ pub fn run() {
             commands::unpublish_collection_gallery,
             // HoardFS storage
             commands::import_images_hoardfs,
+            commands::migrate_images_to_hoardfs,
             commands::get_image_thumbnail_hoardfs,
             commands::get_image_preview_hoardfs,
             commands::get_image_variants_hoardfs,
