@@ -69,6 +69,12 @@ rayon = "1"
 # Native plate solver
 tetra3 = { version = "0.4", features = ["image"] }
 
+# Content-addressed image storage with quality variants
+hoardfs-core = { path = "../../hoardfs/crates/hoardfs-core" }
+hoardfs-volume = { path = "../../hoardfs/crates/hoardfs-volume" }
+hoardfs-variant = { path = "../../hoardfs/crates/hoardfs-variant" }
+hoardfs-backend = { path = "../../hoardfs/crates/hoardfs-backend" }
+
 # Python integration
 pyo3 = { version = "0.27", features = ["auto-initialize"] }
 

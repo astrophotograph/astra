@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::db::DbPool;
 use crate::share::auth::AuthSession;
+pub use hoardfs_volume::HoardFs;
 
 /// Status of the auto-import background task
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,16 +31,20 @@ pub struct AppState {
     pub auto_import_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     /// Current auto-import status (Arc for sharing with background task)
     pub auto_import_status: Arc<Mutex<AutoImportStatus>>,
+    /// HoardFS content-addressed storage (None if init failed — graceful degradation)
+    /// Wrapped in tokio::sync::Mutex because rusqlite::Connection is not Sync
+    pub hoardfs: Option<Arc<tokio::sync::Mutex<HoardFs>>>,
 }
 
 impl AppState {
-    pub fn new(db: DbPool) -> Self {
+    pub fn new(db: DbPool, hoardfs: Option<Arc<tokio::sync::Mutex<HoardFs>>>) -> Self {
         Self {
             db,
             user_id: "local-user".to_string(),
             auth_session: Mutex::new(None),
             auto_import_cancel: Mutex::new(None),
             auto_import_status: Arc::new(Mutex::new(AutoImportStatus::default())),
+            hoardfs,
         }
     }
 }

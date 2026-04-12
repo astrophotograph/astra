@@ -87,8 +87,41 @@ pub fn run() {
                 }
             }
 
+            // Initialize HoardFS content-addressed storage
+            let hoardfs = {
+                let hoardfs_dir = app.path()
+                    .app_data_dir()
+                    .map(|d| d.join("hoardfs"))
+                    .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/astra-hoardfs"));
+
+                let rt = tokio::runtime::Handle::current();
+                match rt.block_on(async {
+                    match hoardfs_volume::HoardFs::open(&hoardfs_dir).await {
+                        Ok(hfs) => Ok(hfs),
+                        Err(_) => {
+                            log::info!("Initializing new HoardFS repository at {}", hoardfs_dir.display());
+                            hoardfs_volume::HoardFs::init(&hoardfs_dir).await
+                        }
+                    }
+                }) {
+                    Ok(mut hfs) => {
+                        // Configure variant pipeline for auto thumbnail/preview generation
+                        hfs.set_variant_pipeline(
+                            hoardfs_variant::VariantPipeline::new()
+                                .with_image_generator()
+                        );
+                        log::info!("HoardFS initialized at {}", hoardfs_dir.display());
+                        Some(std::sync::Arc::new(tokio::sync::Mutex::new(hfs)))
+                    }
+                    Err(e) => {
+                        log::error!("Failed to initialize HoardFS: {}. Image storage features will be limited.", e);
+                        None
+                    }
+                }
+            };
+
             // Create app state
-            let app_state = AppState::new(db_pool);
+            let app_state = AppState::new(db_pool, hoardfs);
             app.manage(app_state);
 
             // Initialize Python with path to astra_astro module
