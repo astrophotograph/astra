@@ -35,6 +35,20 @@ export function authNavScript(): string {
   if (!el) return;
   if (t && e && new Date(e) > new Date() && u) {
     el.innerHTML = '<a href="/@' + encodeURIComponent(u) + '">@' + u + '</a>';
+    // Notification bell
+    var bellLi = document.createElement('li');
+    bellLi.innerHTML = '<a href="#" id="notif-bell" style="position:relative;" title="Notifications">&#128276;<span id="notif-badge" style="display:none;position:absolute;top:-6px;right:-8px;background:#ef4444;color:#fff;font-size:0.6rem;border-radius:50%;width:14px;height:14px;line-height:14px;text-align:center;"></span></a>';
+    el.parentNode.appendChild(bellLi);
+    // Load unread count
+    fetch('/api/social/notifications/unread-count', { headers: { 'Authorization': 'Bearer ' + t } })
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.count > 0) {
+          var badge = document.getElementById('notif-badge');
+          badge.textContent = d.count > 9 ? '9+' : d.count;
+          badge.style.display = '';
+        }
+      }).catch(function() {});
     var so = document.createElement('li');
     so.innerHTML = '<a href="#" id="astra-sign-out">Sign Out</a>';
     el.parentNode.appendChild(so);

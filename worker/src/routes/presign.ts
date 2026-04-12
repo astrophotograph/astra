@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import type { Env, GalleryIndexEntry, PresignRequest, PresignResponse, ShareRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
 import { generatePresignedPutUrl } from "../lib/r2";
+import { D1NotificationStore } from "../lib/kith";
 
 const presignRoutes = new Hono<{ Bindings: Env }>();
 
@@ -139,6 +140,36 @@ presignRoutes.post("/presign", requireApiToken, async (c) => {
   }
 
   const publicUrl = `https://astra.gallery/@${apiToken.username}/${slug}`;
+
+  // Emit notifications to subscribers (fire-and-forget)
+  c.executionCtx.waitUntil((async () => {
+    try {
+      const notifs = new D1NotificationStore(c.env.SOCIAL_DB);
+      const payload = {
+        shareId: body.shareId,
+        galleryName: body.collectionName,
+        galleryUrl: publicUrl,
+        username: apiToken.username,
+      };
+
+      // Notify followers of this user
+      await notifs.emit(
+        apiToken.userId, "user", apiToken.userId,
+        "new_gallery", payload
+      );
+
+      // Notify followers of each catalog object
+      for (const objName of objectNames) {
+        const normalized = normalizeObjectName(objName);
+        await notifs.emit(
+          apiToken.userId, "object", normalized,
+          "new_gallery", payload
+        );
+      }
+    } catch (e) {
+      console.error("Failed to emit notifications:", e);
+    }
+  })());
 
   const response: PresignResponse = {
     shareId: body.shareId,
