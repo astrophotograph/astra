@@ -1,6 +1,7 @@
 export interface Env {
   GALLERY_BUCKET: R2Bucket;
   GALLERY_KV: KVNamespace;
+  SOCIAL_DB: D1Database;
   CLERK_SECRET_KEY: string;
   CLERK_PUBLISHABLE_KEY: string;
   CLERK_JWT_KEY: string;

@@ -8,6 +8,9 @@
   "kv_namespaces": [
     { "binding": "GALLERY_KV", "id": "3fc397117b7f4ab78a0d4708b413d779" }
   ],
+  "d1_databases": [
+    { "binding": "SOCIAL_DB", "database_name": "astra-social", "database_id": "158a56c8-6f2b-48af-854e-a83eccf01346" }
+  ],
   "routes": [
     { "pattern": "astra.gallery", "custom_domain": true }
   ],
