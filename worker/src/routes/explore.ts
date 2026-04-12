@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env, GalleryIndexEntry } from "../lib/types";
+import { authNavItem, authNavScript } from "../lib/auth-nav";
 
 const exploreRoutes = new Hono<{ Bindings: Env }>();
 
@@ -485,6 +486,7 @@ footer a:hover { color: var(--glow); }
   <ul class="nav-links">
     <li><a href="/explore"${activeNav === "explore" ? ' class="active"' : ""}>Explore</a></li>
     <li><a href="/search"${activeNav === "search" ? ' class="active"' : ""}>Search</a></li>
+    ${authNavItem()}
   </ul>
 </nav>
 
@@ -496,6 +498,8 @@ ${bodyContent}
     <span class="footer-powered">Powered by <a href="/">Astra</a></span>
   </div>
 </footer>
+
+${authNavScript()}
 
 </body>
 </html>`;

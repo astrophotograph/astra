@@ -5,6 +5,7 @@
 import { Hono } from "hono";
 import type { Env, ShareRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
+import { authNavItem, authNavScript } from "../lib/auth-nav";
 
 const uploadRoutes = new Hono<{ Bindings: Env }>();
 
@@ -118,10 +119,10 @@ uploadRoutes.post("/galleries", requireApiToken, async (c) => {
  * Serve the upload page (static HTML with embedded Preact app).
  */
 uploadRoutes.get("/upload", async (c) => {
-  return c.html(buildUploadPage(c.env.CLERK_PUBLISHABLE_KEY));
+  return c.html(buildUploadPage());
 });
 
-function buildUploadPage(clerkPublishableKey: string): string {
+function buildUploadPage(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -304,6 +305,7 @@ footer a:hover { color: var(--glow); }
   <ul class="nav-links">
     <li><a href="/explore">Explore</a></li>
     <li><a href="/upload" class="active">Upload</a></li>
+    ${authNavItem()}
   </ul>
 </nav>
 
@@ -318,7 +320,7 @@ footer a:hover { color: var(--glow); }
   <div class="container">
     <div id="auth-gate">
       <p>Sign in to upload your astrophotography</p>
-      <button class="btn btn-primary" id="sign-in-btn">Sign In</button>
+      <a href="/auth/callback?return=/upload" class="btn btn-primary">Sign In</a>
     </div>
 
     <div id="upload-app">
@@ -375,18 +377,15 @@ footer a:hover { color: var(--glow); }
   </div>
 </footer>
 
-<script src="https://cdn.jsdelivr.net/npm/@anthropic-ai/clerk-js@latest/dist/clerk.browser.js" defer></script>
 <script>
 (function() {
   const API_BASE = '';
-  const CLERK_KEY = '${clerkPublishableKey}';
   let apiToken = null;
   let selectedFiles = [];
 
   // DOM refs
   const authGate = document.getElementById('auth-gate');
   const uploadApp = document.getElementById('upload-app');
-  const signInBtn = document.getElementById('sign-in-btn');
   const gallerySelect = document.getElementById('gallery-select');
   const newGalleryFields = document.getElementById('new-gallery-fields');
   const galleryNameInput = document.getElementById('gallery-name');
@@ -402,48 +401,13 @@ footer a:hover { color: var(--glow); }
   const uploadSuccess = document.getElementById('upload-success');
   const galleryLink = document.getElementById('gallery-link');
 
-  // Check for saved token
+  // Check for saved token (set by /auth/callback)
   const savedToken = localStorage.getItem('astra_api_token');
   const savedExpiry = localStorage.getItem('astra_token_expires');
   if (savedToken && savedExpiry && new Date(savedExpiry) > new Date()) {
     apiToken = savedToken;
     showUploadUI();
   }
-
-  // Sign in via redirect to Clerk
-  signInBtn.addEventListener('click', async function() {
-    // Simple approach: redirect to Clerk sign-in, then back
-    // For now, use the token exchange flow
-    try {
-      signInBtn.disabled = true;
-      signInBtn.textContent = 'Opening sign-in...';
-
-      // Open Clerk hosted sign-in in a popup
-      const width = 500, height = 600;
-      const left = (screen.width - width) / 2;
-      const top = (screen.height - height) / 2;
-      const popup = window.open(
-        'https://accounts.astra.gallery/sign-in?redirect_url=' + encodeURIComponent(window.location.origin + '/upload'),
-        'clerk-sign-in',
-        'width=' + width + ',height=' + height + ',left=' + left + ',top=' + top
-      );
-
-      // Poll for popup close and check for token
-      const interval = setInterval(function() {
-        if (popup && popup.closed) {
-          clearInterval(interval);
-          signInBtn.disabled = false;
-          signInBtn.textContent = 'Sign In';
-          // Check if we got a token (page reload will pick it up)
-          location.reload();
-        }
-      }, 500);
-    } catch (err) {
-      signInBtn.disabled = false;
-      signInBtn.textContent = 'Sign In';
-      alert('Sign-in failed: ' + err.message);
-    }
-  });
 
   // Gallery selector
   gallerySelect.addEventListener('change', function() {
@@ -705,6 +669,8 @@ footer a:hover { color: var(--glow); }
   }
 })();
 </script>
+
+${authNavScript()}
 
 </body>
 </html>`;

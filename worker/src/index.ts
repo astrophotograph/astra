@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/auth";
 import { presignRoutes } from "./routes/presign";
 import { downloadRoutes } from "./routes/downloads";
 import { uploadRoutes } from "./routes/upload";
+import { webAuthRoutes } from "./routes/web-auth";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -37,6 +38,9 @@ app.route("/api", uploadRoutes);
 
 // Static downloads (tetra3 databases, etc.)
 app.route("/", downloadRoutes);
+
+// Web auth (callback, sign-out)
+app.route("/", webAuthRoutes);
 
 // Upload page
 app.route("/", uploadRoutes);

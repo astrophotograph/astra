@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env, ShareRecord, UserRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
+import { authNavItem, authNavScript } from "../lib/auth-nav";
 
 const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -420,6 +421,25 @@ nav .wordmark:hover {
   color: var(--glow);
 }
 
+nav .nav-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+  align-items: center;
+}
+
+nav .nav-links a {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.8rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 0.3s;
+}
+
+nav .nav-links a:hover { color: var(--glow); }
+
 /* Container */
 .container {
   max-width: 960px;
@@ -747,6 +767,10 @@ footer a:hover { color: var(--glow); }
 
 <nav>
   <a href="/" class="wordmark">astra.gallery</a>
+  <ul class="nav-links">
+    <li><a href="/explore">Explore</a></li>
+    ${authNavItem()}
+  </ul>
 </nav>
 
 <section class="profile-hero">
@@ -777,6 +801,8 @@ footer a:hover { color: var(--glow); }
     <span class="footer-powered">Powered by <a href="/">Astra</a></span>
   </div>
 </footer>
+
+${authNavScript()}
 
 </body>
 </html>`;

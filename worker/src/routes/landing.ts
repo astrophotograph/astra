@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env, GalleryIndexEntry } from "../lib/types";
+import { authNavItem, authNavScript } from "../lib/auth-nav";
 
 const landingRoutes = new Hono<{ Bindings: Env }>();
 
@@ -588,6 +589,7 @@ footer .footer-links {
     <li><a href="/explore">Explore</a></li>
     <li><a href="#features">Features</a></li>
     <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">Source</a></li>
+    ${authNavItem()}
   </ul>
 </nav>
 
@@ -740,6 +742,8 @@ footer .footer-links {
   els.forEach(function(el) { observer.observe(el); });
 })();
 </script>
+
+${authNavScript()}
 
 </body>
 </html>`;
