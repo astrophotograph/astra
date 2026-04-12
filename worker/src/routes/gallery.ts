@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { Env } from "../lib/types";
+import type { Env, UserRecord } from "../lib/types";
 
 const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -66,7 +66,7 @@ async function handleUserGallery(c: any) {
     if (!userId) return c.text("User not found", 404);
     const userJson = await c.env.GALLERY_KV.get(`users/${userId}`);
     if (!userJson) return c.text("User not found", 404);
-    const user = JSON.parse(userJson) as { displayName: string; username: string };
+    const user = JSON.parse(userJson) as UserRecord;
     const sharesList = await c.env.GALLERY_KV.list({ prefix: `user-shares/${userId}/` });
     const shares: { slug: string; name: string; createdAt: string }[] = [];
     for (const key of sharesList.keys) {
@@ -76,7 +76,7 @@ async function handleUserGallery(c: any) {
         shares.push({ slug: share.collectionSlug, name: share.collectionName, createdAt: share.createdAt });
       }
     }
-    return c.html(renderProfilePage(username, user.displayName || username, shares));
+    return c.html(renderProfilePage(username, user, shares));
   }
 
   if (!slug) {
@@ -150,9 +150,10 @@ function cacheControlForPath(path: string): string {
 
 function renderProfilePage(
   username: string,
-  displayName: string,
+  user: UserRecord,
   shares: { slug: string; name: string; createdAt: string }[]
 ): string {
+  const displayName = user.displayName || username;
   const sorted = shares.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const galleryCount = sorted.length;
   const galleryWord = galleryCount === 1 ? "gallery" : "galleries";
@@ -165,6 +166,53 @@ function renderProfilePage(
   const memberSince = earliestDate
     ? earliestDate.toLocaleDateString("en-US", { month: "long", year: "numeric" })
     : null;
+
+  // Avatar
+  const avatarHtml = user.avatarUrl
+    ? `<img src="${escapeHtml(user.avatarUrl)}" alt="${escapeHtml(displayName)}" class="profile-avatar" />`
+    : `<div class="profile-avatar profile-avatar-placeholder">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="8" r="4"/>
+          <path d="M4 21v-1a6 6 0 0 1 12 0v1"/>
+        </svg>
+      </div>`;
+
+  // Bio
+  const bioHtml = user.bio
+    ? `<p class="profile-bio">${escapeHtml(user.bio)}</p>`
+    : "";
+
+  // Location
+  const locationHtml = user.location
+    ? `<span class="profile-location">${escapeHtml(user.location)}</span>`
+    : "";
+
+  // Equipment
+  const equipmentHtml = user.equipment && user.equipment.length > 0
+    ? `<div class="profile-equipment">
+        <span class="equipment-label">Equipment</span>
+        <ul>${user.equipment.map(e => `<li>${escapeHtml(e)}</li>`).join("")}</ul>
+      </div>`
+    : "";
+
+  // Links
+  const linkEntries: string[] = [];
+  if (user.links?.website) {
+    const display = user.links.website.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    linkEntries.push(`<a href="${escapeHtml(user.links.website)}" target="_blank" rel="noopener">${escapeHtml(display)}</a>`);
+  }
+  if (user.links?.instagram) {
+    linkEntries.push(`<a href="https://instagram.com/${escapeHtml(user.links.instagram)}" target="_blank" rel="noopener">Instagram</a>`);
+  }
+  if (user.links?.astrobin) {
+    linkEntries.push(`<a href="https://www.astrobin.com/users/${escapeHtml(user.links.astrobin)}/" target="_blank" rel="noopener">AstroBin</a>`);
+  }
+  if (user.links?.cloudynights) {
+    linkEntries.push(`<a href="https://www.cloudynights.com/profile/${escapeHtml(user.links.cloudynights)}/" target="_blank" rel="noopener">Cloudy Nights</a>`);
+  }
+  const linksHtml = linkEntries.length > 0
+    ? `<div class="profile-links">${linkEntries.join(" · ")}</div>`
+    : "";
 
   const shareCards = sorted
     .map((s) => {
@@ -334,6 +382,87 @@ nav .wordmark:hover {
   font-size: 0.8rem;
   color: var(--text-dim);
   letter-spacing: 0.04em;
+}
+
+.profile-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin: 0 auto 1.5rem;
+  display: block;
+  border: 2px solid rgba(99, 102, 241, 0.2);
+}
+
+.profile-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--deep);
+  color: var(--text-dim);
+}
+
+.profile-bio {
+  font-size: 0.95rem;
+  color: var(--text);
+  max-width: 500px;
+  margin: 0.75rem auto 1rem;
+  line-height: 1.6;
+}
+
+.profile-location {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.profile-links {
+  margin-top: 1rem;
+  font-size: 0.85rem;
+}
+
+.profile-links a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.3s;
+}
+
+.profile-links a:hover {
+  color: var(--glow);
+}
+
+.profile-equipment {
+  margin-top: 1.5rem;
+  text-align: left;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.equipment-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.profile-equipment ul {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.profile-equipment li {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  background: var(--deep);
+  border: 1px solid rgba(99, 102, 241, 0.1);
+  padding: 0.25rem 0.75rem;
+  border-radius: 2px;
 }
 
 /* Gallery section */
@@ -525,12 +654,17 @@ footer a:hover { color: var(--glow); }
 
 <section class="profile-hero">
   <div class="container">
-    <h1 class="profile-display-name">${escapeHtml(displayName || username)}</h1>
+    ${avatarHtml}
+    <h1 class="profile-display-name">${escapeHtml(displayName)}</h1>
     <p class="profile-username">@${escapeHtml(username)}</p>
+    ${bioHtml}
     <div class="profile-meta">
       <span class="profile-badge">${galleryCount} ${galleryWord}</span>
+      ${locationHtml}
       ${memberSince ? `<span class="profile-member-since">Sharing since ${memberSince}</span>` : ""}
     </div>
+    ${linksHtml}
+    ${equipmentHtml}
   </div>
 </section>
 

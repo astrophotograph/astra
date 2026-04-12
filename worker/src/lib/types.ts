@@ -14,6 +14,16 @@ export interface UserRecord {
   username: string;
   displayName: string;
   createdAt: string;
+  bio?: string;
+  avatarUrl?: string;
+  equipment?: string[];
+  location?: string;
+  links?: {
+    website?: string;
+    instagram?: string;
+    astrobin?: string;
+    cloudynights?: string;
+  };
 }
 
 export interface ShareRecord {

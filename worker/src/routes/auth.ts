@@ -153,4 +153,149 @@ authRoutes.get("/me", requireApiToken, async (c) => {
   });
 });
 
+/**
+ * PATCH /api/auth/profile
+ * Update profile fields. Requires API token.
+ */
+authRoutes.patch("/profile", requireApiToken, async (c) => {
+  const apiToken = c.get("apiToken" as never) as {
+    userId: string;
+    username: string;
+  };
+
+  const body = await c.req.json<{
+    displayName?: string;
+    bio?: string;
+    equipment?: string[];
+    location?: string;
+    links?: {
+      website?: string;
+      instagram?: string;
+      astrobin?: string;
+      cloudynights?: string;
+    };
+  }>();
+
+  // Validate
+  if (body.displayName !== undefined) {
+    const dn = body.displayName.trim();
+    if (dn.length === 0 || dn.length > 100) {
+      return c.json({ error: "Display name must be 1-100 characters" }, 400);
+    }
+  }
+  if (body.bio !== undefined && body.bio.length > 500) {
+    return c.json({ error: "Bio must be 500 characters or fewer" }, 400);
+  }
+  if (body.equipment !== undefined) {
+    if (body.equipment.length > 20) {
+      return c.json({ error: "Maximum 20 equipment items" }, 400);
+    }
+    for (const item of body.equipment) {
+      if (item.length > 100) {
+        return c.json({ error: "Equipment items must be 100 characters or fewer" }, 400);
+      }
+    }
+  }
+  if (body.location !== undefined && body.location.length > 100) {
+    return c.json({ error: "Location must be 100 characters or fewer" }, 400);
+  }
+  if (body.links?.website && !/^https?:\/\/.+/.test(body.links.website)) {
+    return c.json({ error: "Website must be a valid URL starting with http:// or https://" }, 400);
+  }
+
+  const userJson = await c.env.GALLERY_KV.get(`users/${apiToken.userId}`);
+  if (!userJson) {
+    return c.json({ error: "User not found" }, 404);
+  }
+
+  const user: UserRecord = JSON.parse(userJson);
+
+  // Apply updates
+  if (body.displayName !== undefined) user.displayName = body.displayName.trim();
+  if (body.bio !== undefined) user.bio = body.bio.trim() || undefined;
+  if (body.equipment !== undefined) user.equipment = body.equipment.length > 0 ? body.equipment : undefined;
+  if (body.location !== undefined) user.location = body.location.trim() || undefined;
+  if (body.links !== undefined) {
+    const cleaned: UserRecord["links"] = {};
+    if (body.links.website) cleaned.website = body.links.website.trim();
+    if (body.links.instagram) cleaned.instagram = body.links.instagram.trim();
+    if (body.links.astrobin) cleaned.astrobin = body.links.astrobin.trim();
+    if (body.links.cloudynights) cleaned.cloudynights = body.links.cloudynights.trim();
+    user.links = Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  }
+
+  await c.env.GALLERY_KV.put(`users/${apiToken.userId}`, JSON.stringify(user));
+
+  return c.json({
+    userId: apiToken.userId,
+    ...user,
+  });
+});
+
+/**
+ * POST /api/auth/avatar
+ * Upload avatar image. Requires API token.
+ * Accepts raw image body with Content-Type header.
+ */
+authRoutes.post("/avatar", requireApiToken, async (c) => {
+  const apiToken = c.get("apiToken" as never) as {
+    userId: string;
+    username: string;
+  };
+
+  const contentType = c.req.header("content-type") || "";
+  if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+    return c.json({ error: "Avatar must be JPEG, PNG, or WebP" }, 400);
+  }
+
+  const body = await c.req.arrayBuffer();
+  if (body.byteLength > 2 * 1024 * 1024) {
+    return c.json({ error: "Avatar must be 2MB or smaller" }, 400);
+  }
+
+  const ext = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+  const r2Key = `users/${apiToken.userId}/avatar.${ext}`;
+
+  await c.env.GALLERY_BUCKET.put(r2Key, body, {
+    httpMetadata: { contentType },
+  });
+
+  const avatarUrl = `https://astra.gallery/shares/../users/${apiToken.userId}/avatar.${ext}`;
+
+  // Update user record
+  const userJson = await c.env.GALLERY_KV.get(`users/${apiToken.userId}`);
+  if (userJson) {
+    const user: UserRecord = JSON.parse(userJson);
+    user.avatarUrl = avatarUrl;
+    await c.env.GALLERY_KV.put(`users/${apiToken.userId}`, JSON.stringify(user));
+  }
+
+  return c.json({ avatarUrl });
+});
+
+/**
+ * DELETE /api/auth/avatar
+ * Remove avatar. Requires API token.
+ */
+authRoutes.delete("/avatar", requireApiToken, async (c) => {
+  const apiToken = c.get("apiToken" as never) as {
+    userId: string;
+    username: string;
+  };
+
+  // Try to delete all possible avatar extensions
+  for (const ext of ["jpg", "png", "webp"]) {
+    await c.env.GALLERY_BUCKET.delete(`users/${apiToken.userId}/avatar.${ext}`);
+  }
+
+  const userJson = await c.env.GALLERY_KV.get(`users/${apiToken.userId}`);
+  if (userJson) {
+    const user: UserRecord = JSON.parse(userJson);
+    delete user.avatarUrl;
+    await c.env.GALLERY_KV.put(`users/${apiToken.userId}`, JSON.stringify(user));
+  }
+
+  return c.json({ deleted: true });
+});
+
 export { authRoutes };
