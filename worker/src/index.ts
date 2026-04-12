@@ -7,15 +7,16 @@ import { galleryRoutes } from "./routes/gallery";
 import { authRoutes } from "./routes/auth";
 import { presignRoutes } from "./routes/presign";
 import { downloadRoutes } from "./routes/downloads";
+import { uploadRoutes } from "./routes/upload";
 
 const app = new Hono<{ Bindings: Env }>();
 
-// CORS for desktop app
+// CORS for desktop app + web UI
 app.use(
   "/api/*",
   cors({
-    origin: ["http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost"],
-    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    origin: ["http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost", "https://astra.gallery"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
   })
 );
@@ -32,9 +33,13 @@ app.use(
 // API routes
 app.route("/api/auth", authRoutes);
 app.route("/api", presignRoutes);
+app.route("/api", uploadRoutes);
 
 // Static downloads (tetra3 databases, etc.)
 app.route("/", downloadRoutes);
+
+// Upload page
+app.route("/", uploadRoutes);
 
 // Discovery & browse
 app.route("/", exploreRoutes);
