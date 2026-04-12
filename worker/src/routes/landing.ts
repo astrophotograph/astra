@@ -585,6 +585,7 @@ footer .footer-links {
 <nav>
   <a href="/" class="wordmark">astra.gallery</a>
   <ul class="nav-links">
+    <li><a href="/explore">Explore</a></li>
     <li><a href="#features">Features</a></li>
     <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">Source</a></li>
   </ul>
@@ -596,8 +597,8 @@ footer .footer-links {
     <h1>Astra Gallery</h1>
     <p class="hero-tagline">Publish your astrophotography collections as beautiful, auto-refreshing galleries</p>
     <div class="hero-cta">
-      <a href="#features" class="btn btn-primary">Learn More</a>
-      <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">View Source</a>
+      <a href="https://github.com/astrophotograph/astra/releases" class="btn btn-primary" target="_blank" rel="noopener">Download Astra</a>
+      <a href="/explore" class="btn btn-ghost">Explore Galleries</a>
     </div>
     <div class="hero-scroll"><span></span></div>
   </section>
