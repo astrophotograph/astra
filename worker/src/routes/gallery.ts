@@ -334,9 +334,9 @@ async function handleUserGallery(c: any) {
   return new Response(object.body, { headers });
 }
 
-// Catch all /@username paths and parse manually
-galleryRoutes.all("/@:username", handleUserGallery);
-galleryRoutes.all("/@:username/*", handleUserGallery);
+// /@username routes are registered on the main app (see index.ts)
+// because Hono sub-routers mounted at "/" don't match the @ prefix.
+export { handleUserGallery as handleUserGalleryRequest };
 
 // GET /api/galleries/:shareId/views — public view count
 galleryRoutes.get("/api/galleries/:shareId/views", async (c) => {

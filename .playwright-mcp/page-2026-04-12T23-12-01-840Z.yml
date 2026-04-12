@@ -1,0 +1,41 @@
+- generic [active] [ref=e1]:
+  - navigation [ref=e2]:
+    - link "astra.gallery" [ref=e3] [cursor=pointer]:
+      - /url: /
+    - list [ref=e4]:
+      - listitem [ref=e5]:
+        - link "Explore" [ref=e6] [cursor=pointer]:
+          - /url: /explore
+      - listitem [ref=e7]:
+        - link "Sign In" [ref=e8] [cursor=pointer]:
+          - /url: /auth/callback?return=%2F%40erewhon
+  - generic [ref=e10]:
+    - img [ref=e12]
+    - heading "erewhon" [level=1] [ref=e15]
+    - paragraph [ref=e16]: "@erewhon"
+    - generic [ref=e17]:
+      - generic [ref=e18]: 2 galleries
+      - generic [ref=e19]: Sharing since March 2026
+    - button "Follow" [ref=e21] [cursor=pointer]
+  - generic [ref=e23]:
+    - generic [ref=e24]: Galleries
+    - generic [ref=e25]:
+      - link "Messier Marathon Spring 2026 Mar 15, 2026" [ref=e26] [cursor=pointer]:
+        - /url: /@erewhon/messier-marathon-spring-2026
+        - img [ref=e28]
+        - generic [ref=e35]:
+          - heading "Messier Marathon Spring 2026" [level=3] [ref=e36]
+          - text: Mar 15, 2026
+      - link "Processed Mar 13, 2026" [ref=e37] [cursor=pointer]:
+        - /url: /@erewhon/processed
+        - img [ref=e39]
+        - generic [ref=e46]:
+          - heading "Processed" [level=3] [ref=e47]
+          - text: Mar 13, 2026
+  - contentinfo [ref=e48]:
+    - generic [ref=e49]:
+      - generic [ref=e50]: astra.gallery
+      - generic [ref=e51]:
+        - text: Powered by
+        - link "Astra" [ref=e52] [cursor=pointer]:
+          - /url: /

@@ -57,7 +57,20 @@ app.route("/", listPageRoutes);
 // Discovery & browse
 app.route("/", exploreRoutes);
 
-// Gallery routes (serves shares and user profiles)
+// /@username profile and gallery routes
+// Hono doesn't match literal @ in route patterns, so we use /:param
+// and check for the @ prefix in middleware.
+import { handleUserGalleryRequest } from "./routes/gallery";
+app.all("/:profile", async (c, next) => {
+  if (c.req.param("profile").startsWith("@")) return handleUserGalleryRequest(c);
+  await next();
+});
+app.all("/:profile/*", async (c, next) => {
+  if (c.req.param("profile").startsWith("@")) return handleUserGalleryRequest(c);
+  await next();
+});
+
+// Other gallery routes (shares, API endpoints)
 app.route("/", galleryRoutes);
 
 // Landing page (must be last — catches /)
