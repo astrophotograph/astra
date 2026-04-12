@@ -40,6 +40,12 @@ galleryRoutes.get("/shares/:shareId", async (c) => {
   return new Response(object.body, { headers });
 });
 
+async function incrementViewCount(kv: KVNamespace, shareId: string): Promise<void> {
+  const key = `view-counts/${shareId}`;
+  const current = parseInt(await kv.get(key) || "0", 10);
+  await kv.put(key, String(current + 1));
+}
+
 // User profile + gallery + assets — all handled by one function
 // Helper to handle both gallery page and asset requests
 async function handleUserGallery(c: any) {
@@ -112,6 +118,14 @@ async function handleUserGallery(c: any) {
   } else {
     headers.set("Content-Type", "text/html; charset=utf-8");
     headers.set("Cache-Control", "public, max-age=10");
+
+    // Increment view count (fire-and-forget, don't block response)
+    const ua = c.req.header("user-agent") || "";
+    if (!/bot|crawl|spider|preview|slurp|facebookexternalhit/i.test(ua)) {
+      c.executionCtx.waitUntil(
+        incrementViewCount(c.env.GALLERY_KV, share.shareId)
+      );
+    }
   }
   object.writeHttpMetadata(headers);
 
@@ -121,6 +135,13 @@ async function handleUserGallery(c: any) {
 // Catch all /@username paths and parse manually
 galleryRoutes.all("/@:username", handleUserGallery);
 galleryRoutes.all("/@:username/*", handleUserGallery);
+
+// GET /api/galleries/:shareId/views — public view count
+galleryRoutes.get("/api/galleries/:shareId/views", async (c) => {
+  const shareId = c.req.param("shareId");
+  const count = parseInt(await c.env.GALLERY_KV.get(`view-counts/${shareId}`) || "0", 10);
+  return c.json({ shareId, views: count });
+});
 
 function contentTypeForPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
