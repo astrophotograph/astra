@@ -168,7 +168,7 @@ pub fn generate_preview(
 /// Read FITS pixel data as f64 channels.
 /// Returns (width, height, flat pixel data, is_color).
 /// For RGB, data is laid out as [R..., G..., B...] (channel-first).
-fn read_fits_pixels(path: &Path) -> Result<(usize, usize, Vec<f64>, bool), String> {
+pub fn read_fits_pixels(path: &Path) -> Result<(usize, usize, Vec<f64>, bool), String> {
     use fitrs::Fits;
 
     let fits = Fits::open(path).map_err(|e| format!("Failed to open FITS: {}", e))?;

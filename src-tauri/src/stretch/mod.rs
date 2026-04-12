@@ -11,7 +11,7 @@
 
 mod autocrop;
 mod gradient;
-mod mtf;
+pub mod mtf;
 mod pipeline;
 
-pub use pipeline::{generate_preview, StretchParams};
+pub use pipeline::{generate_preview, read_fits_pixels, StretchParams};

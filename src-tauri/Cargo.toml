@@ -69,6 +69,9 @@ rayon = "1"
 # Native plate solver
 tetra3 = { version = "0.4", features = ["image"] }
 
+# Async trait (for HoardFS VariantGenerator impl)
+async-trait = "0.1"
+
 # Content-addressed image storage with quality variants
 hoardfs-core = { path = "../../hoardfs/crates/hoardfs-core" }
 hoardfs-volume = { path = "../../hoardfs/crates/hoardfs-volume" }

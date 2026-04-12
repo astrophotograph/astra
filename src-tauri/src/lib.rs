@@ -7,6 +7,7 @@ use tauri::Manager;
 
 mod commands;
 mod db;
+mod fits_variant;
 mod python;
 mod share;
 mod state;
@@ -109,6 +110,7 @@ pub fn run() {
                         hfs.set_variant_pipeline(
                             hoardfs_variant::VariantPipeline::new()
                                 .with_image_generator()
+                                .register(Box::new(fits_variant::FitsVariantGenerator::new()))
                         );
                         log::info!("HoardFS initialized at {}", hoardfs_dir.display());
                         Some(std::sync::Arc::new(std::sync::Mutex::new(hfs)))
