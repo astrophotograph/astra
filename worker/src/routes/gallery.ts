@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Env, ShareRecord, UserRecord } from "../lib/types";
 import { requireApiToken } from "../middleware/clerk";
 import { authNavItem, authNavScript, faviconLink } from "../lib/auth-nav";
+import { followButton, socialWidgetStyles, socialWidgetScript } from "../lib/social-widgets";
 
 const galleryRoutes = new Hono<{ Bindings: Env }>();
 
@@ -84,7 +85,7 @@ async function handleUserGallery(c: any) {
         shares.push({ slug: share.collectionSlug, name: share.collectionName, createdAt: share.createdAt });
       }
     }
-    return c.html(renderProfilePage(username, user, shares));
+    return c.html(renderProfilePage(username, userId, user, shares));
   }
 
   if (!slug) {
@@ -248,6 +249,7 @@ function cacheControlForPath(path: string): string {
 
 function renderProfilePage(
   username: string,
+  userId: string,
   user: UserRecord,
   shares: { slug: string; name: string; createdAt: string }[]
 ): string {
@@ -583,6 +585,8 @@ nav .nav-links a:hover { color: var(--glow); }
   border-radius: 2px;
 }
 
+${socialWidgetStyles()}
+
 /* Gallery section */
 .galleries-section {
   padding: 3rem 0 4rem;
@@ -785,6 +789,7 @@ footer a:hover { color: var(--glow); }
       ${locationHtml}
       ${memberSince ? `<span class="profile-member-since">Sharing since ${memberSince}</span>` : ""}
     </div>
+    ${followButton("user", userId)}
     ${linksHtml}
     ${equipmentHtml}
   </div>
@@ -803,6 +808,7 @@ footer a:hover { color: var(--glow); }
   </div>
 </footer>
 
+${socialWidgetScript()}
 ${authNavScript()}
 
 </body>

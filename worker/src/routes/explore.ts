@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env, GalleryIndexEntry } from "../lib/types";
 import { authNavItem, authNavScript, faviconLink } from "../lib/auth-nav";
+import { followButton, socialWidgetStyles, socialWidgetScript } from "../lib/social-widgets";
 
 const exploreRoutes = new Hono<{ Bindings: Env }>();
 
@@ -323,6 +324,8 @@ nav .nav-links a.active { color: var(--text-bright); }
   transform: scale(1.03);
 }
 
+${socialWidgetStyles()}
+
 /* Search */
 .search-form {
   margin-bottom: 2rem;
@@ -500,6 +503,7 @@ ${bodyContent}
   </div>
 </footer>
 
+${socialWidgetScript()}
 ${authNavScript()}
 
 </body>
@@ -617,6 +621,7 @@ exploreRoutes.get("/objects/:name", async (c) => {
       <div class="container">
         <h1>${escapeHtml(displayName)}</h1>
         <p class="subtitle">Galleries featuring this object</p>
+        ${followButton("object", normalizedName)}
       </div>
     </section>
     <section class="galleries-section">
