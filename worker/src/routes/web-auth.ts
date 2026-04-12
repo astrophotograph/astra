@@ -17,6 +17,15 @@ webAuthRoutes.get("/auth/callback", async (c) => {
   const clerkPubKey = c.env.CLERK_PUBLISHABLE_KEY;
   const returnUrl = c.req.query("return") || "/explore";
 
+  // Derive FAPI URL from publishable key (pk_test_<base64-encoded-fapi>)
+  const keyParts = clerkPubKey.replace("pk_test_", "").replace("pk_live_", "");
+  let fapiUrl: string;
+  try {
+    fapiUrl = atob(keyParts.replace(/\$+$/, "")).replace(/\$$/, "");
+  } catch {
+    fapiUrl = "wired-walrus-5.clerk.accounts.dev";
+  }
+
   return c.html(`<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -86,7 +95,7 @@ body { min-height: 100vh; display: flex; align-items: center; justify-content: c
   async
   crossorigin="anonymous"
   data-clerk-publishable-key="${clerkPubKey}"
-  src="https://cdn.jsdelivr.net/npm/@clerk/clerk-js@latest/dist/clerk.browser.js"
+  src="https://${fapiUrl}/npm/@clerk/clerk-js@6/dist/clerk.browser.js"
   onload="initClerk()"
   onerror="showError('Failed to load authentication. Please try again.')"
 ></script>
@@ -107,13 +116,20 @@ async function initClerk() {
     await Clerk.load();
 
     if (!Clerk.session) {
-      // No session — user needs to sign in first. Redirect to Clerk.
+      // No session — user needs to sign in first. Redirect to Account Portal.
       document.getElementById('loading').style.display = 'none';
       document.getElementById('no-session').style.display = '';
-      var signInUrl = Clerk.buildSignInUrl({
-        redirectUrl: window.location.href,
-      });
-      document.getElementById('sign-in-link').href = signInUrl;
+      // Use buildSignInUrl if available, fall back to Account Portal URL
+      try {
+        var signInUrl = Clerk.buildSignInUrl({
+          redirectUrl: window.location.href,
+        });
+        document.getElementById('sign-in-link').href = signInUrl;
+      } catch(e) {
+        document.getElementById('sign-in-link').href =
+          'https://${fapiUrl.replace("clerk.", "")}' +
+          '/sign-in?redirect_url=' + encodeURIComponent(window.location.href);
+      }
       return;
     }
 
