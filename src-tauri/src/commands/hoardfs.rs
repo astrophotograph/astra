@@ -3,7 +3,7 @@
 //! Import, variant serving, and content-addressed storage operations.
 
 use base64::prelude::*;
-use hoardfs_core::Quality;
+use hoardfs_core::{ExternalLocationType, ExternalRef, Quality};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{AppHandle, Emitter, State};
@@ -31,13 +31,17 @@ struct ImportProgressEvent {
     status: String,
 }
 
-/// Import images from a directory into HoardFS with automatic variant generation.
+/// Import images from a directory as external references in HoardFS.
 ///
+/// Originals stay on disk (NAS, external drive, etc.) — not duplicated.
 /// Each imported image gets:
-/// - A blob in HoardFS (content-addressed, deduplicated)
-/// - Thumbnail and preview variants (auto-generated)
+/// - An external reference in HoardFS (tracks location + content hash)
+/// - Locally cached thumbnail and preview variants (always available)
 /// - An Astra image record with blob_id set
 /// - Optional collection association
+///
+/// When the source is offline, thumbnails and previews are still served
+/// from the local HoardFS variant cache.
 #[tauri::command]
 pub async fn import_images_hoardfs(
     app: AppHandle,
@@ -116,25 +120,34 @@ pub async fn import_images_hoardfs(
         let relative = file_path.strip_prefix(source).unwrap_or(file_path);
         let hfs_path = format!("{}/{}", hfs_prefix, relative.to_string_lossy());
 
-        // Import into HoardFS with variant generation
-        // Use spawn_blocking because HoardFs is not Send (rusqlite::Connection).
-        // Inside the blocking task, use a tokio runtime handle for async HoardFS ops.
+        // Register as external reference — original stays on disk, only variants cached locally.
+        // Uses spawn_blocking because HoardFs contains rusqlite (not Send).
         let hfs_clone = hoardfs_arc.clone();
         let hfs_path_clone = hfs_path.clone();
-        let file_path_clone = file_path.clone();
+        let abs_path = std::fs::canonicalize(file_path)
+            .unwrap_or_else(|_| file_path.clone())
+            .to_string_lossy()
+            .to_string();
+        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let rt = tokio::runtime::Handle::current();
         let put_result = tokio::task::spawn_blocking(move || {
+            let external = ExternalRef {
+                location: abs_path,
+                location_type: ExternalLocationType::FilesystemPath,
+                size: file_size,
+                content_hash: None, // register_external computes the hash
+            };
             let hfs = hfs_clone.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
-            let result = rt.block_on(hfs.put_file_from_path_with_variants(
+            let (file_record, _variants) = rt.block_on(hfs.register_external(
                 "default",
                 &hfs_path_clone,
-                &file_path_clone,
-                true,
+                &external,
+                true, // generate variants
             )).map_err(|e| format!("{}", e))?;
             let blob_id = hfs.get_file_info("default", &hfs_path_clone)
                 .ok()
                 .map(|info| info.current_version.blob_id.clone());
-            Ok::<_, String>((result.0, blob_id))
+            Ok::<_, String>((file_record, blob_id))
         }).await
             .map_err(|e| format!("Task panicked: {}", e))?;
 
