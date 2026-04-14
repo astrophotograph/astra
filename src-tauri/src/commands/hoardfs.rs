@@ -422,13 +422,66 @@ pub async fn migrate_images_to_hoardfs(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<MigrationReport, String> {
-    let hoardfs_arc = state.hoardfs.as_ref()
+    let hoardfs = state.hoardfs.as_ref()
         .ok_or("HoardFS is not initialized.")?
         .clone();
+    let db = state.db.clone();
+    let user_id = state.user_id.clone();
+    let rt = tokio::runtime::Handle::current();
+    let progress_app = app.clone();
 
-    // Query all images without blob_id
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let all_images = repository::get_images_by_user(&mut conn, &state.user_id)
+    // The core is synchronous and blocking (it drives HoardFS's async ops via
+    // block_on), so run it off the async executor.
+    let report = tokio::task::spawn_blocking(move || {
+        migrate_library_core(&db, &hoardfs, &rt, &user_id, |current, total, filename| {
+            let _ = progress_app.emit("hoardfs-migration-progress", serde_json::json!({
+                "current": current,
+                "total": total,
+                "filename": filename,
+                "status": "migrating",
+            }));
+        })
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))??;
+
+    let _ = app.emit("hoardfs-migration-progress", serde_json::json!({
+        "current": report.total,
+        "total": report.total,
+        "filename": "",
+        "status": "done",
+    }));
+
+    log::info!(
+        "Migration complete: {}/{} migrated, {} unreachable, {} errors",
+        report.migrated, report.total, report.unreachable, report.errors.len()
+    );
+
+    Ok(report)
+}
+
+/// Core legacy → HoardFS library migration, shared by the Tauri command and the
+/// `migrate_library` standalone binary.
+///
+/// Registers every not-yet-migrated image (`blob_id` NULL, with a `url` or
+/// `fits_url`) as a HoardFS external reference, generating variants. Originals
+/// stay in place. Idempotent — already-migrated images are excluded by the
+/// `blob_id` filter, and unreachable sources are counted and skipped so a later
+/// run picks them up.
+///
+/// Synchronous and blocking: HoardFS async ops are driven via `rt.block_on`, so
+/// a caller running inside an async runtime must invoke this from a blocking
+/// context (e.g. `tokio::task::spawn_blocking`). `on_progress(current, total,
+/// filename)` fires once per image, before it is processed.
+pub fn migrate_library_core(
+    db: &crate::db::DbPool,
+    hoardfs: &std::sync::Arc<std::sync::Mutex<hoardfs_volume::HoardFs>>,
+    rt: &tokio::runtime::Handle,
+    user_id: &str,
+    mut on_progress: impl FnMut(u32, u32, &str),
+) -> Result<MigrationReport, String> {
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let all_images = repository::get_images_by_user(&mut conn, user_id)
         .map_err(|e| e.to_string())?;
     drop(conn);
 
@@ -449,21 +502,11 @@ pub async fn migrate_images_to_hoardfs(
         return Ok(report);
     }
 
-    let user_id = state.user_id.clone();
-
     for (idx, image) in to_migrate.iter().enumerate() {
-        let _ = app.emit("hoardfs-migration-progress", serde_json::json!({
-            "current": idx + 1,
-            "total": total,
-            "filename": &image.filename,
-            "status": "migrating",
-        }));
+        on_progress(idx as u32 + 1, total, &image.filename);
 
         // Prefer fits_url (higher quality source), fall back to url
-        let source_path = image.fits_url.as_ref()
-            .or(image.url.as_ref());
-
-        let Some(source_path) = source_path else {
+        let Some(source_path) = image.fits_url.as_ref().or(image.url.as_ref()) else {
             report.skipped += 1;
             continue;
         };
@@ -475,9 +518,27 @@ pub async fn migrate_images_to_hoardfs(
             continue;
         }
 
-        // Build HoardFS path from image creation date + filename
+        // Build a unique, extension-preserving HoardFS path. The DB `filename`
+        // is often extension-less (e.g. Seestar "Stacked_..." names), which hides
+        // the real file type from HoardFS content-type detection and suppresses
+        // variant generation — so carry the source file's extension. Append the
+        // image id to guarantee uniqueness: duplicate filename+month otherwise
+        // collides on the volume's UNIQUE(volume_id, path) index.
         let date_prefix = image.created_at.format("%Y-%m").to_string();
-        let hfs_path = format!("/{}/{}", date_prefix, image.filename);
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let stem = if !ext.is_empty()
+            && image.filename.to_lowercase().ends_with(&format!(".{}", ext.to_lowercase()))
+        {
+            &image.filename[..image.filename.len() - ext.len() - 1]
+        } else {
+            image.filename.as_str()
+        };
+        let hfs_name = if ext.is_empty() {
+            format!("{stem}__{}", image.id)
+        } else {
+            format!("{stem}__{}.{ext}", image.id)
+        };
+        let hfs_path = format!("/{date_prefix}/{hfs_name}");
 
         let abs_path = std::fs::canonicalize(path)
             .unwrap_or_else(|_| path.to_path_buf())
@@ -485,35 +546,33 @@ pub async fn migrate_images_to_hoardfs(
             .to_string();
         let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
-        let hfs_clone = hoardfs_arc.clone();
-        let hfs_path_clone = hfs_path.clone();
-        let rt = tokio::runtime::Handle::current();
-
-        let result = tokio::task::spawn_blocking(move || {
+        // Register the external reference. The lock is held only across a
+        // synchronous block_on (never an `.await`), so this is safe.
+        let result: Result<Option<String>, String> = (|| {
             let external = ExternalRef {
                 location: abs_path,
                 location_type: ExternalLocationType::FilesystemPath,
                 size: file_size,
                 content_hash: None,
             };
-            let hfs = hfs_clone.lock().map_err(|e| format!("Lock: {}", e))?;
-            let (_file_record, _variants) = rt.block_on(hfs.register_external(
-                "default",
-                &hfs_path_clone,
-                &external,
-                true,
-            )).map_err(|e| format!("{}", e))?;
-            let blob_id = hfs.get_file_info("default", &hfs_path_clone)
+            let hfs = hoardfs.lock().map_err(|e| format!("Lock: {}", e))?;
+            rt.block_on(hfs.register_external("default", &hfs_path, &external, true))
+                .map_err(|e| format!("{}", e))?;
+            Ok(hfs.get_file_info("default", &hfs_path)
                 .ok()
-                .map(|info| info.current_version.blob_id.clone());
-            Ok::<_, String>(blob_id)
-        }).await
-            .map_err(|e| format!("Task: {}", e))?;
+                .map(|info| info.current_version.blob_id.clone()))
+        })();
 
         match result {
             Ok(blob_id) => {
                 // Update the Astra image record with blob_id and hfs metadata
-                let mut conn = state.db.get().map_err(|e| e.to_string())?;
+                let mut conn = match db.get() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        report.errors.push(format!("{}: DB pool: {}", image.filename, e));
+                        continue;
+                    }
+                };
 
                 let mut existing_meta: serde_json::Value = image.metadata.as_ref()
                     .and_then(|m| serde_json::from_str(m).ok())
@@ -541,18 +600,6 @@ pub async fn migrate_images_to_hoardfs(
             }
         }
     }
-
-    let _ = app.emit("hoardfs-migration-progress", serde_json::json!({
-        "current": total,
-        "total": total,
-        "filename": "",
-        "status": "done",
-    }));
-
-    log::info!(
-        "Migration complete: {}/{} migrated, {} unreachable, {} errors",
-        report.migrated, report.total, report.unreachable, report.errors.len()
-    );
 
     Ok(report)
 }

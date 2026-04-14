@@ -15,6 +15,61 @@ pub mod stretch;
 
 use state::AppState;
 
+pub use commands::hoardfs::MigrationReport;
+
+/// Resolve the desktop app's data directory — matches Tauri's `app_data_dir()`
+/// for the `com.erewhon.astra` identifier (e.g. `~/.local/share/com.erewhon.astra`).
+fn default_app_data_dir() -> std::path::PathBuf {
+    dirs::data_dir()
+        .map(|d| d.join("com.erewhon.astra"))
+        .expect("could not resolve a platform data directory")
+}
+
+/// Run the legacy → HoardFS library migration as a one-shot, outside the GUI.
+///
+/// Opens the same SQLite database and HoardFS repository the desktop app uses
+/// (under [`default_app_data_dir`], or `data_dir` when given), wires up the
+/// variant pipeline exactly as the app does, then migrates every pending image.
+/// Idempotent and safe to re-run. Backs the `migrate_library` binary.
+pub fn run_standalone_migration(
+    data_dir: Option<std::path::PathBuf>,
+    on_progress: impl FnMut(u32, u32, &str),
+) -> Result<MigrationReport, String> {
+    let data_dir = data_dir.unwrap_or_else(default_app_data_dir);
+
+    let db_path = data_dir.join("astra.db");
+    if !db_path.exists() {
+        return Err(format!("Astra database not found at {}", db_path.display()));
+    }
+    let db_pool = db::init_database(&db_path).map_err(|e| format!("DB init: {}", e))?;
+
+    let hoardfs_dir = data_dir.join("hoardfs");
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {}", e))?;
+    let handle = rt.handle().clone();
+
+    let mut hfs = handle
+        .block_on(async {
+            match hoardfs_volume::HoardFs::open(&hoardfs_dir).await {
+                Ok(hfs) => Ok(hfs),
+                Err(_) => hoardfs_volume::HoardFs::init(&hoardfs_dir).await,
+            }
+        })
+        .map_err(|e| format!("HoardFS open/init: {}", e))?;
+
+    // Same variant pipeline the GUI configures (image + FITS generators).
+    hfs.set_variant_pipeline(
+        hoardfs_variant::VariantPipeline::new()
+            .with_image_generator()
+            .register(Box::new(fits_variant::FitsVariantGenerator::new())),
+    );
+    let hoardfs = std::sync::Arc::new(std::sync::Mutex::new(hfs));
+
+    commands::hoardfs::migrate_library_core(&db_pool, &hoardfs, &handle, "local-user", on_progress)
+}
+
 /// Get application info
 #[tauri::command]
 fn get_app_info() -> AppInfo {
@@ -95,8 +150,7 @@ pub fn run() {
                     .map(|d| d.join("hoardfs"))
                     .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/astra-hoardfs"));
 
-                let rt = tokio::runtime::Handle::current();
-                match rt.block_on(async {
+                match tauri::async_runtime::block_on(async {
                     match hoardfs_volume::HoardFs::open(&hoardfs_dir).await {
                         Ok(hfs) => Ok(hfs),
                         Err(_) => {
@@ -234,6 +288,9 @@ pub fn run() {
             commands::check_source_health,
             commands::migrate_previews_to_local,
             commands::scan_unimported_files,
+            commands::cancel_unimported_scan,
+            commands::get_image_stats,
+            commands::download_tetra3_db,
             // Target browser commands
             commands::get_targets,
             commands::search_images_by_target,
