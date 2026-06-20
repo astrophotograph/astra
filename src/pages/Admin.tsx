@@ -268,6 +268,11 @@ export default function AdminPage() {
   // Library scan
   const [isScanningLibrary, setIsScanningLibrary] = useState(false);
   const [libraryScanResult, setLibraryScanResult] = useState<Awaited<ReturnType<typeof imageApi.scanUnimportedFiles>> | null>(null);
+  const [imageStats, setImageStats] = useState<{ totalImages: number; stackedImages: number } | null>(null);
+  const [scanScope, setScanScope] = useState<
+    Array<{ path: string; contributingImages: number }>
+  >([]);
+  const [showScanScope, setShowScanScope] = useState(false);
 
   // Location management
   const {
@@ -398,15 +403,26 @@ export default function AdminPage() {
     () => localStorage.getItem("tetra3_db_path") || "",
   );
   const [isDownloadingDb, setIsDownloadingDb] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState("");
+  const [downloadProgress, setDownloadProgress] = useState<{
+    label: string;
+    downloaded: number;
+    total: number;
+  } | null>(null);
   const [downloadedDbs, setDownloadedDbs] = useState<Record<string, boolean>>({});
+  const [scanProgress, setScanProgress] = useState<{
+    filesScanned: number;
+    unimportedFound: number;
+    currentDir: string;
+    dirIndex: number;
+    dirTotal: number;
+  } | null>(null);
 
   // Check which tetra3 databases are already downloaded
   const checkDownloadedDbs = async () => {
     try {
       const { exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
       const results: Record<string, boolean> = {};
-      for (const f of ["tetra3_fov5.rkyv", "tetra3_fov2.rkyv", "tetra3_fov1.rkyv"]) {
+      for (const f of ["tetra3_unified_05_5deg.bin"]) {
         results[f] = await exists(`tetra3/${f}`, { baseDir: BaseDirectory.AppData });
       }
       setDownloadedDbs(results);
@@ -423,6 +439,7 @@ export default function AdminPage() {
     loadAuthSession();
     autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
     checkDownloadedDbs();
+    imageApi.getImageStats().then(setImageStats).catch(console.error);
   }, []);
 
   // Poll auto-import status and listen for events
@@ -447,6 +464,52 @@ export default function AdminPage() {
       clearInterval(interval);
     };
   }, [autoImportConfig.enabled]);
+
+  // Listen for tetra3 download progress events from the Rust backend
+  useEffect(() => {
+    const unlisten = listen<{ filename: string; downloaded: number; total: number }>(
+      "tetra3-download-progress",
+      (event) => {
+        setDownloadProgress((prev) =>
+          prev
+            ? { ...prev, downloaded: event.payload.downloaded, total: event.payload.total }
+            : prev,
+        );
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for unimported-scan progress events from the Rust backend
+  useEffect(() => {
+    const unlisten = listen<{
+      filesScanned: number;
+      unimportedFound: number;
+      currentDir: string;
+      dirIndex: number;
+      dirTotal: number;
+    }>("unimported-scan-progress", (event) => {
+      setScanProgress(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Capture the list of directories the unimported scan is about to walk
+  useEffect(() => {
+    const unlisten = listen<Array<{ path: string; contributingImages: number }>>(
+      "unimported-scan-started",
+      (event) => {
+        setScanScope(event.payload);
+      },
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   const loadAuthSession = async () => {
     try {
@@ -1252,50 +1315,27 @@ export default function AdminPage() {
   const browseTetra3Db = async () => {
     const selected = await open({
       multiple: false,
-      filters: [{ name: "Tetra3 Database", extensions: ["rkyv"] }],
+      filters: [{ name: "Tetra3 Database", extensions: ["bin", "rkyv"] }],
     });
     if (selected) {
       saveTetra3DbPath(selected as string);
     }
   };
 
-  // Download a tetra3 database from astra.gallery
+  // Download a tetra3 database from astra.gallery via Rust (streams to disk, emits progress)
   const downloadTetra3Db = async (filename: string, label: string) => {
     setIsDownloadingDb(true);
-    setDownloadProgress(`Downloading ${label}...`);
+    setDownloadProgress({ label, downloaded: 0, total: 0 });
     try {
-      const url = `https://astra.gallery/downloads/tetra3/${filename}`;
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-
-      const blob = await response.blob();
-      const arrayBuffer = await blob.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-
-      // Save to app data directory
-      const { appDataDir } = await import("@tauri-apps/api/path");
-      const { writeFile, mkdir, exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
-
-      const tetra3Rel = "tetra3";
-      if (!(await exists(tetra3Rel, { baseDir: BaseDirectory.AppData }))) {
-        await mkdir(tetra3Rel, { recursive: true, baseDir: BaseDirectory.AppData });
-      }
-
-      const relPath = `tetra3/${filename}`;
-      await writeFile(relPath, bytes, { baseDir: BaseDirectory.AppData });
-
-      // Store the absolute path for the Rust solver
-      const dir = await appDataDir();
-      const destPath = dir.endsWith("/") ? `${dir}tetra3/${filename}` : `${dir}/tetra3/${filename}`;
-      saveTetra3DbPath(destPath);
-      setDownloadProgress("");
+      const result = await imageApi.downloadTetra3Db(filename);
+      saveTetra3DbPath(result.path);
       await checkDownloadedDbs();
-      toast.success(`Downloaded ${label} (${formatSize(bytes.length)})`);
+      toast.success(`Downloaded ${label} (${formatSize(result.bytes)})`);
     } catch (err) {
       toast.error(`Download failed: ${err}`);
-      setDownloadProgress("");
     } finally {
       setIsDownloadingDb(false);
+      setDownloadProgress(null);
     }
   };
 
@@ -1304,6 +1344,49 @@ export default function AdminPage() {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
+
+  // Run the unimported-files scan, optionally filtered to stacks only
+  const runUnimportedScan = async (stacksOnly: boolean) => {
+    setIsScanningLibrary(true);
+    setScanProgress(null);
+    setScanScope([]);
+    setShowScanScope(false);
+    try {
+      const result = await imageApi.scanUnimportedFiles(undefined, stacksOnly);
+      setLibraryScanResult(result);
+      const label = stacksOnly ? "stacked" : "unimported";
+      if (result.cancelled) {
+        toast.info(
+          `Scan cancelled — ${result.totalFiles} ${label} files found so far.`,
+        );
+      } else if (result.totalFiles === 0) {
+        toast.success(
+          stacksOnly
+            ? "All stacked images on disk are already in the database."
+            : "All images in known directories are already imported.",
+        );
+      } else {
+        toast.info(
+          `Found ${result.totalFiles} ${label} files (${formatSize(result.totalBytes)})`,
+        );
+      }
+      // Refresh stats since the user is likely about to import new images
+      imageApi.getImageStats().then(setImageStats).catch(console.error);
+    } catch (e) {
+      toast.error("Scan failed: " + e);
+    } finally {
+      setIsScanningLibrary(false);
+      setScanProgress(null);
+    }
+  };
+
+  const cancelUnimportedScan = async () => {
+    try {
+      await imageApi.cancelUnimportedScan();
+    } catch (e) {
+      console.error("Cancel failed:", e);
+    }
   };
 
   // Format date
@@ -1780,13 +1863,20 @@ export default function AdminPage() {
                       </div>
                     )}
 
+                    {tetra3DbPath?.toLowerCase().endsWith(".rkyv") && (
+                      <div className="text-xs rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
+                        Your saved database file ends in <code>.rkyv</code>. Tetra3 0.7 changed
+                        the file format to postcard (<code>.bin</code>). Old <code>.rkyv</code>
+                        databases will fail to load — re-download or regenerate as a
+                        <code> .bin</code> file.
+                      </div>
+                    )}
+
                     <div className="space-y-2">
                       <Label className="text-xs text-muted-foreground">Download a database</Label>
                       <div className="grid gap-2">
                         {[
-                          { file: "tetra3_fov5.rkyv", label: "Wide Field (5°)", desc: "142 MB — Refractors, camera lenses" },
-                          { file: "tetra3_fov2.rkyv", label: "Medium Field (2°)", desc: "835 MB — SCTs, longer focal lengths" },
-                          { file: "tetra3_fov1.rkyv", label: "Narrow Field (1°)", desc: "1.5 GB — Seestar, long focal length scopes" },
+                          { file: "tetra3_unified_05_5deg.bin", label: "Unified (0.5°–5°)", desc: "2.6 GB — single multiscale DB covering all common astrophotography FOVs (replaces all per-FOV files)" },
                         ].map(({ file, label, desc }) => (
                           <div key={file} className="flex items-center justify-between p-3 border rounded-md">
                             <div>
@@ -1813,7 +1903,40 @@ export default function AdminPage() {
                         ))}
                       </div>
                       {downloadProgress && (
-                        <p className="text-xs text-muted-foreground">{downloadProgress}</p>
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs text-muted-foreground">
+                            <span>Downloading {downloadProgress.label}…</span>
+                            <span>
+                              {formatSize(downloadProgress.downloaded)}
+                              {downloadProgress.total > 0 && (
+                                <>
+                                  {" / "}
+                                  {formatSize(downloadProgress.total)}
+                                  {" ("}
+                                  {Math.round(
+                                    (downloadProgress.downloaded / downloadProgress.total) * 100,
+                                  )}
+                                  %)
+                                </>
+                              )}
+                            </span>
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full bg-primary transition-[width] duration-150"
+                              style={{
+                                width:
+                                  downloadProgress.total > 0
+                                    ? `${Math.min(
+                                        100,
+                                        (downloadProgress.downloaded / downloadProgress.total) *
+                                          100,
+                                      )}%`
+                                    : "100%",
+                              }}
+                            />
+                          </div>
+                        </div>
                       )}
                     </div>
 
@@ -2515,28 +2638,110 @@ export default function AdminPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <Button
-                  onClick={async () => {
-                    setIsScanningLibrary(true);
-                    try {
-                      const result = await imageApi.scanUnimportedFiles();
-                      setLibraryScanResult(result);
-                      if (result.totalFiles === 0) {
-                        toast.success("All images in known directories are already imported.");
-                      } else {
-                        toast.info(`Found ${result.totalFiles} unimported files (${formatSize(result.totalBytes)})`);
-                      }
-                    } catch (e) {
-                      toast.error("Scan failed: " + e);
-                    } finally {
-                      setIsScanningLibrary(false);
-                    }
-                  }}
-                  disabled={isScanningLibrary}
-                >
-                  <Search className="w-4 h-4 mr-2" />
-                  {isScanningLibrary ? "Scanning..." : "Scan for Unimported Files"}
-                </Button>
+                {imageStats && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-md border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Total images</p>
+                      <p className="text-2xl font-semibold tabular-nums">
+                        {imageStats.totalImages.toLocaleString()}
+                      </p>
+                    </div>
+                    <div className="rounded-md border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">Stacked images</p>
+                      <p className="text-2xl font-semibold tabular-nums">
+                        {imageStats.stackedImages.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => runUnimportedScan(false)}
+                    disabled={isScanningLibrary}
+                  >
+                    <Search className="w-4 h-4 mr-2" />
+                    {isScanningLibrary ? "Scanning..." : "Scan for Unimported Files"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => runUnimportedScan(true)}
+                    disabled={isScanningLibrary}
+                  >
+                    <Search className="w-4 h-4 mr-2" />
+                    Rescan Stacks Only
+                  </Button>
+                </div>
+
+                {isScanningLibrary && scanProgress && (
+                  <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>
+                        Directory {Math.min(scanProgress.dirIndex + 1, scanProgress.dirTotal)}{" "}
+                        of {scanProgress.dirTotal}
+                      </span>
+                      <span>
+                        {scanProgress.filesScanned.toLocaleString()} files scanned ·{" "}
+                        {scanProgress.unimportedFound.toLocaleString()} unimported
+                      </span>
+                    </div>
+                    {scanScope.length > 0 && (
+                      <div className="text-xs">
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                          onClick={() => setShowScanScope((v) => !v)}
+                        >
+                          {showScanScope ? "Hide" : "Show"} scan scope ({scanScope.length}{" "}
+                          {scanScope.length === 1 ? "directory" : "directories"})
+                        </button>
+                        {showScanScope && (
+                          <ul className="mt-1 max-h-48 overflow-y-auto rounded border bg-background/60 p-2 space-y-0.5">
+                            {scanScope.map((d) => (
+                              <li
+                                key={d.path}
+                                className="flex justify-between gap-2 font-mono text-[11px]"
+                                title={d.path}
+                              >
+                                <span className="truncate">{d.path}</span>
+                                <span className="shrink-0 text-muted-foreground tabular-nums">
+                                  {d.contributingImages}{" "}
+                                  {d.contributingImages === 1 ? "image" : "images"}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                    {scanProgress.currentDir && (
+                      <p
+                        className="font-mono text-xs text-muted-foreground truncate"
+                        title={scanProgress.currentDir}
+                      >
+                        {scanProgress.currentDir}
+                      </p>
+                    )}
+                    {scanProgress.dirTotal > 0 && (
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full bg-primary transition-[width] duration-150"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (scanProgress.dirIndex / Math.max(1, scanProgress.dirTotal)) * 100,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                    <div className="flex justify-end">
+                      <Button size="sm" variant="outline" onClick={cancelUnimportedScan}>
+                        Cancel scan
+                      </Button>
+                    </div>
+                  </div>
+                )}
 
                 {libraryScanResult && libraryScanResult.totalFiles > 0 && (
                   <div className="space-y-3">

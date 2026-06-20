@@ -1,7 +1,7 @@
 //! Generate a tetra3 star pattern database for plate solving.
 //!
-//! This utility builds a `.rkyv` database file from a Gaia DR3 star catalog.
-//! The database is used by Astra's built-in tetra3 plate solver.
+//! This utility builds a `.bin` database file (postcard format) from a Gaia DR3
+//! star catalog. The database is used by Astra's built-in tetra3 plate solver.
 //!
 //! # Usage
 //!
@@ -10,18 +10,19 @@
 //!
 //! Then generate the database:
 //!
-//!   cargo run --bin generate_tetra3_db -- --catalog gaia_merged.bin --output tetra3_db.rkyv
+//!   cargo run --bin generate_tetra3_db -- --catalog gaia_merged.bin --output tetra3_db.bin
 //!
 //! Options:
-//!   --catalog <path>     Path to Gaia catalog file (.bin or .csv)
-//!   --output <path>      Output database file (default: tetra3_db.rkyv)
+//!   --catalog <path>     Path to Gaia catalog file (.bin)
+//!   --output <path>      Output database file (default: tetra3_db.bin)
 //!   --max-fov <degrees>  Maximum field of view in degrees (default: 12.0)
 //!   --min-fov <degrees>  Minimum field of view in degrees (default: 0.5)
 //!   --epoch <year>       Proper motion epoch year (default: 2026.0)
 //!
 //! # Presets
 //!
-//!   --preset seestar     Optimized for Seestar S50/S30 (FOV ~0.7-1.3°)
+//!   --preset unified     Single multiscale DB covering all common FOVs (0.5-5°)
+//!   --preset seestar     Optimized for Seestar S50/S30 (FOV 0.5-2°)
 //!   --preset wide        Wide field (FOV 1-12°)
 //!   --preset all         Full range (FOV 0.5-30°, larger database)
 
@@ -31,7 +32,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     let mut catalog_path: Option<String> = None;
-    let mut output_path = "tetra3_db.rkyv".to_string();
+    let mut output_path = "tetra3_db.bin".to_string();
     let mut max_fov: f32 = 12.0;
     let mut min_fov: f32 = 0.5;
     let mut epoch: f64 = 2026.0;
@@ -85,6 +86,11 @@ fn main() {
     // Apply presets
     if let Some(ref p) = preset {
         match p.as_str() {
+            "unified" => {
+                min_fov = 0.5;
+                max_fov = 5.0;
+                log::info!("Using unified preset: FOV 0.5° - 5.0° (single multiscale DB; ~1 GB output, multi-GB RAM)");
+            }
             "seestar" => {
                 min_fov = 0.5;
                 max_fov = 2.0;
@@ -101,7 +107,7 @@ fn main() {
                 log::info!("Using full-range preset: FOV 0.5° - 30.0° (this will take a while)");
             }
             _ => {
-                eprintln!("Unknown preset: {}. Use 'seestar', 'wide', or 'all'.", p);
+                eprintln!("Unknown preset: {}. Use 'unified', 'seestar', 'wide', or 'all'.", p);
                 std::process::exit(1);
             }
         }
@@ -174,12 +180,13 @@ fn print_usage() {
 Generate a tetra3 star pattern database for Astra's built-in plate solver.
 
 OPTIONS:
-  -c, --catalog <path>   Path to Gaia DR3 catalog (.bin or .csv) [required]
-  -o, --output <path>    Output database file [default: tetra3_db.rkyv]
+  -c, --catalog <path>   Path to Gaia DR3 catalog (.bin) [required]
+  -o, --output <path>    Output database file [default: tetra3_db.bin]
   --max-fov <degrees>    Maximum field of view [default: 12.0]
   --min-fov <degrees>    Minimum field of view [default: 0.5]
   --epoch <year>         Proper motion epoch [default: 2026.0]
   -p, --preset <name>    Use a preset configuration:
+                           unified  FOV 0.5-5° (single multiscale DB, ~1 GB)
                            seestar  FOV 0.5-2° (Seestar smart scopes)
                            wide     FOV 1-12° (typical astrophotography)
                            all      FOV 0.5-30° (full range, large DB)

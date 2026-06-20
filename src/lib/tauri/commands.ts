@@ -309,7 +309,7 @@ export const imageApi = {
 
   checkSourceHealth: () => invoke<[string, boolean, number][]>("check_source_health"),
 
-  scanUnimportedFiles: (scanPaths?: string[]) =>
+  scanUnimportedFiles: (scanPaths?: string[], stacksOnly?: boolean) =>
     invoke<{
       directoriesScanned: number;
       totalFiles: number;
@@ -321,9 +321,18 @@ export const imageApi = {
         samples: string[];
         extensions: string[];
       }>;
-    }>("scan_unimported_files", { scanPaths }),
+      cancelled: boolean;
+    }>("scan_unimported_files", { scanPaths, stacksOnly }),
+
+  cancelUnimportedScan: () => invoke<void>("cancel_unimported_scan"),
+
+  getImageStats: () =>
+    invoke<{ totalImages: number; stackedImages: number }>("get_image_stats"),
 
   migratePreviewsToLocal: () => invoke<[number, number]>("migrate_previews_to_local"),
+
+  downloadTetra3Db: (filename: string) =>
+    invoke<{ path: string; bytes: number }>("download_tetra3_db", { filename }),
 };
 
 export const collectionImageApi = {
@@ -698,7 +707,8 @@ export interface PlateSolveInput {
   hintDec?: number;
   /** Hint search radius in degrees (default: 10) */
   hintRadius?: number;
-  /** Path to tetra3 database file (.rkyv) — required for "tetra3" solver */
+  /** Path to tetra3 database file (.bin, postcard format) — required for "tetra3" solver.
+   *  Older .rkyv databases from tetra3 ≤0.5.x will not load. */
   tetra3DbPath?: string;
   /** FOV estimate in degrees for tetra3 solver */
   fovEstimate?: number;

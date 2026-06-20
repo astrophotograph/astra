@@ -38,8 +38,8 @@ pub struct PlateSolveInput {
     pub hint_dec: Option<f64>,
     /// Hint search radius in degrees (default: 10)
     pub hint_radius: Option<f64>,
-    /// Path to tetra3 database file (.rkyv) — required for "tetra3" solver.
-    /// If not specified, will look for "tetra3_database.rkyv" in the app's resource directory.
+    /// Path to tetra3 database file (.bin, postcard format) — required for "tetra3" solver.
+    /// Older .rkyv files from tetra3 ≤0.5.x will not load.
     pub tetra3_db_path: Option<String>,
     /// FOV estimate in degrees for tetra3 solver (horizontal field of view).
     /// If not specified, will be estimated from scale_lower/scale_upper and image dimensions.
@@ -60,12 +60,12 @@ pub struct PlateSolveResponse {
 /// Plate solve an image using the native tetra3rs solver.
 ///
 /// This solver works by:
-/// 1. Loading a pre-built tetra3 star pattern database (.rkyv file)
+/// 1. Loading a pre-built tetra3 star pattern database (.bin, postcard format)
 /// 2. Extracting star centroids from the image (using tetra3's built-in centroid extraction)
 /// 3. Matching star patterns against the database to determine the camera pointing
 ///
-/// The database file must be generated separately using tetra3's database generation tools
-/// (e.g., `SolverDatabase::generate_from_gaia()`) and saved as an .rkyv file.
+/// The database file must be generated separately via `generate_tetra3_db` (or
+/// `tetra3::SolverDatabase::generate_from_gaia()` in your own code).
 fn solve_with_tetra3(
     image_path: &str,
     db_path: &str,
@@ -94,6 +94,7 @@ fn solve_with_tetra3(
         use_8_connectivity: true,
         local_bg_block_size: None,
         max_elongation: None,
+        matched_filter_sigma: None,
     };
 
     // Try loading with the `image` crate first (JPEG, PNG, TIFF).
@@ -108,7 +109,10 @@ fn solve_with_tetra3(
         tetra3::extract_centroids_from_raw(&pixels, w, h, &centroid_config)
             .map_err(|e| format!("Failed to extract centroids from FITS: {}", e))?
     } else {
-        tetra3::extract_centroids(image_path, &centroid_config)
+        // Decode the image ourselves — tetra3 0.7+ no longer ships a path-based wrapper.
+        let img = image::open(image_path)
+            .map_err(|e| format!("Failed to open image '{}': {}", image_path, e))?;
+        tetra3::extract_centroids_from_image(&img, &centroid_config)
             .map_err(|e| format!("Failed to extract star centroids: {}", e))?
     };
 
@@ -451,7 +455,8 @@ pub async fn plate_solve_image(
         // Resolve tetra3 database path
         let db_path = input.tetra3_db_path
             .ok_or_else(|| "tetra3 solver requires a database path (tetra3DbPath). \
-                Generate one with tetra3's SolverDatabase::generate_from_gaia() and \
+                Generate one with the `generate_tetra3_db` binary (or tetra3's \
+                SolverDatabase::generate_from_gaia()) and \
                 save it as an .rkyv file.".to_string())?;
 
         let timeout_ms = input.timeout.map(|t| (t as u64) * 1000);

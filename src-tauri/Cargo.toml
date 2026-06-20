@@ -6,6 +6,7 @@ authors = ["erewhon"]
 license = "AGPL-3.0"
 repository = ""
 edition = "2021"
+rust-version = "1.91.1"
 default-run = "astra"
 
 [lib]
@@ -67,7 +68,7 @@ fitrs = "0.5"
 rayon = "1"
 
 # Native plate solver
-tetra3 = { version = "0.4", features = ["image"] }
+tetra3 = { version = "0.7", features = ["image"] }
 
 # Async trait (for HoardFS VariantGenerator impl)
 async-trait = "0.1"

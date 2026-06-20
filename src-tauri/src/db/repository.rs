@@ -113,6 +113,24 @@ pub fn get_images_by_user(conn: &mut SqliteConnection, user_id: &str) -> QueryRe
         .load(conn)
 }
 
+pub fn count_images_by_user(conn: &mut SqliteConnection, user_id: &str) -> QueryResult<i64> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .count()
+        .get_result(conn)
+}
+
+pub fn count_stacked_images_by_user(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+) -> QueryResult<i64> {
+    images::table
+        .filter(images::user_id.eq(user_id))
+        .filter(images::tags.like("%stacked%"))
+        .count()
+        .get_result(conn)
+}
+
 pub fn get_images_by_collection(
     conn: &mut SqliteConnection,
     collection_id: &str,
