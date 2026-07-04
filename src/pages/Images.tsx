@@ -6,7 +6,6 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -38,7 +37,13 @@ import {
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useImages, imageKeys } from "@/hooks/use-images";
-import { imageApi, plateSolveApi, type Image } from "@/lib/tauri/commands";
+import {
+  imageApi,
+  isTauri,
+  listen,
+  plateSolveApi,
+  type Image,
+} from "@/lib/tauri/commands";
 
 const PAGE_SIZE = 60;
 
@@ -69,8 +74,10 @@ export default function Images() {
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
 
-  // Refresh when auto-import adds new images
+  // Refresh when auto-import adds new images — a desktop-only flow, so on
+  // web there is nothing to listen for and no reason to poll.
   useEffect(() => {
+    if (!isTauri()) return;
     let cancelled = false;
     const unlisten = listen("auto-import-status", (event: any) => {
       if (!cancelled && event.payload?.lastImportCount > 0) {
@@ -286,20 +293,23 @@ export default function Images() {
             {search && ` — ${filtered.length} matching`}
           </p>
         </div>
-        <Button
-          variant={selectMode ? "default" : "outline"}
-          size="sm"
-          onClick={() => {
-            if (selectMode) {
-              clearSelection();
-            } else {
-              setSelectMode(true);
-            }
-          }}
-        >
-          <CheckSquare className="w-4 h-4 mr-2" />
-          {selectMode ? "Done" : "Select"}
-        </Button>
+        {/* Selection only drives regenerate/plate-solve — desktop-only ops. */}
+        {isTauri() && (
+          <Button
+            variant={selectMode ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              if (selectMode) {
+                clearSelection();
+              } else {
+                setSelectMode(true);
+              }
+            }}
+          >
+            <CheckSquare className="w-4 h-4 mr-2" />
+            {selectMode ? "Done" : "Select"}
+          </Button>
+        )}
       </div>
 
       {/* Selection toolbar */}
@@ -411,7 +421,9 @@ export default function Images() {
           <p className="text-gray-400 text-sm mt-1">
             {search
               ? "Try a different search term"
-              : "Import images via bulk scan or auto-import"}
+              : isTauri()
+                ? "Import images via bulk scan or auto-import"
+                : "Push images from the Astra desktop app"}
           </p>
         </div>
       ) : (

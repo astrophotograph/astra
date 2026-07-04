@@ -16,8 +16,15 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { imageApi, plateSolveApi, skymapApi, type CatalogObject, type ProcessImageResponse } from "@/lib/tauri/commands";
-import { listen } from "@tauri-apps/api/event";
+import {
+  imageApi,
+  isTauri,
+  listen,
+  plateSolveApi,
+  skymapApi,
+  type CatalogObject,
+  type ProcessImageResponse,
+} from "@/lib/tauri/commands";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { useSettings } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
@@ -709,7 +716,7 @@ export default function ImageViewerPage() {
               }`}
             />
           </Button>
-          {developerMode && (
+          {developerMode && isTauri() && (
             <Button
               variant="outline"
               size="sm"
@@ -736,7 +743,7 @@ export default function ImageViewerPage() {
               )}
             </Button>
           )}
-          {developerMode && (
+          {developerMode && isTauri() && (
             <Button
               variant="outline"
               size="sm"
@@ -765,7 +772,7 @@ export default function ImageViewerPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {(image?.fits_url || image?.url?.toLowerCase().endsWith('.fit') || image?.url?.toLowerCase().endsWith('.fits')) && (
+              {isTauri() && (image?.fits_url || image?.url?.toLowerCase().endsWith('.fit') || image?.url?.toLowerCase().endsWith('.fits')) && (
                 <>
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger disabled={isRegenerating}>
@@ -1162,8 +1169,8 @@ export default function ImageViewerPage() {
                     </div>
                   )}
 
-                  {/* === Sky Map === */}
-                  {plateSolveInfo && (
+                  {/* === Sky Map === (Python-generated — desktop only) */}
+                  {plateSolveInfo && isTauri() && (
                     <div className="pt-4 border-t">
                       <Button
                         variant="ghost"

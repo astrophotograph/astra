@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { listen } from "@tauri-apps/api/event";
+import { listen } from "@/lib/tauri/commands";
 import { Loader2, MapPin, Search } from "lucide-react";
 import {
   DropdownMenu,
