@@ -4,7 +4,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@/lib/tauri/commands";
 import {
   Dialog,
   DialogContent,

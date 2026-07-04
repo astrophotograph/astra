@@ -5,7 +5,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { toast } from "sonner";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
 import SunCalc from "suncalc";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -68,7 +68,17 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { imageApi, plateSolveApi, scanApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
+import {
+  imageApi,
+  isTauri,
+  listen,
+  plateSolveApi,
+  scanApi,
+  shareApi,
+  type Image,
+  type PublishResult,
+  type PublishStatus,
+} from "@/lib/tauri/commands";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
@@ -304,7 +314,10 @@ export default function CollectionDetailPage() {
     setIsPublishing(true);
     try {
       const result = await runWithProgress(() => shareApi.publish(collection.id));
-      toast.success(`Published! ${result.imagesUploaded} images uploaded`);
+      // On web the library already lives on the daemon — nothing uploads.
+      toast.success(
+        isTauri() ? `Published! ${result.imagesUploaded} images uploaded` : "Published!"
+      );
       setPublishStatus(await shareApi.getPublishStatus(collection.id));
     } catch (e) {
       toast.error("Publish failed: " + e);
@@ -779,7 +792,7 @@ export default function CollectionDetailPage() {
           ) : (
             <>
               {/* Normal mode buttons */}
-              {stackedPaths.length > 0 && !isCatalogCollection && (
+              {isTauri() && stackedPaths.length > 0 && !isCatalogCollection && (
                 <Button
                   variant="outline"
                   className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
@@ -790,7 +803,7 @@ export default function CollectionDetailPage() {
                   Collect Files
                 </Button>
               )}
-              {!isCatalogCollection && collectionImages.length > 0 && (
+              {isTauri() && !isCatalogCollection && collectionImages.length > 0 && (
                 <Button
                   variant="outline"
                   className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
@@ -928,15 +941,17 @@ export default function CollectionDetailPage() {
                     <Plus className="w-4 h-4 mr-2" />
                     Add Image
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                    onClick={handleImportDirectory}
-                    disabled={isImportingDir}
-                  >
-                    <FolderInput className="w-4 h-4 mr-2" />
-                    {isImportingDir ? "Importing..." : "Import Directory"}
-                  </Button>
+                  {isTauri() && (
+                    <Button
+                      variant="outline"
+                      className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                      onClick={handleImportDirectory}
+                      disabled={isImportingDir}
+                    >
+                      <FolderInput className="w-4 h-4 mr-2" />
+                      {isImportingDir ? "Importing..." : "Import Directory"}
+                    </Button>
+                  )}
                 </>
               )}
               <Button
@@ -1445,13 +1460,15 @@ export default function CollectionDetailPage() {
         </div>
       )}
 
-      {/* Collect Files Dialog */}
-      <CollectFilesDialog
-        open={collectDialogOpen}
-        onOpenChange={setCollectDialogOpen}
-        targetName={collection.name}
-        stackedPaths={stackedPaths}
-      />
+      {/* Collect Files Dialog (desktop-only flow — never mounted on web) */}
+      {isTauri() && (
+        <CollectFilesDialog
+          open={collectDialogOpen}
+          onOpenChange={setCollectDialogOpen}
+          targetName={collection.name}
+          stackedPaths={stackedPaths}
+        />
+      )}
 
       {/* Sky Map Sheet */}
       <SkyMapSheet

@@ -4,7 +4,8 @@
 
 import { useState, useEffect } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { listen } from "@/lib/tauri/commands";
 import {
   Dialog,
   DialogContent,
