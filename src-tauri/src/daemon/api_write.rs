@@ -31,11 +31,23 @@ use crate::commands::images::{
     add_image_to_collection_core, delete_image_core, remove_image_from_collection_core,
     update_image_core, UpdateImageInput,
 };
+use crate::commands::schedules::{
+    add_schedule_item_core, create_schedule_core, delete_schedule_core,
+    remove_schedule_item_core, update_schedule_core, CreateScheduleInput, UpdateScheduleInput,
+};
+use crate::commands::todos::{
+    create_todo_core, delete_todo_core, sync_todos_core, update_todo_core, CreateTodoInput,
+    UpdateTodoInput,
+};
+use crate::db::models::ScheduleItem;
 
 /// Map a core error to a response: the cores signal not-owned/missing rows
 /// with "... not found: {id}" strings; everything else is a real failure.
 fn core_error(context: &str, e: String) -> Response {
-    if e.starts_with("Collection not found") || e.starts_with("Image not found") {
+    let is_not_found = ["Collection", "Image", "Todo", "Schedule"]
+        .iter()
+        .any(|kind| e.starts_with(&format!("{kind} not found")));
+    if is_not_found {
         not_found()
     } else {
         internal(context, e)
@@ -215,6 +227,204 @@ pub async fn remove_collection_image(
         Ok(Ok(false)) => not_found(),
         Ok(Err(e)) => core_error("remove_collection_image", e),
         Err(e) => internal("remove_collection_image task", e.to_string()),
+    }
+}
+
+pub async fn create_todo(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Json(input): Json<CreateTodoInput>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || create_todo_core(&db, &user_id, input)).await {
+        Ok(Ok(todo)) => (StatusCode::CREATED, Json(todo)).into_response(),
+        Ok(Err(e)) => internal("create_todo", e),
+        Err(e) => internal("create_todo task", e.to_string()),
+    }
+}
+
+/// `UpdateTodoInput` minus `id` (path-supplied). A body `id` field is
+/// ignored — the path wins.
+#[derive(Debug, Deserialize)]
+pub struct UpdateTodoBody {
+    name: Option<String>,
+    ra: Option<String>,
+    dec: Option<String>,
+    magnitude: Option<String>,
+    size: Option<String>,
+    object_type: Option<String>,
+    completed: Option<bool>,
+    completed_at: Option<String>,
+    goal_time: Option<String>,
+    notes: Option<String>,
+    flagged: Option<bool>,
+    tags: Option<Vec<String>>,
+}
+
+pub async fn update_todo(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateTodoBody>,
+) -> Response {
+    let input = UpdateTodoInput {
+        id,
+        name: body.name,
+        ra: body.ra,
+        dec: body.dec,
+        magnitude: body.magnitude,
+        size: body.size,
+        object_type: body.object_type,
+        completed: body.completed,
+        completed_at: body.completed_at,
+        goal_time: body.goal_time,
+        notes: body.notes,
+        flagged: body.flagged,
+        tags: body.tags,
+    };
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || update_todo_core(&db, &user_id, input)).await {
+        Ok(Ok(todo)) => Json(todo).into_response(),
+        Ok(Err(e)) => core_error("update_todo", e),
+        Err(e) => internal("update_todo task", e.to_string()),
+    }
+}
+
+pub async fn delete_todo(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || delete_todo_core(&db, &user_id, &id)).await {
+        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(false)) => not_found(),
+        Ok(Err(e)) => internal("delete_todo", e),
+        Err(e) => internal("delete_todo task", e.to_string()),
+    }
+}
+
+/// Replace-all sync of the caller's todo list (desktop `sync_todos`).
+pub async fn sync_todos(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Json(todos): Json<Vec<CreateTodoInput>>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || sync_todos_core(&db, &user_id, todos)).await {
+        Ok(Ok(todos)) => Json(todos).into_response(),
+        Ok(Err(e)) => internal("sync_todos", e),
+        Err(e) => internal("sync_todos task", e.to_string()),
+    }
+}
+
+pub async fn create_schedule(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Json(input): Json<CreateScheduleInput>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || create_schedule_core(&db, &user_id, input)).await {
+        Ok(Ok(schedule)) => (StatusCode::CREATED, Json(schedule)).into_response(),
+        Ok(Err(e)) => internal("create_schedule", e),
+        Err(e) => internal("create_schedule task", e.to_string()),
+    }
+}
+
+/// `UpdateScheduleInput` minus `id` (path-supplied). A body `id` field is
+/// ignored — the path wins.
+#[derive(Debug, Deserialize)]
+pub struct UpdateScheduleBody {
+    name: Option<String>,
+    description: Option<String>,
+    scheduled_date: Option<String>,
+    location: Option<String>,
+    items: Option<Vec<ScheduleItem>>,
+    is_active: Option<bool>,
+    equipment_id: Option<String>,
+}
+
+pub async fn update_schedule(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateScheduleBody>,
+) -> Response {
+    let input = UpdateScheduleInput {
+        id,
+        name: body.name,
+        description: body.description,
+        scheduled_date: body.scheduled_date,
+        location: body.location,
+        items: body.items,
+        is_active: body.is_active,
+        equipment_id: body.equipment_id,
+    };
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || update_schedule_core(&db, &user_id, input)).await {
+        Ok(Ok(schedule)) => Json(schedule).into_response(),
+        Ok(Err(e)) => core_error("update_schedule", e),
+        Err(e) => internal("update_schedule task", e.to_string()),
+    }
+}
+
+pub async fn delete_schedule(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || delete_schedule_core(&db, &user_id, &id)).await {
+        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(false)) => not_found(),
+        Ok(Err(e)) => internal("delete_schedule", e),
+        Err(e) => internal("delete_schedule task", e.to_string()),
+    }
+}
+
+/// Returns the updated schedule (desktop `add_schedule_item` semantics —
+/// items are a JSON column, the whole row comes back).
+pub async fn add_schedule_item(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    Json(item): Json<ScheduleItem>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        add_schedule_item_core(&db, &user_id, &id, item)
+    })
+    .await;
+    match result {
+        Ok(Ok(schedule)) => Json(schedule).into_response(),
+        Ok(Err(e)) => core_error("add_schedule_item", e),
+        Err(e) => internal("add_schedule_item task", e.to_string()),
+    }
+}
+
+pub async fn remove_schedule_item(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path((id, item_id)): Path<(String, String)>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        remove_schedule_item_core(&db, &user_id, &id, &item_id)
+    })
+    .await;
+    match result {
+        Ok(Ok(schedule)) => Json(schedule).into_response(),
+        Ok(Err(e)) => core_error("remove_schedule_item", e),
+        Err(e) => internal("remove_schedule_item task", e.to_string()),
     }
 }
 
@@ -429,6 +639,182 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (_, body) = send(&router, &alice, "GET", &format!("/api/collections/{}", coll.id), None).await;
         assert_eq!(json(&body)["images"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn todos_http_round_trip_sync_and_isolation() {
+        let (state, _tmp, alice, bob) = state_with_users().await;
+        let router = crate::daemon::router(state.clone());
+        let todo_json = serde_json::json!({
+            "name": "M42", "ra": "05h 35m", "dec": "-05° 27′",
+            "magnitude": "4.0", "size": "65'", "object_type": "nebula",
+            "goal_time": null, "notes": null, "tags": ["winter"]
+        });
+
+        let (status, body) = send(&router, &alice, "POST", "/api/todos", Some(todo_json.clone())).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let created = json(&body);
+        assert_eq!(created["name"], "M42");
+        assert_eq!(created["completed"], false);
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let (status, body) = send(
+            &router,
+            &alice,
+            "PATCH",
+            &format!("/api/todos/{id}"),
+            Some(serde_json::json!({ "completed": true, "flagged": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["completed"], true);
+
+        // Cross-user: bob can't read, patch, or delete alice's todo.
+        let (status, _) = send(&router, &bob, "GET", &format!("/api/todos/{id}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send(
+            &router,
+            &bob,
+            "PATCH",
+            &format!("/api/todos/{id}"),
+            Some(serde_json::json!({ "name": "hijacked" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = send(&router, &bob, "DELETE", &format!("/api/todos/{id}"), None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Sync replaces alice's list wholesale; bob's list stays empty of hers.
+        let mut second = todo_json.clone();
+        second["name"] = serde_json::json!("M45");
+        let (status, body) = send(
+            &router,
+            &alice,
+            "POST",
+            "/api/todos/sync",
+            Some(serde_json::json!([todo_json, second])),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body).as_array().unwrap().len(), 2);
+        let (_, body) = send(&router, &alice, "GET", "/api/todos", None).await;
+        assert_eq!(json(&body).as_array().unwrap().len(), 2);
+        let (_, body) = send(&router, &bob, "GET", "/api/todos", None).await;
+        assert_eq!(json(&body).as_array().unwrap().len(), 0);
+
+        // Delete one of the synced todos.
+        let (_, body) = send(&router, &alice, "GET", "/api/todos", None).await;
+        let target = json(&body)[0]["id"].as_str().unwrap().to_string();
+        let (status, _) = send(&router, &alice, "DELETE", &format!("/api/todos/{target}"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, body) = send(&router, &alice, "GET", "/api/todos", None).await;
+        assert_eq!(json(&body).as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn schedules_http_round_trip_items_and_isolation() {
+        let (state, _tmp, alice, bob) = state_with_users().await;
+        let router = crate::daemon::router(state.clone());
+
+        let (status, body) = send(
+            &router,
+            &alice,
+            "POST",
+            "/api/schedules",
+            Some(serde_json::json!({
+                "name": "July new moon", "description": null, "scheduled_date": null,
+                "location": null, "is_active": true, "equipment_id": null
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let created = json(&body);
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["is_active"], true);
+
+        let (status, body) = send(&router, &alice, "GET", "/api/schedules/active", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body).as_array().unwrap().len(), 1);
+
+        // Items: add two out of order, verify sort, remove one.
+        let item = |item_id: &str, start: &str| {
+            serde_json::json!({
+                "id": item_id, "todo_id": format!("todo-{item_id}"), "object_name": "M42",
+                "start_time": start, "end_time": "23:59", "priority": 1,
+                "notes": null, "completed": false
+            })
+        };
+        let (status, _) = send(
+            &router,
+            &alice,
+            "POST",
+            &format!("/api/schedules/{id}/items"),
+            Some(item("b", "22:00")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = send(
+            &router,
+            &alice,
+            "POST",
+            &format!("/api/schedules/{id}/items"),
+            Some(item("a", "21:00")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let items: Vec<serde_json::Value> =
+            serde_json::from_str(json(&body)["items"].as_str().unwrap()).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], "a");
+
+        let (status, body) = send(
+            &router,
+            &alice,
+            "DELETE",
+            &format!("/api/schedules/{id}/items/b"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let items: Vec<serde_json::Value> =
+            serde_json::from_str(json(&body)["items"].as_str().unwrap()).unwrap();
+        assert_eq!(items.len(), 1);
+
+        // Cross-user: every schedule route 404s for bob.
+        for (method, uri, body) in [
+            ("GET", format!("/api/schedules/{id}"), None),
+            (
+                "PATCH",
+                format!("/api/schedules/{id}"),
+                Some(serde_json::json!({ "name": "hijacked" })),
+            ),
+            (
+                "POST",
+                format!("/api/schedules/{id}/items"),
+                Some(item("x", "20:00")),
+            ),
+            ("DELETE", format!("/api/schedules/{id}/items/a"), None),
+            ("DELETE", format!("/api/schedules/{id}"), None),
+        ] {
+            let (status, _) = send(&router, &bob, method, &uri, body).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri} should 404 for bob");
+        }
+
+        // Owner PATCH deactivates; then delete.
+        let (status, body) = send(
+            &router,
+            &alice,
+            "PATCH",
+            &format!("/api/schedules/{id}"),
+            Some(serde_json::json!({ "is_active": false })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["is_active"], false);
+        let (_, body) = send(&router, &alice, "GET", "/api/schedules/active", None).await;
+        assert!(json(&body).as_array().unwrap().is_empty());
+        let (status, _) = send(&router, &alice, "DELETE", &format!("/api/schedules/{id}"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
     }
 
     #[tokio::test(flavor = "multi_thread")]

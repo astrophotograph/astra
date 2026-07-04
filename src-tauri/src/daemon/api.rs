@@ -30,7 +30,15 @@ use crate::commands::publish::{
     get_publish_status_core, publish_collection_core, unpublish_collection_core,
     PublishVisibility,
 };
+use crate::commands::schedules::{
+    get_active_schedules_core, get_schedule_core, get_schedules_core,
+};
+use crate::commands::targets::{
+    get_images_by_target_core, get_targets_core, search_images_by_target_core,
+};
+use crate::commands::todos::{get_todo_core, get_todos_core};
 use crate::db::models::{Collection, Image};
+use crate::db::repository::TargetWithCount;
 use crate::db::tenancy;
 
 const DEFAULT_PAGE_LIMIT: usize = 100;
@@ -168,6 +176,148 @@ pub async fn get_collection(
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => internal("get_collection", e),
         Err(e) => internal("get_collection task", e.to_string()),
+    }
+}
+
+pub async fn list_todos(State(state): State<Arc<DaemonState>>, user: AuthedUser) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_todos_core(&db, &user_id)).await {
+        Ok(Ok(todos)) => Json(todos).into_response(),
+        Ok(Err(e)) => internal("list_todos", e),
+        Err(e) => internal("list_todos task", e.to_string()),
+    }
+}
+
+pub async fn get_todo(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_todo_core(&db, &user_id, &id)).await {
+        Ok(Ok(Some(todo))) => Json(todo).into_response(),
+        Ok(Ok(None)) => not_found(),
+        Ok(Err(e)) => internal("get_todo", e),
+        Err(e) => internal("get_todo task", e.to_string()),
+    }
+}
+
+pub async fn list_schedules(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_schedules_core(&db, &user_id)).await {
+        Ok(Ok(schedules)) => Json(schedules).into_response(),
+        Ok(Err(e)) => internal("list_schedules", e),
+        Err(e) => internal("list_schedules task", e.to_string()),
+    }
+}
+
+/// The plural active list; a singular consumer takes the first element.
+pub async fn active_schedules(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_active_schedules_core(&db, &user_id)).await {
+        Ok(Ok(schedules)) => Json(schedules).into_response(),
+        Ok(Err(e)) => internal("active_schedules", e),
+        Err(e) => internal("active_schedules task", e.to_string()),
+    }
+}
+
+pub async fn get_schedule(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_schedule_core(&db, &user_id, &id)).await {
+        Ok(Ok(Some(schedule))) => Json(schedule).into_response(),
+        Ok(Ok(None)) => not_found(),
+        Ok(Err(e)) => internal("get_schedule", e),
+        Err(e) => internal("get_schedule task", e.to_string()),
+    }
+}
+
+/// Like image rows, the embedded base64 `latest_thumbnail` is legacy —
+/// clients fetch bytes from `/api/images/{latest_image_id}/thumbnail`.
+fn strip_target_thumbnail(mut target: TargetWithCount) -> TargetWithCount {
+    target.latest_thumbnail = None;
+    target
+}
+
+pub async fn list_targets(State(state): State<Arc<DaemonState>>, user: AuthedUser) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_targets_core(&db, &user_id)).await {
+        Ok(Ok(targets)) => Json(
+            targets
+                .into_iter()
+                .map(strip_target_thumbnail)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
+        Ok(Err(e)) => internal("list_targets", e),
+        Err(e) => internal("list_targets task", e.to_string()),
+    }
+}
+
+/// Target names arrive as query params (`?q=` / `?name=`), not path
+/// segments — names like "Sh2-155 / Cave Nebula" would break path routing.
+#[derive(Debug, Deserialize)]
+pub struct TargetSearchParams {
+    q: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TargetImagesParams {
+    name: String,
+}
+
+pub async fn target_search(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Query(params): Query<TargetSearchParams>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        search_images_by_target_core(&db, &user_id, &params.q)
+    })
+    .await;
+    match result {
+        Ok(Ok(images)) => {
+            Json(images.into_iter().map(strip_thumbnail).collect::<Vec<_>>()).into_response()
+        }
+        Ok(Err(e)) => internal("target_search", e),
+        Err(e) => internal("target_search task", e.to_string()),
+    }
+}
+
+pub async fn target_images(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Query(params): Query<TargetImagesParams>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        get_images_by_target_core(&db, &user_id, &params.name)
+    })
+    .await;
+    match result {
+        Ok(Ok(images)) => {
+            Json(images.into_iter().map(strip_thumbnail).collect::<Vec<_>>()).into_response()
+        }
+        Ok(Err(e)) => internal("target_images", e),
+        Err(e) => internal("target_images task", e.to_string()),
     }
 }
 
@@ -641,6 +791,75 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         let (status, _, _) = get(&router, &alice, &uri, &[]).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn targets_list_search_and_images_scoped_to_owner() {
+        let (state, _tmp, alice, bob, _img) = seeded().await;
+        // Two M 42 shots (one via annotations) and one M 31, all with the
+        // legacy embedded thumbnail set.
+        for (filename, summary, annotations) in [
+            ("m42-a.png", Some("M 42"), None),
+            (
+                "m42-b.png",
+                None,
+                Some(r#"[{"name":"M 42","type":"neb"}]"#),
+            ),
+            ("m31.png", Some("M 31"), None),
+        ] {
+            create_image_core(
+                &state.db,
+                "alice",
+                CreateImageInput {
+                    collection_id: None,
+                    filename: filename.to_string(),
+                    url: None,
+                    summary: summary.map(String::from),
+                    description: None,
+                    content_type: None,
+                    tags: None,
+                    visibility: None,
+                    location: None,
+                    annotations: annotations.map(String::from),
+                    metadata: None,
+                    thumbnail: Some("data:image/jpeg;base64,legacy".to_string()),
+                },
+            )
+            .unwrap();
+        }
+        let router = crate::daemon::router(state.clone());
+
+        let (status, _, body) = get(&router, &alice, "/api/targets", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let targets = json(&body);
+        let m42 = targets
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "M 42")
+            .unwrap();
+        assert_eq!(m42["imageCount"], 2);
+        assert!(m42["latestThumbnail"].is_null());
+
+        let (status, _, body) = get(&router, &alice, "/api/targets/search?q=M%2042", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let hits = json(&body);
+        assert_eq!(hits.as_array().unwrap().len(), 2);
+        assert!(hits[0]["thumbnail"].is_null());
+
+        let (status, _, body) =
+            get(&router, &alice, "/api/targets/images?name=M%2031", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body).as_array().unwrap().len(), 1);
+
+        // Missing query param is a client error, not a 500.
+        let (status, _, _) = get(&router, &alice, "/api/targets/search", &[]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        // Bob sees an empty universe.
+        let (status, _, body) = get(&router, &bob, "/api/targets", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json(&body).as_array().unwrap().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread")]

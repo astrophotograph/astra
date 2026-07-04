@@ -172,6 +172,38 @@ pub fn router(state: Arc<DaemonState>) -> Router {
             axum::routing::put(api_write::add_collection_image)
                 .delete(api_write::remove_collection_image),
         )
+        .route("/todos", get(api::list_todos).post(api_write::create_todo))
+        // Static segments outrank captures, so /sync and /active never
+        // shadow the {id} routes below them.
+        .route("/todos/sync", axum::routing::post(api_write::sync_todos))
+        .route(
+            "/todos/{id}",
+            get(api::get_todo)
+                .patch(api_write::update_todo)
+                .delete(api_write::delete_todo),
+        )
+        .route(
+            "/schedules",
+            get(api::list_schedules).post(api_write::create_schedule),
+        )
+        .route("/schedules/active", get(api::active_schedules))
+        .route(
+            "/schedules/{id}",
+            get(api::get_schedule)
+                .patch(api_write::update_schedule)
+                .delete(api_write::delete_schedule),
+        )
+        .route(
+            "/schedules/{id}/items",
+            axum::routing::post(api_write::add_schedule_item),
+        )
+        .route(
+            "/schedules/{id}/items/{item_id}",
+            axum::routing::delete(api_write::remove_schedule_item),
+        )
+        .route("/targets", get(api::list_targets))
+        .route("/targets/search", get(api::target_search))
+        .route("/targets/images", get(api::target_images))
         .route(
             "/collections/{id}/publish",
             get(api::publish_status)
