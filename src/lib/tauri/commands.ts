@@ -3,9 +3,16 @@
  *
  * This module provides type-safe wrappers around Tauri's invoke function
  * for all backend commands.
+ *
+ * `invoke` comes from `./transport`: real Tauri IPC on desktop, same-origin
+ * fetch against the daemon API in the browser. Commands with no web
+ * equivalent throw `DesktopOnlyError` there — see transport.ts for the
+ * command→route table.
  */
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./transport";
+
+export { DesktopOnlyError, HttpError, isTauri, listen } from "./transport";
 
 // =============================================================================
 // Types
