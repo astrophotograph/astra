@@ -31,6 +31,7 @@
 pub mod api;
 pub mod api_write;
 pub mod auth;
+pub mod webapp;
 pub mod gallery;
 pub mod ingest;
 pub mod oidc;
@@ -43,6 +44,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{Json, Router};
 use diesel::connection::SimpleConnection;
@@ -60,6 +62,9 @@ pub struct DaemonConfig {
     pub data_dir: PathBuf,
     /// Address the HTTP server binds to.
     pub bind: SocketAddr,
+    /// Directory holding the Vite web build (`ASTRA_WEB_DIST`, default
+    /// `{data_dir}/web`). Served under `/app` only when `index.html` exists.
+    pub web_dist: PathBuf,
 }
 
 impl DaemonConfig {
@@ -76,7 +81,14 @@ impl DaemonConfig {
         let bind = bind_str
             .parse()
             .map_err(|e| format!("invalid bind address '{bind_str}': {e}"))?;
-        Ok(Self { data_dir, bind })
+        let web_dist = std::env::var_os("ASTRA_WEB_DIST")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| data_dir.join("web"));
+        Ok(Self {
+            data_dir,
+            bind,
+            web_dist,
+        })
     }
 }
 
@@ -102,6 +114,8 @@ pub struct DaemonState {
 pub struct Daemon {
     state: Arc<DaemonState>,
     listener: tokio::net::TcpListener,
+    /// Some only when the configured dist actually holds a bundle.
+    web_dist: Option<PathBuf>,
 }
 
 impl Daemon {
@@ -112,7 +126,21 @@ impl Daemon {
         let listener = tokio::net::TcpListener::bind(config.bind)
             .await
             .map_err(|e| format!("bind {}: {e}", config.bind))?;
-        Ok(Self { state, listener })
+        let web_dist = if config.web_dist.join("index.html").is_file() {
+            log::info!("serving web app from {}", config.web_dist.display());
+            Some(config.web_dist.clone())
+        } else {
+            log::info!(
+                "no web bundle at {} — /app disabled",
+                config.web_dist.display()
+            );
+            None
+        };
+        Ok(Self {
+            state,
+            listener,
+            web_dist,
+        })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, String> {
@@ -131,7 +159,7 @@ impl Daemon {
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), String> {
         let addr = self.local_addr()?;
-        let app = router(self.state.clone());
+        let app = router_with_web(self.state.clone(), self.web_dist.clone());
         log::info!("astra_daemon listening on http://{addr}");
         axum::serve(self.listener, app)
             .with_graceful_shutdown(shutdown)
@@ -144,8 +172,14 @@ impl Daemon {
 }
 
 /// Build the daemon router. Public so integration tests can drive handlers
-/// against an arbitrary state.
+/// against an arbitrary state. Equivalent to [`router_with_web`] with no
+/// web bundle — the shape every pre-webapp test relies on.
 pub fn router(state: Arc<DaemonState>) -> Router {
+    router_with_web(state, None)
+}
+
+/// [`router`] plus the `/app` static surface when a web bundle exists.
+pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/me", get(me))
         .route("/images", get(api::list_images))
@@ -226,11 +260,13 @@ pub fn router(state: Arc<DaemonState>) -> Router {
             auth::require_auth,
         ))
         // Registered AFTER the auth layer (axum layers wrap only the routes
-        // added before them): logging in is how you obtain credentials.
+        // added before them): logging in is how you obtain credentials, and
+        // the SPA needs issuer/client id before it has any.
         .route(
             "/session",
             axum::routing::post(session::create_session).delete(session::destroy_session),
-        );
+        )
+        .route("/session/config", get(session_config));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -243,7 +279,31 @@ pub fn router(state: Arc<DaemonState>) -> Router {
         .route("/{user}/{slug}/manifest.json", get(gallery::gallery_manifest))
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
+        // `/`, `/app`, `/app/{*path}`, `/auth/callback` — static segments,
+        // so they can never shadow the `/{user}` gallery captures above.
+        .merge(webapp::routes(web_dist))
         .with_state(state)
+}
+
+/// Public OIDC parameters for the SPA login flow (issuer + client id are
+/// visible in every auth redirect anyway). 404 when OIDC is not configured.
+async fn session_config(State(state): State<Arc<DaemonState>>) -> impl IntoResponse {
+    match &state.oidc {
+        Some(oidc) => {
+            let config = oidc.config();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "issuer": config.issuer,
+                    "clientId": config.client_id,
+                })),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "OIDC not configured" })),
+        ),
+    }
 }
 
 /// Open (or create) the database at the resolved data dir and mint a PAT —

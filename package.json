@@ -6,7 +6,9 @@
   "description": "Astronomy Observation Log - Tracks and organizes imaging sessions",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite --mode web --port 5173",
     "build": "tsc && vite build",
+    "build:web": "tsc && vite build --mode web",
     "preview": "pnpm run build && wrangler dev",
     "tauri": "tauri",
     "deploy": "pnpm run build && wrangler deploy"

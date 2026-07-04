@@ -23,6 +23,10 @@ dev *ARGS:
 dev-web:
     pnpm dev
 
+# Browser-app dev server on :5173 (proxies /api to the local daemon)
+dev-app:
+    pnpm dev:web
+
 # Build the desktop binary (release)
 build:
     pnpm tauri build
@@ -30,6 +34,10 @@ build:
 # Build only the React frontend
 build-web:
     pnpm build
+
+# Build the browser bundle the daemon serves under /app (dist-web/)
+build-app:
+    pnpm build:web
 
 # Preview Cloudflare Worker locally (builds first)
 preview:
@@ -60,9 +68,12 @@ verify-variants *ARGS:
 daemon *ARGS:
     cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
 
-# Rebuild the release daemon and (re)install + restart the staging units
+# Rebuild the release daemon + web bundle and (re)install + restart the staging units
 deploy-staging:
     cd src-tauri && cargo build --release --bin astra_daemon
+    pnpm build:web
+    rm -rf ~/.local/share/com.erewhon.astra/web
+    cp -r dist-web ~/.local/share/com.erewhon.astra/web
     mkdir -p ~/.config/systemd/user
     cp deploy/astra-daemon.service deploy/astra-tunnel.service ~/.config/systemd/user/
     systemctl --user daemon-reload

@@ -84,6 +84,12 @@ pub struct OidcVerifier {
 const REFRESH_MIN_INTERVAL: Duration = Duration::from_secs(30);
 
 impl OidcVerifier {
+    /// The issuer + client id this verifier was built with — the SPA login
+    /// flow reads them from `/api/session/config`.
+    pub fn config(&self) -> &OidcConfig {
+        &self.config
+    }
+
     pub fn new(config: OidcConfig) -> Self {
         Self {
             config,
