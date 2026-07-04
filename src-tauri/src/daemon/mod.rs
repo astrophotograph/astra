@@ -33,6 +33,7 @@ pub mod auth;
 pub mod gallery;
 pub mod ingest;
 pub mod oidc;
+pub mod session;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -90,6 +91,8 @@ pub struct DaemonState {
     /// Push-ingest request limits (env: ASTRA_MAX_PUSH_IMAGES,
     /// ASTRA_MAX_ASSET_MB).
     pub limits: ingest::IngestLimits,
+    /// HMAC key for browser session cookies ({data_dir}/session-key).
+    pub session_key: [u8; 32],
 }
 
 /// A daemon that has initialized its backend and bound its listener but is
@@ -170,7 +173,13 @@ pub fn router(state: Arc<DaemonState>) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
-        ));
+        ))
+        // Registered AFTER the auth layer (axum layers wrap only the routes
+        // added before them): logging in is how you obtain credentials.
+        .route(
+            "/session",
+            axum::routing::post(session::create_session).delete(session::destroy_session),
+        );
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -291,11 +300,14 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         limits.max_asset_bytes = mb * 1024 * 1024;
     }
 
+    let session_key = session::load_or_create_session_key(data_dir)?;
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
         oidc,
         limits,
+        session_key,
     })
 }
 
@@ -345,12 +357,32 @@ async fn healthz(State(state): State<Arc<DaemonState>>) -> (StatusCode, Json<Hea
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct MeResponse {
+pub(crate) struct MeResponse {
     user_id: String,
     username: Option<String>,
     display_name: Option<String>,
     role: crate::db::tenancy::UserRole,
     status: String,
+}
+
+/// Blocking: the `/api/me` payload for an authenticated user. Shared by the
+/// `me` handler and the session-login response.
+pub(crate) fn fetch_me(db: &DbPool, user: &auth::AuthedUser) -> Result<MeResponse, String> {
+    use crate::db::schema::users;
+    use diesel::prelude::*;
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let (username, display_name, status) = users::table
+        .find(&user.user_id)
+        .select((users::username, users::name, users::status))
+        .first::<(Option<String>, Option<String>, String)>(&mut conn)
+        .map_err(|e| e.to_string())?;
+    Ok(MeResponse {
+        user_id: user.user_id.clone(),
+        username,
+        display_name,
+        role: user.role,
+        status,
+    })
 }
 
 /// Identity of the authenticated caller — the first `/api` route and the
@@ -360,35 +392,17 @@ async fn me(
     user: auth::AuthedUser,
 ) -> Result<Json<MeResponse>, StatusCode> {
     let db = state.db.clone();
-    let user_id = user.user_id.clone();
-    let row = tokio::task::spawn_blocking(move || {
-        use crate::db::schema::users;
-        use diesel::prelude::*;
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        users::table
-            .find(&user_id)
-            .select((users::username, users::name, users::status))
-            .first::<(Option<String>, Option<String>, String)>(&mut conn)
-            .map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| {
-        log::error!("me task panicked: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?
-    .map_err(|e| {
-        log::error!("me lookup failed: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let (username, display_name, status) = row;
-    Ok(Json(MeResponse {
-        user_id: user.user_id,
-        username,
-        display_name,
-        role: user.role,
-        status,
-    }))
+    let response = tokio::task::spawn_blocking(move || fetch_me(&db, &user))
+        .await
+        .map_err(|e| {
+            log::error!("me task panicked: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map_err(|e| {
+            log::error!("me lookup failed: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Json(response))
 }
 
 /// Merge WAL frames back into the main database file so a stopped daemon

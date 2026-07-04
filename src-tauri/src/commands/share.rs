@@ -439,6 +439,7 @@ mod tests {
             hoardfs: Arc::new(Mutex::new(hfs)),
             oidc: None,
             limits: Default::default(),
+            session_key: [7u8; 32],
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

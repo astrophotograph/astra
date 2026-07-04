@@ -516,6 +516,7 @@ mod tests {
             hoardfs: Arc::new(Mutex::new(hfs)),
             oidc: None,
             limits,
+            session_key: [7u8; 32],
         });
         (state, tmp, alice, bob)
     }

@@ -198,20 +198,78 @@ fn forbidden(message: &str) -> Response {
         .into_response()
 }
 
+/// Blocking: map a session cookie's user id to an active AuthedUser. The
+/// cookie is signature-checked by the caller; this re-checks user status on
+/// every request so disabling a user kills live sessions immediately.
+pub fn authenticate_session_user(db: &DbPool, user_id: &str) -> Result<AuthedUser, AuthError> {
+    let mut conn = db.get().map_err(|e| AuthError::Db(e.to_string()))?;
+    let row: Option<(String, String)> = users::table
+        .find(user_id)
+        .select((users::role, users::status))
+        .first(&mut conn)
+        .optional()
+        .map_err(|e| AuthError::Db(e.to_string()))?;
+    let (role, status) = row.ok_or(AuthError::InvalidToken)?;
+    match UserStatus::parse(&status) {
+        Ok(UserStatus::Active) => {}
+        Ok(_) => return Err(AuthError::InactiveUser),
+        Err(e) => return Err(AuthError::Db(e)),
+    }
+    Ok(AuthedUser {
+        user_id: user_id.to_string(),
+        role: UserRole::parse(&role).map_err(AuthError::Db)?,
+    })
+}
+
 /// Default-deny middleware for the `/api` subtree: authenticates the bearer
 /// credential and inserts [`AuthedUser`]. Routes under this layer cannot
 /// skip authentication.
 ///
-/// Two credential types share the header: personal access tokens carry the
-/// `astra_` prefix; anything else is treated as an OIDC JWT and rejected
-/// unless the daemon has OIDC configured.
+/// Three credential types: personal access tokens carry the `astra_` bearer
+/// prefix; other bearer values are OIDC JWTs (rejected unless OIDC is
+/// configured); with no Authorization header, the `astra_session` cookie
+/// (see [`super::session`]) is checked last.
 pub async fn require_auth(
     State(state): State<Arc<DaemonState>>,
     mut req: Request,
     next: Next,
 ) -> Response {
     let Some(token) = bearer_token(req.headers()).map(str::to_owned) else {
-        return unauthorized();
+        // No bearer header — fall back to the browser session cookie.
+        let Some(cookie) = super::session::cookie_from_headers(req.headers()) else {
+            return unauthorized();
+        };
+        let Some(user_id) = super::session::verify_cookie_value(
+            &state.session_key,
+            &cookie,
+            chrono::Utc::now().timestamp(),
+        ) else {
+            log::debug!("session cookie rejected (bad signature or expired)");
+            return unauthorized();
+        };
+        let db = state.db.clone();
+        return match tokio::task::spawn_blocking(move || {
+            authenticate_session_user(&db, &user_id)
+        })
+        .await
+        {
+            Ok(Ok(user)) => {
+                req.extensions_mut().insert(user);
+                next.run(req).await
+            }
+            Ok(Err(AuthError::Db(e))) => {
+                log::error!("session auth backend error: {e}");
+                server_error()
+            }
+            Ok(Err(reason)) => {
+                log::debug!("session auth rejected: {reason:?}");
+                unauthorized()
+            }
+            Err(e) => {
+                log::error!("session auth task panicked: {e}");
+                server_error()
+            }
+        };
     };
 
     let result = if token.starts_with("astra_") {
@@ -303,6 +361,7 @@ mod tests {
             hoardfs: Arc::new(std::sync::Mutex::new(hfs)),
             oidc: None,
             limits: Default::default(),
+            session_key: [7u8; 32],
         });
         (state, tmp)
     }

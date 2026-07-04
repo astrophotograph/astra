@@ -290,17 +290,17 @@ fn activate(
     Ok(())
 }
 
+/// Shared JWT test fixtures (also used by the session-cookie tests).
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_jwt {
     use super::*;
-    use crate::daemon::DaemonState;
-    use crate::db::test_support::test_pool;
     use jsonwebtoken::{encode, EncodingKey, Header};
     use serde::Serialize;
+    use std::collections::HashMap;
 
     // Test-only RSA keypair — a fixture, not a secret. Never used outside
     // these tests.
-    const TEST_RSA_PEM: &str = "-----BEGIN PRIVATE KEY-----
+    pub(crate) const TEST_RSA_PEM: &str = "-----BEGIN PRIVATE KEY-----
 MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQChIiv+QD/95zl7
 zQW/fAK7XszxoAJmFDLY9nzAJEjTh8fi5zlNL1LK9RUEp72WvogOATerHtLqtKtI
 tIIMYUxQ95RKBqEh36su7Fs9/BKvZn1pBbrEsyYyCRhzoAs/2ohJZ4aatvjFiEuW
@@ -328,24 +328,24 @@ GYCJllo6UXusE+dGKxl5n9Vvr2fTw2MEctPkzDLMSls3SP0O9dNb5TTxaqRF3D7Z
 m0tIumDYhGoHXh/eyEFNnhL5ECvMe0mxjMZsvyov7kpAdo1+1DZDtLMUAbUx3uhy
 i4Dfn7SyS3H/p6KNDaJ+Xg==
 -----END PRIVATE KEY-----";
-    const TEST_N: &str = "oSIr_kA__ec5e80Fv3wCu17M8aACZhQy2PZ8wCRI04fH4uc5TS9SyvUVBKe9lr6IDgE3qx7S6rSrSLSCDGFMUPeUSgahId-rLuxbPfwSr2Z9aQW6xLMmMgkYc6ALP9qISWeGmrb4xYhLlosSmTPiD-4AUco5P23V4MoqLbAmSmT7zrlfHw4c029EIe3WDWbFP5w5XUqcoCVkzUNccGomKmQ3GKORuc0fLm2JPAZLeSTFV26s-qyxqtucz6PHVzDeZYyLfxKr33P9VmIlZqsdRwv1e4as14vLYf20g6VbqKDZ-q5VK1i0xn3tXbdXZfgwF8fqA3miUAty3u4wtkKNvw";
-    const TEST_E: &str = "AQAB";
-    const ISSUER: &str = "https://auth.test";
-    const CLIENT_ID: &str = "astra-test";
+    pub(crate) const TEST_N: &str = "oSIr_kA__ec5e80Fv3wCu17M8aACZhQy2PZ8wCRI04fH4uc5TS9SyvUVBKe9lr6IDgE3qx7S6rSrSLSCDGFMUPeUSgahId-rLuxbPfwSr2Z9aQW6xLMmMgkYc6ALP9qISWeGmrb4xYhLlosSmTPiD-4AUco5P23V4MoqLbAmSmT7zrlfHw4c029EIe3WDWbFP5w5XUqcoCVkzUNccGomKmQ3GKORuc0fLm2JPAZLeSTFV26s-qyxqtucz6PHVzDeZYyLfxKr33P9VmIlZqsdRwv1e4as14vLYf20g6VbqKDZ-q5VK1i0xn3tXbdXZfgwF8fqA3miUAty3u4wtkKNvw";
+    pub(crate) const TEST_E: &str = "AQAB";
+    pub(crate) const ISSUER: &str = "https://auth.test";
+    pub(crate) const CLIENT_ID: &str = "astra-test";
 
     #[derive(Serialize)]
-    struct TestClaims {
-        sub: String,
-        iss: String,
-        aud: String,
-        exp: i64,
+    pub(crate) struct TestClaims {
+        pub(crate) sub: String,
+        pub(crate) iss: String,
+        pub(crate) aud: String,
+        pub(crate) exp: i64,
         #[serde(skip_serializing_if = "Option::is_none")]
-        email: Option<String>,
+        pub(crate) email: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        preferred_username: Option<String>,
+        pub(crate) preferred_username: Option<String>,
     }
 
-    fn verifier() -> OidcVerifier {
+    pub(crate) fn verifier() -> OidcVerifier {
         let mut keys = HashMap::new();
         keys.insert(
             "test-key".to_string(),
@@ -360,7 +360,7 @@ i4Dfn7SyS3H/p6KNDaJ+Xg==
         )
     }
 
-    fn sign(claims: &TestClaims, kid: &str) -> String {
+    pub(crate) fn sign(claims: &TestClaims, kid: &str) -> String {
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some(kid.to_string());
         encode(
@@ -371,7 +371,11 @@ i4Dfn7SyS3H/p6KNDaJ+Xg==
         .unwrap()
     }
 
-    fn valid_claims(sub: &str, email: Option<&str>, username: Option<&str>) -> TestClaims {
+    pub(crate) fn valid_claims(
+        sub: &str,
+        email: Option<&str>,
+        username: Option<&str>,
+    ) -> TestClaims {
         TestClaims {
             sub: sub.to_string(),
             iss: ISSUER.to_string(),
@@ -381,6 +385,14 @@ i4Dfn7SyS3H/p6KNDaJ+Xg==
             preferred_username: username.map(str::to_string),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_jwt::*;
+    use super::*;
+    use crate::daemon::DaemonState;
+    use crate::db::test_support::test_pool;
 
     async fn test_state(with_oidc: bool) -> (Arc<DaemonState>, tempfile::TempDir) {
         let tmp = tempfile::tempdir().unwrap();
@@ -392,6 +404,7 @@ i4Dfn7SyS3H/p6KNDaJ+Xg==
             hoardfs: Arc::new(Mutex::new(hfs)),
             oidc: with_oidc.then(|| Arc::new(verifier())),
             limits: Default::default(),
+            session_key: [7u8; 32],
         });
         (state, tmp)
     }
