@@ -34,6 +34,10 @@ fn print_help() {
          \x20 --mint-token <user> <name>\n\
          \x20                      Mint a personal access token and exit (printed once, never stored)\n\
          \x20 -h, --help           Show this help\n\n\
+         ENVIRONMENT:\n\
+         \x20 ASTRA_OIDC_ISSUER    OIDC issuer (e.g. https://auth.bcc.sh); with\n\
+         \x20 ASTRA_OIDC_CLIENT_ID the Zitadel app client id, enables JWT sessions.\n\
+         \x20                      Unset: only personal access tokens authenticate.\n\n\
          Endpoints:\n\
          \x20 GET /healthz         Version plus DB and HoardFS status (public)\n\
          \x20 GET /api/me          Identity of the authenticated caller (bearer token)"

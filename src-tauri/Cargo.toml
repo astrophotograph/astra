@@ -55,6 +55,9 @@ axum = "0.8"
 # Random token secrets (daemon PATs)
 getrandom = "0.3"
 
+# OIDC JWT validation (Zitadel sessions)
+jsonwebtoken = "9"
+
 # Crypto (for S3 signing)
 hmac = "0.12"
 hex = "0.4"

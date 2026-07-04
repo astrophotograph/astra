@@ -29,6 +29,7 @@
 //! pages — nothing else.
 
 pub mod auth;
+pub mod oidc;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -80,6 +81,9 @@ pub struct DaemonState {
     /// Same locking discipline as the desktop app's `AppState`: the lock must
     /// NOT be held across `.await` points (rusqlite::Connection is not Sync).
     pub hoardfs: Arc<Mutex<hoardfs_volume::HoardFs>>,
+    /// OIDC session verification (Zitadel). None → only PATs authenticate.
+    /// Configured via `ASTRA_OIDC_ISSUER` + `ASTRA_OIDC_CLIENT_ID`.
+    pub oidc: Option<Arc<oidc::OidcVerifier>>,
 }
 
 /// A daemon that has initialized its backend and bound its listener but is
@@ -212,9 +216,27 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
             .register(Box::new(crate::fits_variant::FitsVariantGenerator::new())),
     );
 
+    let oidc = match (
+        std::env::var("ASTRA_OIDC_ISSUER"),
+        std::env::var("ASTRA_OIDC_CLIENT_ID"),
+    ) {
+        (Ok(issuer), Ok(client_id)) if !issuer.is_empty() && !client_id.is_empty() => {
+            log::info!("OIDC sessions enabled (issuer: {issuer})");
+            Some(Arc::new(oidc::OidcVerifier::new(oidc::OidcConfig {
+                issuer,
+                client_id,
+            })))
+        }
+        _ => {
+            log::info!("OIDC not configured — only personal access tokens authenticate");
+            None
+        }
+    };
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
+        oidc,
     })
 }
 

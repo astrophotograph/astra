@@ -49,6 +49,9 @@ pub enum AuthError {
     InvalidToken,
     /// Token is valid but the user is not active (invited/disabled).
     InactiveUser,
+    /// Authenticated but not allowed — 403 with a friendly message
+    /// (e.g. "invite required" from OIDC provisioning).
+    Forbidden(&'static str),
     /// Backend failure — surfaces as 500, not 401.
     Db(String),
 }
@@ -187,9 +190,21 @@ fn server_error() -> Response {
         .into_response()
 }
 
+fn forbidden(message: &str) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": "forbidden", "message": message })),
+    )
+        .into_response()
+}
+
 /// Default-deny middleware for the `/api` subtree: authenticates the bearer
-/// token and inserts [`AuthedUser`]. Routes under this layer cannot skip
-/// authentication.
+/// credential and inserts [`AuthedUser`]. Routes under this layer cannot
+/// skip authentication.
+///
+/// Two credential types share the header: personal access tokens carry the
+/// `astra_` prefix; anything else is treated as an OIDC JWT and rejected
+/// unless the daemon has OIDC configured.
 pub async fn require_auth(
     State(state): State<Arc<DaemonState>>,
     mut req: Request,
@@ -199,12 +214,35 @@ pub async fn require_auth(
         return unauthorized();
     };
 
-    let db = state.db.clone();
-    match tokio::task::spawn_blocking(move || authenticate(&db, &token)).await {
+    let result = if token.starts_with("astra_") {
+        let db = state.db.clone();
+        tokio::task::spawn_blocking(move || authenticate(&db, &token)).await
+    } else if let Some(oidc) = state.oidc.clone() {
+        match oidc.verify(&token).await {
+            Ok(claims) => {
+                let db = state.db.clone();
+                let hoardfs = state.hoardfs.clone();
+                tokio::task::spawn_blocking(move || {
+                    super::oidc::resolve_user(&db, &hoardfs, &claims)
+                })
+                .await
+            }
+            Err(reason) => {
+                log::debug!("OIDC token rejected: {reason}");
+                return unauthorized();
+            }
+        }
+    } else {
+        log::debug!("JWT presented but OIDC is not configured");
+        return unauthorized();
+    };
+
+    match result {
         Ok(Ok(user)) => {
             req.extensions_mut().insert(user);
             next.run(req).await
         }
+        Ok(Err(AuthError::Forbidden(message))) => forbidden(message),
         Ok(Err(AuthError::Db(e))) => {
             log::error!("auth backend error: {e}");
             server_error()
@@ -263,6 +301,7 @@ mod tests {
         let state = Arc::new(DaemonState {
             db: test_pool(),
             hoardfs: Arc::new(std::sync::Mutex::new(hfs)),
+            oidc: None,
         });
         (state, tmp)
     }
