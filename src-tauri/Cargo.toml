@@ -85,6 +85,11 @@ tetra3 = { version = "0.7", features = ["image"] }
 # Async trait (for HoardFS VariantGenerator impl)
 async-trait = "0.1"
 
+# Social-platform primitives (graph, subscriptions, notifications) — the
+# daemon stores kith data in its own Diesel pool, so kith's `sqlite`
+# feature stays off
+kith = { path = "../../kith" }
+
 # Content-addressed image storage with quality variants
 hoardfs-core = { path = "../../hoardfs/crates/hoardfs-core" }
 hoardfs-volume = { path = "../../hoardfs/crates/hoardfs-volume" }

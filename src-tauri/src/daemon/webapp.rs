@@ -8,7 +8,8 @@
 //! Routes (merged into the daemon router ahead of nothing — axum static
 //! segments already outrank the `/{user}` gallery captures, and `/api`,
 //! `/healthz` are their own trees):
-//!   - `/`               → redirect to `/app` when a bundle is present
+//!   - `/`               → the public marketing landing (`landing.html`);
+//!     falls back to a `/app` redirect for bundles built before it existed
 //!   - `/app`, `/app/{*path}` → file if it exists, else `index.html` for
 //!     extensionless paths (SPA client routes); dotted paths 404
 //!   - `/auth/callback`  → `index.html` (the registered OIDC redirect URI
@@ -38,12 +39,7 @@ where
             "/",
             get(move || {
                 let dist = root.clone();
-                async move {
-                    match dist {
-                        Some(_) => Redirect::temporary("/app").into_response(),
-                        None => not_found(),
-                    }
-                }
+                async move { serve_landing(dist.as_deref()).await }
             }),
         )
         .route(
@@ -71,6 +67,19 @@ where
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
+}
+
+/// The public marketing landing at `/`. `landing.html` ships in the web
+/// bundle (Vite copies `public/landing.html` verbatim); it revalidates every
+/// load so copy edits show up on the next deploy without a cache bust. A
+/// bundle built before the landing existed has no such file — fall back to
+/// the old behaviour and redirect into the app.
+async fn serve_landing(dist: Option<&PathBuf>) -> Response {
+    let Some(dist) = dist else { return not_found() };
+    match tokio::fs::read(dist.join("landing.html")).await {
+        Ok(bytes) => file_response(bytes, "text/html; charset=utf-8", "no-cache"),
+        Err(_) => Redirect::temporary("/app").into_response(),
+    }
 }
 
 /// `index.html` must revalidate every load — it names the hashed bundles.
@@ -228,7 +237,8 @@ mod tests {
         let (status, _, _) = get(&router, "/app/assets/missing.js").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        // OIDC callback serves the SPA; root redirects into it.
+        // OIDC callback serves the SPA. With no landing.html in this bundle,
+        // `/` falls back to redirecting into the app.
         let (status, _, body) = get(&router, "/auth/callback").await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("astra-web"));
@@ -244,6 +254,27 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::TEMPORARY_REDIRECT);
         assert_eq!(resp.headers().get(header::LOCATION).unwrap(), "/app");
+    }
+
+    #[tokio::test]
+    async fn serves_landing_at_root_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_bundle(tmp.path());
+        std::fs::write(tmp.path().join("landing.html"), "<html>astra-landing</html>").unwrap();
+        let router = app(Some(tmp.path().to_path_buf()));
+
+        // `/` serves the marketing landing, not the app bundle, and must
+        // revalidate so copy edits land on the next deploy.
+        let (status, cache, body) = get(&router, "/").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("astra-landing"));
+        assert!(!body.contains("astra-web"));
+        assert_eq!(cache.as_deref(), Some("no-cache"));
+
+        // The app still lives at /app.
+        let (status, _, body) = get(&router, "/app").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("astra-web"));
     }
 
     #[tokio::test]

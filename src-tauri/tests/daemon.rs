@@ -9,6 +9,7 @@ async fn daemon_boots_serves_healthz_and_shuts_down() {
     let config = DaemonConfig {
         data_dir: tmp.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
+        web_dist: tmp.path().join("web"),
     };
 
     // Fresh dir: exercises DB creation + migrations and HoardFS init.
@@ -54,6 +55,7 @@ async fn daemon_auth_gates_api_routes_end_to_end() {
     let config = DaemonConfig {
         data_dir: tmp.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
+        web_dist: tmp.path().join("web"),
     };
 
     let daemon = Daemon::bind(&config).await.expect("daemon bind");

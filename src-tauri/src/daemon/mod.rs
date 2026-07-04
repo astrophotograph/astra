@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use diesel::connection::SimpleConnection;
@@ -266,7 +266,9 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/session",
             axum::routing::post(session::create_session).delete(session::destroy_session),
         )
-        .route("/session/config", get(session_config));
+        .route("/session/config", get(session_config))
+        // Public discovery for the marketing landing — recent public galleries.
+        .route("/galleries/recent", get(recent_galleries));
 
     Router::new()
         .route("/healthz", get(healthz))
@@ -283,6 +285,34 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         // so they can never shadow the `/{user}` gallery captures above.
         .merge(webapp::routes(web_dist))
         .with_state(state)
+}
+
+/// Public discovery: the most recent public galleries, feeding the landing
+/// page's community strip. No auth — it only ever exposes already-public
+/// galleries, and never unlisted ones.
+async fn recent_galleries(State(state): State<Arc<DaemonState>>) -> Response {
+    let db = state.db.clone();
+    let result =
+        tokio::task::spawn_blocking(move || crate::commands::publish::list_recent_public_core(&db, 12))
+            .await;
+    match result {
+        Ok(Ok(items)) => {
+            let mut response = Json(items).into_response();
+            response.headers_mut().insert(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("public, max-age=60"),
+            );
+            response
+        }
+        Ok(Err(e)) => {
+            log::error!("recent galleries: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(e) => {
+            log::error!("recent galleries task: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 /// Public OIDC parameters for the SPA login flow (issuer + client id are

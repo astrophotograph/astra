@@ -886,5 +886,21 @@
     "hook_event_name": "Notification",
     "message": "Claude needs your permission to use Bash",
     "notification_type": "permission_prompt"
+  },
+  {
+    "session_id": "0cb86154-ee79-4cb7-9f07-2e438d6b6e0a",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/0cb86154-ee79-4cb7-9f07-2e438d6b6e0a.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
+  },
+  {
+    "session_id": "0cb86154-ee79-4cb7-9f07-2e438d6b6e0a",
+    "transcript_path": "/home/erewhon/.claude/projects/-home-erewhon-Projects-erewhon-astra/0cb86154-ee79-4cb7-9f07-2e438d6b6e0a.jsonl",
+    "cwd": "/home/erewhon/Projects/erewhon/astra/python",
+    "hook_event_name": "Notification",
+    "message": "Claude is waiting for your input",
+    "notification_type": "idle_prompt"
   }
 ]

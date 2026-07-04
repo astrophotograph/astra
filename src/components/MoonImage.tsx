@@ -170,7 +170,7 @@ export function MoonImage({
     >
       {showImage && (
         <img
-          src="/images/moon-small.jpg"
+          src={`${import.meta.env.BASE_URL}images/moon-small.jpg`}
           alt="Moon texture"
           className="absolute z-30 opacity-30 object-contain"
           style={{ height: diameter }}

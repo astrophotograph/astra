@@ -101,6 +101,43 @@ diesel::table! {
 }
 
 diesel::table! {
+    kith_edges (actor_id, target_kind, target_id, edge_kind) {
+        actor_id -> Text,
+        target_kind -> Text,
+        target_id -> Text,
+        edge_kind -> Text,
+        weight -> Double,
+        metadata -> Nullable<Text>,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
+    kith_notifications (id) {
+        id -> Text,
+        recipient_id -> Text,
+        source_id -> Text,
+        entity_kind -> Text,
+        entity_id -> Text,
+        event_kind -> Text,
+        payload_json -> Nullable<Text>,
+        created_at -> Text,
+        read -> Integer,
+    }
+}
+
+diesel::table! {
+    kith_subscriptions (id) {
+        id -> Text,
+        actor_id -> Text,
+        topic_kind -> Text,
+        topic_id -> Text,
+        filter_json -> Nullable<Text>,
+        created_at -> Text,
+    }
+}
+
+diesel::table! {
     observation_schedules (id) {
         id -> Text,
         user_id -> Text,
@@ -189,6 +226,9 @@ diesel::allow_tables_to_appear_in_same_query!(
     collection_images,
     collections,
     images,
+    kith_edges,
+    kith_notifications,
+    kith_subscriptions,
     observation_schedules,
     published_collections,
     scanned_directories,

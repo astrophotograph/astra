@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::collections::fetch_owned_collection;
 use crate::db::models::{Collection, PublishedCollection};
+use crate::db::repository;
 use crate::db::schema::{collections, published_collections, users};
 use crate::db::DbPool;
 
@@ -194,6 +195,67 @@ pub fn list_public_for_user_core(
         .order(published_collections::published_at.desc())
         .load(&mut conn)
         .map_err(|e| e.to_string())
+}
+
+/// A recent public gallery for the landing-page discovery strip.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentGallery {
+    pub username: String,
+    pub slug: String,
+    pub title: String,
+    /// RFC 3339 timestamp of first publish.
+    pub published_at: String,
+    pub image_count: i64,
+    /// Public path to the cover thumbnail, or None for an empty collection.
+    pub thumb_url: Option<String>,
+}
+
+/// The most recently published PUBLIC galleries across all users, newest
+/// first. Unlisted galleries never appear (their URL is the only capability),
+/// and a gallery whose owner has no username is skipped — its `@handle` link
+/// would 404. `limit` caps the strip.
+pub fn list_recent_public_core(db: &DbPool, limit: i64) -> Result<Vec<RecentGallery>, String> {
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+
+    let records: Vec<PublishedCollection> = published_collections::table
+        .filter(published_collections::visibility.eq(PublishVisibility::Public.as_str()))
+        .order(published_collections::published_at.desc())
+        .limit(limit)
+        .load(&mut conn)
+        .map_err(|e| e.to_string())?;
+
+    let mut out = Vec::with_capacity(records.len());
+    for record in records {
+        let username: Option<String> = users::table
+            .find(&record.user_id)
+            .select(users::username)
+            .first::<Option<String>>(&mut conn)
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        let Some(username) = username else { continue };
+
+        let cover = repository::get_collection_cover_image_id(&mut conn, &record.collection_id)
+            .map_err(|e| e.to_string())?;
+        let image_count = repository::get_collection_image_count(&mut conn, &record.collection_id)
+            .map_err(|e| e.to_string())?;
+
+        let thumb_url = cover
+            .as_ref()
+            .map(|id| format!("/@{}/{}/thumbs/{}.jpg", username, record.slug, id));
+
+        out.push(RecentGallery {
+            username,
+            slug: record.slug,
+            title: record.title,
+            published_at: record.published_at.and_utc().to_rfc3339(),
+            image_count,
+            thumb_url,
+        });
+    }
+
+    Ok(out)
 }
 
 /// Resolve `@username/slug` to the publish record and its collection.
@@ -426,6 +488,96 @@ mod tests {
             .is_some());
         // Unknown profile resolves to nothing.
         assert!(list_public_for_user_core(&db, "ghost").unwrap().is_empty());
+    }
+
+    #[test]
+    fn recent_public_lists_across_users_newest_first() {
+        use crate::commands::images::{
+            add_image_to_collection_core, create_image_core, CreateImageInput,
+        };
+
+        let db = test_pool();
+        user_with_handle(&db, "alice", "aliceh");
+        user_with_handle(&db, "bob", "bobh");
+
+        // A cover image only on alice's public gallery.
+        let alice_pub = make_collection(&db, "alice", "Andromeda");
+        let img = create_image_core(
+            &db,
+            "alice",
+            CreateImageInput {
+                collection_id: None,
+                filename: "m31.png".to_string(),
+                url: None,
+                summary: None,
+                description: None,
+                content_type: Some("image/png".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: None,
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+        add_image_to_collection_core(&db, "alice", &img.id, &alice_pub.id).unwrap();
+
+        let bob_pub = make_collection(&db, "bob", "Orion");
+        let alice_unlisted = make_collection(&db, "alice", "Drafts");
+
+        let a = publish_collection_core(&db, "alice", &alice_pub.id, PublishVisibility::Public, None)
+            .unwrap();
+        let b =
+            publish_collection_core(&db, "bob", &bob_pub.id, PublishVisibility::Public, None).unwrap();
+        publish_collection_core(
+            &db,
+            "alice",
+            &alice_unlisted.id,
+            PublishVisibility::Unlisted,
+            None,
+        )
+        .unwrap();
+
+        // Publishes share a `published_at` instant, so pin distinct times to
+        // test the `desc` ordering deterministically: bob newer than alice.
+        let older = chrono::NaiveDate::from_ymd_opt(2026, 1, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let newer = chrono::NaiveDate::from_ymd_opt(2026, 2, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let mut conn = db.get().unwrap();
+        diesel::update(published_collections::table.find(&a.id))
+            .set(published_collections::published_at.eq(older))
+            .execute(&mut conn)
+            .unwrap();
+        diesel::update(published_collections::table.find(&b.id))
+            .set(published_collections::published_at.eq(newer))
+            .execute(&mut conn)
+            .unwrap();
+        drop(conn);
+
+        let recent = list_recent_public_core(&db, 10).unwrap();
+        // Both public galleries, unlisted excluded, newest (bob) first.
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].username, "bobh");
+        assert_eq!(recent[0].slug, "orion");
+        assert_eq!(recent[0].image_count, 0);
+        assert!(recent[0].thumb_url.is_none());
+
+        assert_eq!(recent[1].username, "aliceh");
+        assert_eq!(recent[1].slug, "andromeda");
+        assert_eq!(recent[1].image_count, 1);
+        assert_eq!(
+            recent[1].thumb_url.as_deref(),
+            Some(format!("/@aliceh/andromeda/thumbs/{}.jpg", img.id).as_str())
+        );
+
+        // The limit caps the strip.
+        assert_eq!(list_recent_public_core(&db, 1).unwrap().len(), 1);
     }
 
     #[test]

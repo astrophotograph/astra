@@ -344,6 +344,22 @@ pub fn get_images_in_collection(
     result
 }
 
+/// The newest image belonging to a collection — its natural gallery cover —
+/// or None when the collection has no images. Mirrors the ordering the viewer
+/// shows first (`get_images_in_collection` is `created_at desc`).
+pub fn get_collection_cover_image_id(
+    conn: &mut SqliteConnection,
+    collection_id: &str,
+) -> QueryResult<Option<String>> {
+    collection_images::table
+        .inner_join(images::table)
+        .filter(collection_images::collection_id.eq(collection_id))
+        .order(images::created_at.desc())
+        .select(images::id)
+        .first::<String>(conn)
+        .optional()
+}
+
 /// Get collections for an image with full collection data
 pub fn get_collections_for_image(
     conn: &mut SqliteConnection,

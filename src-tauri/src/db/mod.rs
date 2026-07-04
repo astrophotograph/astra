@@ -93,6 +93,54 @@ pub mod test_support {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use diesel::sql_query;
+    use diesel::sql_types::Text;
+
+    #[derive(QueryableByName)]
+    struct TableName {
+        #[diesel(sql_type = Text)]
+        name: String,
+    }
+
+    fn kith_table_names(conn: &mut SqliteConnection) -> Vec<String> {
+        sql_query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'kith_%' ORDER BY name",
+        )
+        .load::<TableName>(conn)
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect()
+    }
+
+    #[test]
+    fn kith_social_migration_creates_tables() {
+        let pool = test_support::test_pool();
+        let mut conn = pool.get().unwrap();
+        assert_eq!(
+            kith_table_names(&mut conn),
+            ["kith_edges", "kith_notifications", "kith_subscriptions"]
+        );
+    }
+
+    #[test]
+    fn kith_social_migration_reverts_and_reapplies() {
+        let pool = test_support::test_pool();
+        let mut conn = pool.get().unwrap();
+
+        conn.revert_last_migration(MIGRATIONS).unwrap();
+        assert!(kith_table_names(&mut conn).is_empty());
+
+        // Re-applying on a database that already has every prior migration
+        // exercises the incremental (existing-DB) path.
+        run_migrations(&mut conn).unwrap();
+        assert_eq!(kith_table_names(&mut conn).len(), 3);
+    }
+}
+
 /// Initialize the database with a connection pool
 pub fn init_database(database_path: &PathBuf) -> Result<DbPool, Box<dyn std::error::Error + Send + Sync>> {
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
