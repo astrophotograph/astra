@@ -7,10 +7,11 @@ After=network-online.target
 [Service]
 # PyO3 links libpython; the daemon needs it on the runtime path.
 Environment=LD_LIBRARY_PATH=/home/linuxbrew/.linuxbrew/opt/python@3.12/lib
-# OIDC sessions — uncomment once the Zitadel app for astra.gallery exists
-# (client id via `ho secret get astra/oidc-client-id`):
-# Environment=ASTRA_OIDC_ISSUER=https://auth.bcc.sh
-# Environment=ASTRA_OIDC_CLIENT_ID=...
+# OIDC sessions — Zitadel app "astra-gallery" in the astra project.
+# The client id is public (PKCE SPA client, no secret); also recorded in
+# `ho secret get astra/oidc-client-id`.
+Environment=ASTRA_OIDC_ISSUER=https://auth.bcc.sh
+Environment=ASTRA_OIDC_CLIENT_ID=380388911693692932
 ExecStart=%h/Projects/erewhon/astra/src-tauri/target/release/astra_daemon
 Restart=on-failure
 RestartSec=5
