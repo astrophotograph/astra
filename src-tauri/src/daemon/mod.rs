@@ -145,6 +145,12 @@ pub fn router(state: Arc<DaemonState>) -> Router {
         .route("/images/{id}/preview", get(api::image_preview))
         .route("/collections", get(api::list_collections))
         .route("/collections/{id}", get(api::get_collection))
+        .route(
+            "/collections/{id}/publish",
+            get(api::publish_status)
+                .post(api::publish_collection)
+                .delete(api::unpublish_collection),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -203,6 +209,13 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
 
     let db_path = data_dir.join("astra.db");
     let db = db::init_database(&db_path).map_err(|e| format!("DB init: {e}"))?;
+
+    // Backfill legacy worker-era publish records (idempotent, non-fatal).
+    match crate::commands::publish::migrate_legacy_publish_metadata(&db) {
+        Ok(0) => {}
+        Ok(n) => log::info!("backfilled {n} legacy publish record(s)"),
+        Err(e) => log::warn!("legacy publish backfill failed: {e}"),
+    }
 
     let hoardfs_dir = data_dir.join("hoardfs");
     let mut hfs = match hoardfs_volume::HoardFs::open(&hoardfs_dir).await {

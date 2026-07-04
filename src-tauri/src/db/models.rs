@@ -37,6 +37,23 @@ pub struct User {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = published_collections)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct PublishedCollection {
+    pub id: String,
+    pub collection_id: String,
+    pub user_id: String,
+    pub slug: String,
+    /// Collection name snapshot at publish time.
+    pub title: String,
+    /// `public` or `unlisted` — see `commands::publish::PublishVisibility`.
+    pub visibility: String,
+    pub published_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+    pub view_count: i32,
+}
+
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
 #[diesel(table_name = users)]
 pub struct NewUser {

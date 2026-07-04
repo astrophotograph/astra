@@ -26,6 +26,10 @@ use super::DaemonState;
 use crate::commands::collections::{get_collection_core, get_collections_core};
 use crate::commands::hoardfs::resolve_hfs_path;
 use crate::commands::images::{get_collection_images_core, get_image_core, get_images_core};
+use crate::commands::publish::{
+    get_publish_status_core, publish_collection_core, unpublish_collection_core,
+    PublishVisibility,
+};
 use crate::db::models::{Collection, Image};
 use crate::db::tenancy;
 
@@ -164,6 +168,73 @@ pub async fn get_collection(
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => internal("get_collection", e),
         Err(e) => internal("get_collection task", e.to_string()),
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct PublishBody {
+    visibility: Option<PublishVisibility>,
+    slug: Option<String>,
+}
+
+pub async fn publish_collection(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    body: Option<Json<PublishBody>>,
+) -> Response {
+    let PublishBody { visibility, slug } = body.map(|Json(b)| b).unwrap_or_default();
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        publish_collection_core(
+            &db,
+            &user_id,
+            &id,
+            visibility.unwrap_or(PublishVisibility::Public),
+            slug.as_deref(),
+        )
+    })
+    .await;
+
+    match result {
+        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Err(e)) if e.starts_with("Collection not found") => not_found(),
+        Ok(Err(e)) => internal("publish_collection", e),
+        Err(e) => internal("publish_collection task", e.to_string()),
+    }
+}
+
+pub async fn publish_status(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || get_publish_status_core(&db, &user_id, &id)).await
+    {
+        Ok(Ok(Some(record))) => Json(record).into_response(),
+        Ok(Ok(None)) => not_found(),
+        Ok(Err(e)) => internal("publish_status", e),
+        Err(e) => internal("publish_status task", e.to_string()),
+    }
+}
+
+pub async fn unpublish_collection(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    match tokio::task::spawn_blocking(move || unpublish_collection_core(&db, &user_id, &id))
+        .await
+    {
+        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(false)) => not_found(),
+        Ok(Err(e)) => internal("unpublish_collection", e),
+        Err(e) => internal("unpublish_collection task", e.to_string()),
     }
 }
 
@@ -473,6 +544,85 @@ mod tests {
         assert!(detail["images"][0]["thumbnail"].is_null());
 
         let (status, _, _) = get(&router, &bob, &uri, &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publish_endpoints_round_trip() {
+        let (state, _tmp, alice, bob, _img) = seeded().await;
+        let collection = create_collection_core(
+            &state.db,
+            "alice",
+            CreateCollectionInput {
+                name: "Deep Sky".to_string(),
+                description: None,
+                visibility: None,
+                template: None,
+                tags: None,
+            },
+        )
+        .unwrap();
+        let router = crate::daemon::router(state.clone());
+        let uri = format!("/api/collections/{}/publish", collection.id);
+
+        // Unpublished: status 404.
+        let (status, _, _) = get(&router, &alice, &uri, &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // POST publish (empty body defaults to public).
+        let resp = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(&uri)
+                    .header("Authorization", format!("Bearer {alice}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let record = json(&to_bytes(resp.into_body(), 1 << 20).await.unwrap());
+        assert_eq!(record["slug"], "deep-sky");
+        assert_eq!(record["visibility"], "public");
+
+        let (status, _, body) = get(&router, &alice, &uri, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["slug"], "deep-sky");
+
+        // Bob can't see or delete alice's publish state.
+        let (status, _, _) = get(&router, &bob, &uri, &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let resp = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri(&uri)
+                    .header("Authorization", format!("Bearer {bob}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        // Owner unpublishes; status is gone.
+        let resp = router
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("DELETE")
+                    .uri(&uri)
+                    .header("Authorization", format!("Bearer {alice}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let (status, _, _) = get(&router, &alice, &uri, &[]).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 

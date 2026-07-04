@@ -8,6 +8,7 @@ pub mod image_process;
 pub mod images;
 pub mod library_scan;
 pub mod plate_solve;
+pub mod publish;
 pub mod scan;
 pub mod schedules;
 pub mod skymap;

@@ -117,6 +117,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    published_collections (id) {
+        id -> Text,
+        collection_id -> Text,
+        user_id -> Text,
+        slug -> Text,
+        title -> Text,
+        visibility -> Text,
+        published_at -> Timestamp,
+        updated_at -> Timestamp,
+        view_count -> Integer,
+    }
+}
+
+diesel::table! {
     scanned_directories (id) {
         id -> Text,
         user_id -> Text,
@@ -165,6 +179,8 @@ diesel::joinable!(collections -> users (user_id));
 diesel::joinable!(images -> collections (collection_id));
 diesel::joinable!(images -> users (user_id));
 diesel::joinable!(observation_schedules -> users (user_id));
+diesel::joinable!(published_collections -> collections (collection_id));
+diesel::joinable!(published_collections -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     access_tokens,
@@ -174,6 +190,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     collections,
     images,
     observation_schedules,
+    published_collections,
     scanned_directories,
     simbad_cache,
     users,
