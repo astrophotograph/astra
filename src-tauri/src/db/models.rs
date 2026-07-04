@@ -29,6 +29,12 @@ pub struct User {
     pub metadata: Option<String>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
+    /// External identity subject (Zitadel `sub`); NULL for desktop-only users.
+    pub external_subject: Option<String>,
+    /// `owner` or `member` — see `db::tenancy::UserRole`.
+    pub role: String,
+    /// `active`, `invited`, or `disabled` — see `db::tenancy::UserStatus`.
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]

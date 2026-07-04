@@ -5,6 +5,7 @@
 pub mod models;
 pub mod repository;
 pub mod schema;
+pub mod tenancy;
 
 use diesel::prelude::*;
 use diesel::r2d2::{self, ConnectionManager};

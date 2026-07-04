@@ -139,6 +139,9 @@ diesel::table! {
         metadata -> Nullable<Text>,
         created_at -> Timestamp,
         updated_at -> Timestamp,
+        external_subject -> Nullable<Text>,
+        role -> Text,
+        status -> Text,
     }
 }
 
