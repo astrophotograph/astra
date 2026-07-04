@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 mod commands;
+pub mod daemon;
 mod db;
 mod fits_variant;
 mod python;
@@ -15,7 +16,7 @@ pub mod stretch;
 
 use state::AppState;
 
-pub use commands::hoardfs::MigrationReport;
+pub use commands::hoardfs::{MigrationReport, VariantVerificationReport};
 
 /// Resolve the desktop app's data directory — matches Tauri's `app_data_dir()`
 /// for the `com.erewhon.astra` identifier (e.g. `~/.local/share/com.erewhon.astra`).
@@ -68,6 +69,45 @@ pub fn run_standalone_migration(
     let hoardfs = std::sync::Arc::new(std::sync::Mutex::new(hfs));
 
     commands::hoardfs::migrate_library_core(&db_pool, &hoardfs, &handle, "local-user", on_progress)
+}
+
+/// Verify HoardFS variants for every migrated image, as a one-shot outside the GUI.
+///
+/// Read-only: opens the same SQLite database and HoardFS repository the desktop
+/// app uses (under [`default_app_data_dir`], or `data_dir` when given) and checks
+/// that each image with a `blob_id` has at least a thumbnail variant. Backs the
+/// `verify_variants` binary.
+pub fn run_standalone_verification(
+    data_dir: Option<std::path::PathBuf>,
+    on_progress: impl FnMut(u32, u32, &str),
+) -> Result<VariantVerificationReport, String> {
+    let data_dir = data_dir.unwrap_or_else(default_app_data_dir);
+
+    let db_path = data_dir.join("astra.db");
+    if !db_path.exists() {
+        return Err(format!("Astra database not found at {}", db_path.display()));
+    }
+    let db_pool = db::init_database(&db_path).map_err(|e| format!("DB init: {}", e))?;
+
+    let hoardfs_dir = data_dir.join("hoardfs");
+    if !hoardfs_dir.exists() {
+        return Err(format!(
+            "HoardFS repository not found at {} — run the migration first",
+            hoardfs_dir.display()
+        ));
+    }
+
+    // Verification never creates the repo, so open-only (no init fallback).
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {}", e))?;
+    let hfs = rt
+        .block_on(hoardfs_volume::HoardFs::open(&hoardfs_dir))
+        .map_err(|e| format!("HoardFS open: {}", e))?;
+    let hoardfs = std::sync::Arc::new(std::sync::Mutex::new(hfs));
+
+    commands::hoardfs::verify_variants_core(&db_pool, &hoardfs, "local-user", on_progress)
 }
 
 /// Get application info

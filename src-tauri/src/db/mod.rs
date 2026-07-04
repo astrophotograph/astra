@@ -31,10 +31,34 @@ pub fn get_database_path(app_handle: &tauri::AppHandle) -> PathBuf {
     app_data_dir.join("astra.db")
 }
 
+/// Per-connection SQLite pragmas.
+///
+/// WAL mode lets multiple processes (desktop app, daemon, one-shot binaries)
+/// share the database safely: many readers plus one writer, with concurrent
+/// writers queueing on the busy timeout instead of failing immediately.
+#[derive(Debug)]
+struct SqlitePragmas;
+
+impl r2d2::CustomizeConnection<SqliteConnection, r2d2::Error> for SqlitePragmas {
+    fn on_acquire(&self, conn: &mut SqliteConnection) -> Result<(), r2d2::Error> {
+        use diesel::connection::SimpleConnection;
+        // busy_timeout first: pool connections open concurrently, and the
+        // journal_mode flip takes an exclusive lock — without the timeout in
+        // place the losers fail instantly with "database is locked".
+        conn.batch_execute(
+            "PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
+        )
+        .map_err(r2d2::Error::QueryError)
+    }
+}
+
 /// Establish a connection pool to the SQLite database
 pub fn establish_connection(database_url: &str) -> Result<DbPool, r2d2::PoolError> {
     let manager = ConnectionManager::<SqliteConnection>::new(database_url);
-    r2d2::Pool::builder().max_size(5).build(manager)
+    r2d2::Pool::builder()
+        .max_size(5)
+        .connection_customizer(Box::new(SqlitePragmas))
+        .build(manager)
 }
 
 /// Run pending database migrations

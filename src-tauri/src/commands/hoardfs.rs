@@ -604,6 +604,108 @@ pub fn migrate_library_core(
     Ok(report)
 }
 
+/// Result of the post-migration variant verification pass
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VariantVerificationReport {
+    pub total_with_blob_id: u32,
+    pub variants_ok: u32,
+    pub variants_missing: Vec<MissingVariantEntry>,
+}
+
+/// A migrated image whose HoardFS variants could not be confirmed
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingVariantEntry {
+    pub image_id: String,
+    pub filename: String,
+    pub hfs_path: Option<String>,
+    /// Variant qualities that DO exist for this image (may be empty)
+    pub found: Vec<String>,
+    pub reason: String,
+}
+
+/// Verify every migrated image (`blob_id` set) has HoardFS variants, shared by
+/// the `verify_variants` standalone binary (and any future Tauri command).
+///
+/// Read-only: for each image, resolves the `hoardfs.hfs_path` recorded in its
+/// metadata and lists variants, requiring at least a Thumbnail. Catches sources
+/// that went offline mid-migration (variants silently not generated) and
+/// metadata rows missing their `hfs_path`. `on_progress(current, total,
+/// filename)` fires once per image, before it is checked.
+pub fn verify_variants_core(
+    db: &crate::db::DbPool,
+    hoardfs: &std::sync::Arc<std::sync::Mutex<hoardfs_volume::HoardFs>>,
+    user_id: &str,
+    mut on_progress: impl FnMut(u32, u32, &str),
+) -> Result<VariantVerificationReport, String> {
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let all_images = repository::get_images_by_user(&mut conn, user_id)
+        .map_err(|e| e.to_string())?;
+    drop(conn);
+
+    let migrated: Vec<_> = all_images.into_iter()
+        .filter(|img| img.blob_id.is_some())
+        .collect();
+
+    let total = migrated.len() as u32;
+    let mut report = VariantVerificationReport {
+        total_with_blob_id: total,
+        variants_ok: 0,
+        variants_missing: Vec::new(),
+    };
+
+    for (idx, image) in migrated.iter().enumerate() {
+        on_progress(idx as u32 + 1, total, &image.filename);
+
+        let Some(hfs_path) = resolve_hfs_path(image) else {
+            report.variants_missing.push(MissingVariantEntry {
+                image_id: image.id.clone(),
+                filename: image.filename.clone(),
+                hfs_path: None,
+                found: Vec::new(),
+                reason: "blob_id set but no hoardfs.hfs_path in metadata".to_string(),
+            });
+            continue;
+        };
+
+        let listed = {
+            let hfs = hoardfs.lock().map_err(|e| format!("Lock: {}", e))?;
+            hfs.list_variants("default", &hfs_path).map_err(|e| format!("{}", e))
+        };
+
+        match listed {
+            Ok(variants) => {
+                let found: Vec<String> = variants.iter()
+                    .map(|v| format!("{:?}", v.quality).to_lowercase())
+                    .collect();
+                if variants.iter().any(|v| matches!(v.quality, Quality::Thumbnail)) {
+                    report.variants_ok += 1;
+                } else {
+                    report.variants_missing.push(MissingVariantEntry {
+                        image_id: image.id.clone(),
+                        filename: image.filename.clone(),
+                        hfs_path: Some(hfs_path),
+                        found,
+                        reason: "no thumbnail variant".to_string(),
+                    });
+                }
+            }
+            Err(e) => {
+                report.variants_missing.push(MissingVariantEntry {
+                    image_id: image.id.clone(),
+                    filename: image.filename.clone(),
+                    hfs_path: Some(hfs_path),
+                    found: Vec::new(),
+                    reason: format!("list_variants failed: {}", e),
+                });
+            }
+        }
+    }
+
+    Ok(report)
+}
+
 // ============================================================================
 // FUSE Mount (feature-gated)
 // ============================================================================

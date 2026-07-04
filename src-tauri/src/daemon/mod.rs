@@ -1,0 +1,234 @@
+//! Astra daemon — a long-running HTTP service over the same backend stack the
+//! desktop app uses (SQLite via Diesel, HoardFS content-addressed storage).
+//!
+//! Foundation for the hosted astra.gallery service: later waves add auth,
+//! tenancy, read APIs, and collection ingest on top of this skeleton. As
+//! command cores are extracted (see the "Core-fn extraction" task), handlers
+//! call the same core functions the Tauri commands wrap.
+//!
+//! # Concurrent access & the one-writer convention
+//!
+//! Both the desktop app and the daemon may open the same `astra.db`. Every
+//! pool connection runs in WAL mode with a 5s busy timeout (see
+//! [`crate::db`]), so SQLite supports many readers plus one writer across
+//! processes; concurrent writers queue on the busy timeout rather than
+//! corrupting. The convention on top of that: **at most one long-lived writer
+//! per logical dataset** — a running desktop app owns writes to the local
+//! user's data, the daemon owns writes to hosted-tenant data. The skeleton
+//! daemon only reads (plus schema migrations at boot). On shutdown it
+//! checkpoints the WAL so no `-wal` sidecar is left holding unmerged frames.
+
+use std::future::Future;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::routing::get;
+use axum::{Json, Router};
+use diesel::connection::SimpleConnection;
+use serde::Serialize;
+
+use crate::db::{self, DbPool};
+
+/// Default bind address ("ASTRA" on a phone keypad → 27872).
+pub const DEFAULT_BIND: &str = "127.0.0.1:27872";
+
+/// Runtime configuration for the daemon.
+#[derive(Debug, Clone)]
+pub struct DaemonConfig {
+    /// App data directory holding `astra.db` and the `hoardfs/` repository.
+    pub data_dir: PathBuf,
+    /// Address the HTTP server binds to.
+    pub bind: SocketAddr,
+}
+
+impl DaemonConfig {
+    /// Resolve config with precedence: explicit value > `ASTRA_DATA_DIR` /
+    /// `ASTRA_BIND` environment variable > default (the desktop app's data
+    /// dir; [`DEFAULT_BIND`]).
+    pub fn resolve(data_dir: Option<PathBuf>, bind: Option<String>) -> Result<Self, String> {
+        let data_dir = data_dir
+            .or_else(|| std::env::var_os("ASTRA_DATA_DIR").map(PathBuf::from))
+            .unwrap_or_else(crate::default_app_data_dir);
+        let bind_str = bind
+            .or_else(|| std::env::var("ASTRA_BIND").ok())
+            .unwrap_or_else(|| DEFAULT_BIND.to_string());
+        let bind = bind_str
+            .parse()
+            .map_err(|e| format!("invalid bind address '{bind_str}': {e}"))?;
+        Ok(Self { data_dir, bind })
+    }
+}
+
+/// Backend state shared by all request handlers.
+pub struct DaemonState {
+    pub db: DbPool,
+    /// Same locking discipline as the desktop app's `AppState`: the lock must
+    /// NOT be held across `.await` points (rusqlite::Connection is not Sync).
+    pub hoardfs: Arc<Mutex<hoardfs_volume::HoardFs>>,
+}
+
+/// A daemon that has initialized its backend and bound its listener but is
+/// not yet serving. Split from [`Daemon::serve`] so tests can bind to port 0
+/// and read the ephemeral address before starting the server.
+pub struct Daemon {
+    state: Arc<DaemonState>,
+    listener: tokio::net::TcpListener,
+}
+
+impl Daemon {
+    /// Initialize the backend (DB + HoardFS, creating either if missing) and
+    /// bind the listener.
+    pub async fn bind(config: &DaemonConfig) -> Result<Self, String> {
+        let state = Arc::new(init_backend(&config.data_dir).await?);
+        let listener = tokio::net::TcpListener::bind(config.bind)
+            .await
+            .map_err(|e| format!("bind {}: {e}", config.bind))?;
+        Ok(Self { state, listener })
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr, String> {
+        self.listener.local_addr().map_err(|e| e.to_string())
+    }
+
+    /// Serve until `shutdown` resolves, then checkpoint the WAL and return.
+    pub async fn serve(
+        self,
+        shutdown: impl Future<Output = ()> + Send + 'static,
+    ) -> Result<(), String> {
+        let addr = self.local_addr()?;
+        let app = router(self.state.clone());
+        log::info!("astra_daemon listening on http://{addr}");
+        axum::serve(self.listener, app)
+            .with_graceful_shutdown(shutdown)
+            .await
+            .map_err(|e| format!("server error: {e}"))?;
+        checkpoint_wal(&self.state.db);
+        log::info!("astra_daemon shut down cleanly");
+        Ok(())
+    }
+}
+
+/// Build the daemon router. Public so integration tests can drive handlers
+/// against an arbitrary state.
+pub fn router(state: Arc<DaemonState>) -> Router {
+    Router::new()
+        .route("/healthz", get(healthz))
+        .with_state(state)
+}
+
+/// Resolves on SIGINT (Ctrl-C) or SIGTERM.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+}
+
+/// Open (or create) the DB and HoardFS repo exactly the way the desktop app
+/// does — same pattern as `run_standalone_migration` in `lib.rs`, including
+/// the image + FITS variant pipeline.
+async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
+    std::fs::create_dir_all(data_dir)
+        .map_err(|e| format!("create data dir {}: {e}", data_dir.display()))?;
+
+    let db_path = data_dir.join("astra.db");
+    let db = db::init_database(&db_path).map_err(|e| format!("DB init: {e}"))?;
+
+    let hoardfs_dir = data_dir.join("hoardfs");
+    let mut hfs = match hoardfs_volume::HoardFs::open(&hoardfs_dir).await {
+        Ok(hfs) => hfs,
+        Err(_) => {
+            log::info!(
+                "initializing new HoardFS repository at {}",
+                hoardfs_dir.display()
+            );
+            hoardfs_volume::HoardFs::init(&hoardfs_dir)
+                .await
+                .map_err(|e| format!("HoardFS open/init: {e}"))?
+        }
+    };
+    hfs.set_variant_pipeline(
+        hoardfs_variant::VariantPipeline::new()
+            .with_image_generator()
+            .register(Box::new(crate::fits_variant::FitsVariantGenerator::new())),
+    );
+
+    Ok(DaemonState {
+        db,
+        hoardfs: Arc::new(Mutex::new(hfs)),
+    })
+}
+
+#[derive(Debug, Serialize)]
+struct Health {
+    /// "ok" when every component is healthy, otherwise "degraded".
+    status: &'static str,
+    version: &'static str,
+    /// "ok" or the component's error message.
+    db: String,
+    hoardfs: String,
+}
+
+async fn healthz(State(state): State<Arc<DaemonState>>) -> (StatusCode, Json<Health>) {
+    let db_pool = state.db.clone();
+    let db_status = tokio::task::spawn_blocking(move || {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+        conn.batch_execute("SELECT 1;").map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("health task panicked: {e}")));
+
+    let hoardfs = state.hoardfs.clone();
+    let hoardfs_status = tokio::task::spawn_blocking(move || {
+        let hfs = hoardfs
+            .lock()
+            .map_err(|_| "HoardFS lock poisoned".to_string())?;
+        hfs.list_volumes().map(|_| ()).map_err(|e| e.to_string())
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("health task panicked: {e}")));
+
+    let ok = db_status.is_ok() && hoardfs_status.is_ok();
+    let health = Health {
+        status: if ok { "ok" } else { "degraded" },
+        version: env!("CARGO_PKG_VERSION"),
+        db: db_status.err().unwrap_or_else(|| "ok".to_string()),
+        hoardfs: hoardfs_status.err().unwrap_or_else(|| "ok".to_string()),
+    };
+    let code = if ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (code, Json(health))
+}
+
+/// Merge WAL frames back into the main database file so a stopped daemon
+/// leaves no `-wal` sidecar with unmerged writes.
+fn checkpoint_wal(db: &DbPool) {
+    match db.get() {
+        Ok(mut conn) => {
+            if let Err(e) = conn.batch_execute("PRAGMA wal_checkpoint(TRUNCATE);") {
+                log::warn!("WAL checkpoint failed: {e}");
+            }
+        }
+        Err(e) => log::warn!("WAL checkpoint skipped (no connection): {e}"),
+    }
+}

@@ -52,6 +52,14 @@ check:
 migrate-library *ARGS:
     cd src-tauri && cargo run --release --bin migrate_library -- {{ARGS}}
 
+# Verify migrated images have HoardFS variants (read-only). Args: --data-dir <path>
+verify-variants *ARGS:
+    cd src-tauri && cargo run --release --bin verify_variants -- {{ARGS}}
+
+# Run the Astra daemon (HTTP service for hosted astra.gallery). Args: --data-dir <path> --bind <addr:port>
+daemon *ARGS:
+    cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
+
 # Run Rust tests
 test-rust:
     cd src-tauri && cargo test
