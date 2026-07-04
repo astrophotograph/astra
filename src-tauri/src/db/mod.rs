@@ -70,6 +70,34 @@ pub fn run_migrations(
     Ok(())
 }
 
+/// Shared fixtures for command-core and repository tests.
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    /// In-memory pool (single connection — each :memory: connection is its
+    /// own database) with all migrations applied.
+    pub fn test_pool() -> DbPool {
+        let manager = ConnectionManager::<SqliteConnection>::new(":memory:");
+        let pool = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+        run_migrations(&mut pool.get().unwrap()).unwrap();
+        pool
+    }
+
+    /// Insert a minimal user row so user_id foreign keys are satisfied.
+    pub fn insert_user(pool: &DbPool, user_id: &str) {
+        use crate::db::schema::users;
+        use diesel::prelude::*;
+        diesel::insert_into(users::table)
+            .values((
+                users::id.eq(user_id),
+                users::name.eq(format!("Test {user_id}")),
+            ))
+            .execute(&mut pool.get().unwrap())
+            .unwrap();
+    }
+}
+
 /// Initialize the database with a connection pool
 pub fn init_database(database_path: &PathBuf) -> Result<DbPool, Box<dyn std::error::Error + Send + Sync>> {
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
