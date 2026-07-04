@@ -136,6 +136,7 @@ pub async fn create_session(
         }
     };
 
+    let (sub, email) = (claims.sub.clone(), claims.email.clone());
     let db = state.db.clone();
     let hoardfs = state.hoardfs.clone();
     let resolved = tokio::task::spawn_blocking(move || {
@@ -146,6 +147,12 @@ pub async fn create_session(
     let user = match resolved {
         Ok(Ok(user)) => user,
         Ok(Err(super::auth::AuthError::Forbidden(message))) => {
+            // The one place a rejected login is diagnosable server-side:
+            // which subject knocked, and why it was turned away.
+            log::info!(
+                "session login forbidden for sub {sub} (email {}): {message}",
+                email.as_deref().unwrap_or("-")
+            );
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({ "error": "forbidden", "message": message })),

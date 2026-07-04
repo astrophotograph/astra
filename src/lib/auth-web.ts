@@ -158,8 +158,11 @@ export async function completeLogin(): Promise<void> {
   if (sessionResp.status === 403) {
     const body = (await sessionResp.json().catch(() => null)) as {
       error?: string;
+      message?: string;
     } | null;
-    throw new Error(body?.error ?? "This account isn't invited to this Astra server.");
+    throw new Error(
+      body?.message ?? body?.error ?? "This account isn't invited to this Astra server.",
+    );
   }
   if (!sessionResp.ok) {
     throw new Error(`Session creation failed (${sessionResp.status})`);
