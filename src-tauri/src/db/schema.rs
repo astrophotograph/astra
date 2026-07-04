@@ -1,6 +1,18 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    access_tokens (id) {
+        id -> Text,
+        user_id -> Text,
+        name -> Text,
+        token_hash -> Text,
+        created_at -> Timestamp,
+        last_used_at -> Nullable<Timestamp>,
+        revoked_at -> Nullable<Timestamp>,
+    }
+}
+
+diesel::table! {
     astro_objects (id) {
         id -> Text,
         name -> Text,
@@ -145,6 +157,7 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(access_tokens -> users (user_id));
 diesel::joinable!(astronomy_todos -> users (user_id));
 diesel::joinable!(collection_images -> collections (collection_id));
 diesel::joinable!(collection_images -> images (image_id));
@@ -154,6 +167,7 @@ diesel::joinable!(images -> users (user_id));
 diesel::joinable!(observation_schedules -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
+    access_tokens,
     astro_objects,
     astronomy_todos,
     collection_images,

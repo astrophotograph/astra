@@ -32,24 +32,19 @@ pub fn get_database_path(app_handle: &tauri::AppHandle) -> PathBuf {
     app_data_dir.join("astra.db")
 }
 
-/// Per-connection SQLite pragmas.
-///
-/// WAL mode lets multiple processes (desktop app, daemon, one-shot binaries)
-/// share the database safely: many readers plus one writer, with concurrent
-/// writers queueing on the busy timeout instead of failing immediately.
+/// Per-connection SQLite pragmas. The WAL journal mode itself is a
+/// persistent database property flipped once in [`init_database`] — doing it
+/// per-connection races pool pre-fill on fresh databases (the delete→WAL
+/// transition needs an exclusive lock and SQLite bypasses the busy handler
+/// on that upgrade), logging spurious "database is locked" errors.
 #[derive(Debug)]
 struct SqlitePragmas;
 
 impl r2d2::CustomizeConnection<SqliteConnection, r2d2::Error> for SqlitePragmas {
     fn on_acquire(&self, conn: &mut SqliteConnection) -> Result<(), r2d2::Error> {
         use diesel::connection::SimpleConnection;
-        // busy_timeout first: pool connections open concurrently, and the
-        // journal_mode flip takes an exclusive lock — without the timeout in
-        // place the losers fail instantly with "database is locked".
-        conn.batch_execute(
-            "PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;",
-        )
-        .map_err(r2d2::Error::QueryError)
+        conn.batch_execute("PRAGMA busy_timeout = 5000; PRAGMA synchronous = NORMAL;")
+            .map_err(r2d2::Error::QueryError)
     }
 }
 
@@ -101,6 +96,17 @@ pub mod test_support {
 /// Initialize the database with a connection pool
 pub fn init_database(database_path: &PathBuf) -> Result<DbPool, Box<dyn std::error::Error + Send + Sync>> {
     let database_url = format!("sqlite://{}?mode=rwc", database_path.display());
+
+    // Enable WAL once, on a lone connection, before the pool exists: WAL is
+    // a persistent database property, and it lets multiple processes
+    // (desktop app, daemon, one-shot binaries) share the database safely —
+    // many readers plus one writer, writers queueing on busy_timeout.
+    {
+        use diesel::connection::SimpleConnection;
+        use diesel::Connection;
+        let mut conn = SqliteConnection::establish(&database_url)?;
+        conn.batch_execute("PRAGMA journal_mode = WAL;")?;
+    }
 
     let pool = establish_connection(&database_url)?;
 

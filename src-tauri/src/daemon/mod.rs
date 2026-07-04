@@ -17,6 +17,18 @@
 //! user's data, the daemon owns writes to hosted-tenant data. The skeleton
 //! daemon only reads (plus schema migrations at boot). On shutdown it
 //! checkpoints the WAL so no `-wal` sidecar is left holding unmerged frames.
+//!
+//! # Authorization convention
+//!
+//! Every route under `/api` sits behind [`auth::require_auth`], which
+//! authenticates the bearer token and inserts an [`auth::AuthedUser`]
+//! request extension — default-deny: a route nested there cannot skip
+//! authentication. Handlers declare `user: AuthedUser` and pass
+//! `user.user_id` to core fns explicitly; there is no "current user"
+//! global. The public surface is `/healthz` and (later) the public gallery
+//! pages — nothing else.
+
+pub mod auth;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -93,6 +105,12 @@ impl Daemon {
         self.listener.local_addr().map_err(|e| e.to_string())
     }
 
+    /// Shared backend state — lets callers (tests, the mint CLI path) reach
+    /// the same pool the server uses.
+    pub fn state(&self) -> Arc<DaemonState> {
+        self.state.clone()
+    }
+
     /// Serve until `shutdown` resolves, then checkpoint the WAL and return.
     pub async fn serve(
         self,
@@ -114,9 +132,33 @@ impl Daemon {
 /// Build the daemon router. Public so integration tests can drive handlers
 /// against an arbitrary state.
 pub fn router(state: Arc<DaemonState>) -> Router {
+    let api = Router::new()
+        .route("/me", get(me))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
     Router::new()
         .route("/healthz", get(healthz))
+        .nest("/api", api)
         .with_state(state)
+}
+
+/// Open (or create) the database at the resolved data dir and mint a PAT —
+/// backs `astra_daemon --mint-token`. The caller decides how to display the
+/// plaintext; it is never logged here.
+pub fn mint_token_standalone(
+    data_dir: Option<PathBuf>,
+    user_id: &str,
+    name: &str,
+) -> Result<auth::MintedToken, String> {
+    let config = DaemonConfig::resolve(data_dir, None)?;
+    std::fs::create_dir_all(&config.data_dir)
+        .map_err(|e| format!("create data dir {}: {e}", config.data_dir.display()))?;
+    let db = db::init_database(&config.data_dir.join("astra.db"))
+        .map_err(|e| format!("DB init: {e}"))?;
+    auth::mint_token(&db, user_id, name)
 }
 
 /// Resolves on SIGINT (Ctrl-C) or SIGTERM.
@@ -218,6 +260,54 @@ async fn healthz(State(state): State<Arc<DaemonState>>) -> (StatusCode, Json<Hea
         StatusCode::SERVICE_UNAVAILABLE
     };
     (code, Json(health))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MeResponse {
+    user_id: String,
+    username: Option<String>,
+    display_name: Option<String>,
+    role: crate::db::tenancy::UserRole,
+    status: String,
+}
+
+/// Identity of the authenticated caller — the first `/api` route and the
+/// reference implementation of the handler convention.
+async fn me(
+    State(state): State<Arc<DaemonState>>,
+    user: auth::AuthedUser,
+) -> Result<Json<MeResponse>, StatusCode> {
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let row = tokio::task::spawn_blocking(move || {
+        use crate::db::schema::users;
+        use diesel::prelude::*;
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        users::table
+            .find(&user_id)
+            .select((users::username, users::name, users::status))
+            .first::<(Option<String>, Option<String>, String)>(&mut conn)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| {
+        log::error!("me task panicked: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|e| {
+        log::error!("me lookup failed: {e}");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let (username, display_name, status) = row;
+    Ok(Json(MeResponse {
+        user_id: user.user_id,
+        username,
+        display_name,
+        role: user.role,
+        status,
+    }))
 }
 
 /// Merge WAL frames back into the main database file so a stopped daemon

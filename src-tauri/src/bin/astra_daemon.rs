@@ -11,12 +11,17 @@
 //!                           com.erewhon.astra; env: ASTRA_DATA_DIR)
 //!   --bind <addr:port>      Bind address (default: 127.0.0.1:27872;
 //!                           env: ASTRA_BIND)
+//!   --mint-token <user> <name>
+//!                           Mint a personal access token for <user> labeled
+//!                           <name>, print it once, and exit (no server).
 //!   -h, --help              Show this help
 //!
 //! Shuts down gracefully on SIGINT (Ctrl-C) or SIGTERM, checkpointing the
 //! SQLite WAL on the way out.
 
-use astra_lib::daemon::{shutdown_signal, Daemon, DaemonConfig, DEFAULT_BIND};
+use astra_lib::daemon::{
+    mint_token_standalone, shutdown_signal, Daemon, DaemonConfig, DEFAULT_BIND,
+};
 
 fn print_help() {
     println!(
@@ -26,9 +31,12 @@ fn print_help() {
          OPTIONS:\n\
          \x20 --data-dir <path>    App data dir (default: app_data_dir for com.erewhon.astra; env: ASTRA_DATA_DIR)\n\
          \x20 --bind <addr:port>   Bind address (default: {DEFAULT_BIND}; env: ASTRA_BIND)\n\
+         \x20 --mint-token <user> <name>\n\
+         \x20                      Mint a personal access token and exit (printed once, never stored)\n\
          \x20 -h, --help           Show this help\n\n\
          Endpoints:\n\
-         \x20 GET /healthz         Version plus DB and HoardFS status"
+         \x20 GET /healthz         Version plus DB and HoardFS status (public)\n\
+         \x20 GET /api/me          Identity of the authenticated caller (bearer token)"
     );
 }
 
@@ -38,10 +46,22 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut data_dir: Option<std::path::PathBuf> = None;
     let mut bind: Option<String> = None;
+    let mut mint: Option<(String, String)> = None;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--mint-token" => {
+                let (user, name) = match (args.get(i + 1), args.get(i + 2)) {
+                    (Some(u), Some(n)) => (u.clone(), n.clone()),
+                    _ => {
+                        eprintln!("--mint-token requires <user_id> <name>");
+                        std::process::exit(2);
+                    }
+                };
+                mint = Some((user, name));
+                i += 2;
+            }
             "--data-dir" => {
                 i += 1;
                 match args.get(i) {
@@ -73,6 +93,21 @@ fn main() {
             }
         }
         i += 1;
+    }
+
+    if let Some((user_id, name)) = mint {
+        match mint_token_standalone(data_dir, &user_id, &name) {
+            Ok(minted) => {
+                println!("Token minted for {} (name: {})", minted.user_id, minted.name);
+                println!("\n  {}\n", minted.token);
+                println!("Store it now — it cannot be shown again.");
+                return;
+            }
+            Err(e) => {
+                eprintln!("mint-token failed: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 
     let config = match DaemonConfig::resolve(data_dir, bind) {

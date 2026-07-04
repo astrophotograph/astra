@@ -52,6 +52,9 @@ reqwest = { version = "0.13", features = ["rustls-native-certs", "json"] }
 # HTTP server (astra_daemon — hosted astra.gallery service)
 axum = "0.8"
 
+# Random token secrets (daemon PATs)
+getrandom = "0.3"
+
 # Crypto (for S3 signing)
 hmac = "0.12"
 hex = "0.4"
@@ -88,6 +91,7 @@ pyo3 = { version = "0.27", features = ["auto-initialize"] }
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 
 [profile.dev]
 opt-level = 2
