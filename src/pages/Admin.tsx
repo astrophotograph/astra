@@ -67,6 +67,8 @@ import {
   autoImportApi,
   backupApi,
   imageApi,
+  isTauri,
+  listen,
   shareApi,
   type AutoImportConfig,
   type AutoImportStatus,
@@ -75,7 +77,7 @@ import {
   type PopulateFitsUrlsResult,
   type GalleryDaemonStatus,
 } from "@/lib/tauri/commands";
-import { listen } from "@tauri-apps/api/event";
+import { fetchMe, signOut, type SessionUser } from "@/lib/auth-web";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   parseHorizonFile,
@@ -187,6 +189,7 @@ const EQUIPMENT_PRESETS: EquipmentPreset[] = [
 ];
 
 type SettingsSection =
+  | "account"
   | "locations"
   | "equipment"
   | "plate-solving"
@@ -196,11 +199,22 @@ type SettingsSection =
   | "about"
   | "developer";
 
-const SETTINGS_SECTIONS: {
+/** Sections that manage local resources — hidden in the browser build. */
+const DESKTOP_ONLY_SECTIONS: SettingsSection[] = [
+  "plate-solving",
+  "auto-import",
+  "sharing",
+  "database",
+];
+
+const ALL_SETTINGS_SECTIONS: {
   id: SettingsSection;
   label: string;
   icon: React.ReactNode;
 }[] = [
+  // Web only: identity + sign-out for the cookie session. Desktop has no
+  // session to show.
+  { id: "account", label: "Account", icon: <Info className="w-4 h-4" /> },
   { id: "locations", label: "Locations", icon: <MapPin className="w-4 h-4" /> },
   {
     id: "equipment",
@@ -223,10 +237,18 @@ const SETTINGS_SECTIONS: {
   { id: "developer", label: "Developer", icon: <Code className="w-4 h-4" /> },
 ];
 
+const SETTINGS_SECTIONS = ALL_SETTINGS_SECTIONS.filter((section) =>
+  isTauri()
+    ? section.id !== "account"
+    : !DESKTOP_ONLY_SECTIONS.includes(section.id),
+);
+
 export default function AdminPage() {
   const { developerMode, setDeveloperMode } = useSettings();
-  const [activeSection, setActiveSection] =
-    useState<SettingsSection>("locations");
+  const [activeSection, setActiveSection] = useState<SettingsSection>(
+    isTauri() ? "locations" : "account",
+  );
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [isLoadingBackups, setIsLoadingBackups] = useState(false);
@@ -424,6 +446,12 @@ export default function AdminPage() {
   // Load app info and backups
   useEffect(() => {
     appApi.getInfo().then(setAppInfo).catch(console.error);
+    if (!isTauri()) {
+      // Web: only the session identity — every load below manages local
+      // resources behind hidden sections.
+      fetchMe().then(setSessionUser).catch(console.error);
+      return;
+    }
     loadBackups();
     loadShareConfig();
     autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
@@ -433,6 +461,7 @@ export default function AdminPage() {
 
   // Poll auto-import status and listen for events
   useEffect(() => {
+    if (!isTauri()) return;
     // Listen for backend events
     const unlisten = listen<AutoImportStatus>(
       "auto-import-status",
@@ -1369,6 +1398,47 @@ export default function AdminPage() {
       {/* Main Content */}
       <div className="flex-1 overflow-y-auto pr-2 space-y-6">
         {/* Locations Section */}
+        {activeSection === "account" && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Info className="w-5 h-5" />
+                Account
+              </CardTitle>
+              <CardDescription>
+                Your identity on this Astra server.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {sessionUser ? (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm max-w-md">
+                  <span className="text-muted-foreground">Username</span>
+                  <span>{sessionUser.username ? `@${sessionUser.username}` : "—"}</span>
+                  <span className="text-muted-foreground">Display name</span>
+                  <span>{sessionUser.displayName || "—"}</span>
+                  <span className="text-muted-foreground">Role</span>
+                  <span className="capitalize">{sessionUser.role}</span>
+                  <span className="text-muted-foreground">User ID</span>
+                  <span className="font-mono text-xs self-center">
+                    {sessionUser.userId}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Loading session…</p>
+              )}
+              <div className="pt-2 border-t">
+                <Button variant="outline" onClick={() => void signOut()}>
+                  Sign out
+                </Button>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Ends this browser session and signs you out of the identity
+                  provider.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {activeSection === "locations" && (
           <>
             <Card>
@@ -2830,14 +2900,17 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <Button
-              variant="outline"
-              onClick={autoDetectLocation}
-              className="w-full"
-            >
-              <MapPin className="w-4 h-4 mr-2" />
-              Auto-detect Location
-            </Button>
+            {/* Tauri geolocation plugin — no web equivalent wired up. */}
+            {isTauri() && (
+              <Button
+                variant="outline"
+                onClick={autoDetectLocation}
+                className="w-full"
+              >
+                <MapPin className="w-4 h-4 mr-2" />
+                Auto-detect Location
+              </Button>
+            )}
 
             <div className="pt-2 border-t">
               <div className="flex items-center justify-between mb-2">

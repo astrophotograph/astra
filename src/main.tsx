@@ -8,7 +8,6 @@ import {
   beginLogin,
   completeLogin,
   fetchMe,
-  signOut,
   type SessionUser,
 } from "./lib/auth-web";
 import "./index.css";
@@ -107,19 +106,8 @@ function WebAuthGate({ children }: { children: React.ReactNode }) {
     );
   }
   if (session === null) return <SignIn />;
-  return (
-    <>
-      {children}
-      {/* Placeholder affordance until the settings surface owns sign-out. */}
-      <button
-        className="fixed bottom-3 right-3 z-50 rounded-full border border-zinc-700 bg-zinc-900/80 px-3 py-1 text-xs text-zinc-400 hover:text-zinc-100"
-        onClick={() => void signOut()}
-        title={session.username ? `Signed in as @${session.username}` : undefined}
-      >
-        Sign out
-      </button>
-    </>
-  );
+  // Sign-out lives in Settings → Account.
+  return <>{children}</>;
 }
 
 function Root() {
