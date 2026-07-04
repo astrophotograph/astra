@@ -68,7 +68,7 @@ import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
 import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
-import { authApi, imageApi, plateSolveApi, scanApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
+import { imageApi, plateSolveApi, scanApi, shareApi, type Image, type PublishResult, type PublishStatus } from "@/lib/tauri/commands";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Progress } from "@/components/ui/progress";
 import { getCollectionType } from "@/lib/collection-utils";
@@ -303,12 +303,7 @@ export default function CollectionDetailPage() {
     if (!collection) return;
     setIsPublishing(true);
     try {
-      const session = await authApi.getSession();
-      const result = await runWithProgress(() =>
-        session
-          ? shareApi.publishGallery(collection.id)
-          : shareApi.publish(collection.id)
-      );
+      const result = await runWithProgress(() => shareApi.publish(collection.id));
       toast.success(`Published! ${result.imagesUploaded} images uploaded`);
       setPublishStatus(await shareApi.getPublishStatus(collection.id));
     } catch (e) {
@@ -322,12 +317,7 @@ export default function CollectionDetailPage() {
     if (!collection) return;
     setIsSyncing(true);
     try {
-      const session = await authApi.getSession();
-      const result = await runWithProgress(() =>
-        session
-          ? shareApi.publishGallery(collection.id)
-          : shareApi.sync(collection.id)
-      );
+      const result = await runWithProgress(() => shareApi.sync(collection.id));
       if (result.imagesUploaded > 0) {
         toast.success(`Synced! ${result.imagesUploaded} new images uploaded`);
       } else {

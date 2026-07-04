@@ -1,10 +1,22 @@
-//! Tauri commands for gallery sharing.
+//! Tauri commands for gallery sharing — desktop → daemon push.
+//!
+//! Publishing pushes the collection (metadata + assets) to the hosted Astra
+//! daemon over its `/api/push/*` endpoints and flips the server-side publish
+//! record, replacing the worker-era Clerk + presigned-R2 upload path. Sync
+//! is simply a re-push: the ingest protocol is idempotent (assets transfer
+//! once, keyed by content hash).
+//!
+//! The daemon connection (base URL + personal access token, minted with
+//! `astra_daemon --mint-token`) lives in `gallery-daemon.json`; an OIDC
+//! device flow can replace the pasted token later.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::repository;
-use crate::share::{auth, config, credentials, manifest, upload, viewer};
+use crate::db::DbPool;
+use crate::share::daemon_client::DaemonClient;
+use crate::share::config;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, Serialize)]
@@ -16,36 +28,16 @@ struct PublishProgress {
     total: usize,
 }
 
-/// Parse a FITS integer value from the fitrs debug format
-fn parse_fits_int(val: Option<&serde_json::Value>) -> Option<u32> {
-    let val = val?;
-    let s = match val.as_str() {
-        Some(s) => s.to_string(),
-        None => val.to_string().trim_matches('"').to_string(),
-    };
-    // Try: Some(IntegerNumber(6248))
-    if let Some(caps) = s.strip_prefix("Some(IntegerNumber(") {
-        if let Some(num) = caps.strip_suffix("))") {
-            return num.parse().ok();
-        }
-    }
-    // Try: IntegerNumber(6248)
-    if let Some(caps) = s.strip_prefix("IntegerNumber(") {
-        if let Some(num) = caps.strip_suffix(")") {
-            return num.parse().ok();
-        }
-    }
-    // Try plain number
-    s.parse().ok()
-}
-
 fn emit_progress(app: &AppHandle, step: &str, detail: &str, current: usize, total: usize) {
-    let _ = app.emit("publish-progress", PublishProgress {
-        step: step.to_string(),
-        detail: detail.to_string(),
-        current,
-        total,
-    });
+    let _ = app.emit(
+        "publish-progress",
+        PublishProgress {
+            step: step.to_string(),
+            detail: detail.to_string(),
+            current,
+            total,
+        },
+    );
 }
 
 // ============================================================================
@@ -54,14 +46,17 @@ fn emit_progress(app: &AppHandle, step: &str, detail: &str, current: usize, tota
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConfigureShareInput {
-    pub endpoint_url: String,
-    pub bucket: String,
-    pub region: String,
-    pub path_prefix: String,
-    pub public_url_base: String,
-    pub access_key_id: String,
-    pub secret_access_key: String,
+pub struct ConfigureGalleryDaemonInput {
+    pub base_url: String,
+    pub token: String,
+}
+
+/// What the UI sees — never echoes the token back.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryDaemonStatus {
+    pub base_url: String,
+    pub has_token: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -83,79 +78,237 @@ pub struct PublishStatus {
     pub uploaded_image_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CollectionShareMeta {
-    share: Option<PublishStatus>,
-}
-
 // ============================================================================
 // Config Commands
 // ============================================================================
 
-#[tauri::command]
-pub fn configure_share_upload(
-    app: AppHandle,
-    input: ConfigureShareInput,
-) -> Result<(), String> {
-    let data_dir = app
-        .path()
+fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+        .map_err(|e| format!("Failed to get app data dir: {}", e))
+}
 
-    let cfg = config::ShareUploadConfig {
-        endpoint_url: input.endpoint_url,
-        bucket: input.bucket,
-        region: input.region,
-        path_prefix: input.path_prefix,
-        public_url_base: input.public_url_base,
+fn client_from_config(app: &AppHandle) -> Result<DaemonClient, String> {
+    let cfg = config::load_config(&data_dir(app)?)?
+        .ok_or("Gallery daemon not configured. Add the daemon URL and token in Admin → Sharing.")?;
+    Ok(DaemonClient::new(&cfg.base_url, &cfg.token))
+}
+
+#[tauri::command]
+pub fn configure_gallery_daemon(
+    app: AppHandle,
+    input: ConfigureGalleryDaemonInput,
+) -> Result<(), String> {
+    let cfg = config::GalleryDaemonConfig {
+        base_url: input.base_url.trim().trim_end_matches('/').to_string(),
+        token: input.token.trim().to_string(),
+    };
+    if cfg.base_url.is_empty() || cfg.token.is_empty() {
+        return Err("Daemon URL and token are both required".to_string());
+    }
+    config::save_config(&data_dir(&app)?, &cfg)
+}
+
+#[tauri::command]
+pub fn get_gallery_daemon_config(app: AppHandle) -> Result<Option<GalleryDaemonStatus>, String> {
+    Ok(config::load_config(&data_dir(&app)?)?.map(|cfg| GalleryDaemonStatus {
+        base_url: cfg.base_url,
+        has_token: !cfg.token.is_empty(),
+    }))
+}
+
+/// Verify the configured daemon + token; returns the @handle it maps to.
+#[tauri::command]
+pub async fn test_gallery_daemon(app: AppHandle) -> Result<String, String> {
+    let client = client_from_config(&app)?;
+    let me = client.me().await?;
+    Ok(me.username.unwrap_or(me.user_id))
+}
+
+#[tauri::command]
+pub fn clear_gallery_daemon_config(app: AppHandle) -> Result<(), String> {
+    config::delete_config(&data_dir(&app)?)
+}
+
+// ============================================================================
+// Publish / Sync / Unpublish
+// ============================================================================
+
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "fit" | "fits" => "image/fits",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Push a collection to the daemon and (re)publish it. Idempotent — sync is
+/// the same call. Only assets the daemon reports missing are read and
+/// uploaded; metadata upserts every time (last-write-wins).
+pub async fn push_and_publish_core(
+    db: &DbPool,
+    client: &DaemonClient,
+    collection_id: &str,
+    mut progress: impl FnMut(&str, &str, usize, usize),
+) -> Result<PublishResult, String> {
+    progress("auth", "Checking daemon connection...", 0, 0);
+    let me = client.me().await?;
+    let username = me.username.clone().unwrap_or(me.user_id.clone());
+
+    progress("loading", "Loading collection...", 0, 0);
+    let (collection, images) = {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        let collection = repository::get_collection_by_id(&mut conn, collection_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Collection not found")?;
+        let images = repository::get_images_in_collection(&mut conn, collection_id)
+            .map_err(|e| e.to_string())?;
+        (collection, images)
     };
 
-    config::save_config(&data_dir, &cfg)?;
-    credentials::store_credentials(&data_dir, &input.access_key_id, &input.secret_access_key)?;
+    // Metadata push: every image record, whether or not its asset is here.
+    let push_body = serde_json::json!({
+        "collection": {
+            "id": collection.id,
+            "name": collection.name,
+            "description": collection.description,
+            "visibility": collection.visibility,
+            "template": collection.template,
+            "tags": collection.tags,
+            "metadata": collection.metadata,
+        },
+        "images": images.iter().map(|img| serde_json::json!({
+            "id": img.id,
+            "filename": img.filename,
+            "summary": img.summary,
+            "description": img.description,
+            "content_type": img.content_type.clone().or_else(|| {
+                img.url.as_deref().map(|u| mime_for_path(std::path::Path::new(u)).to_string())
+            }),
+            "favorite": img.favorite,
+            "tags": img.tags,
+            "visibility": img.visibility,
+            "location": img.location,
+            "annotations": img.annotations,
+            "metadata": img.metadata,
+        })).collect::<Vec<_>>(),
+    });
 
+    progress("pushing", "Pushing collection metadata...", 0, 0);
+    let push_response = client.push_collection(&push_body).await?;
+
+    let needed: std::collections::HashSet<&str> = push_response
+        .images
+        .iter()
+        .filter(|s| s.asset_status == "needed")
+        .map(|s| s.id.as_str())
+        .collect();
+
+    let mut images_uploaded = 0usize;
+    let mut uploaded_ids = Vec::new();
+    let to_upload: Vec<_> = images.iter().filter(|i| needed.contains(i.id.as_str())).collect();
+    let total = to_upload.len();
+
+    for (idx, image) in to_upload.into_iter().enumerate() {
+        let Some(file_path) = &image.url else {
+            log::warn!("skipping asset for {} — no local file path", image.id);
+            continue;
+        };
+        let path = std::path::Path::new(file_path);
+        if !path.exists() {
+            log::warn!("skipping asset for {} — file missing: {file_path}", image.id);
+            continue;
+        }
+
+        progress(
+            "uploading",
+            &format!("Uploading {} ({}/{})...", image.filename, idx + 1, total),
+            idx + 1,
+            total,
+        );
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("Failed to read {file_path}: {e}"))?;
+        let hash = blake3::hash(&bytes).to_hex().to_string();
+        client.put_asset(&image.id, &hash, bytes).await?;
+        images_uploaded += 1;
+        uploaded_ids.push(image.id.clone());
+    }
+
+    // Every image whose asset the daemon holds counts as uploaded state.
+    let mut all_present_ids: Vec<String> = push_response
+        .images
+        .iter()
+        .filter(|s| s.asset_status == "present")
+        .map(|s| s.id.clone())
+        .collect();
+    all_present_ids.extend(uploaded_ids);
+
+    progress("publishing", "Publishing gallery...", 0, 0);
+    let record = client.publish(&collection.id).await?;
+    let public_url = format!("{}/@{}/{}", client.base_url(), username, record.slug);
+
+    // Keep the desktop-side status in collection metadata — same shape the
+    // UI has always read.
+    let now = chrono::Utc::now().to_rfc3339();
+    let existing = get_publish_status_from_metadata(&collection.metadata);
+    let status = PublishStatus {
+        share_id: record.id.clone(),
+        published_at: existing
+            .map(|s| s.published_at)
+            .unwrap_or_else(|| now.clone()),
+        public_url: public_url.clone(),
+        last_synced_at: now,
+        uploaded_image_ids: all_present_ids,
+    };
+    save_publish_status(db, collection_id, &collection.metadata, &status)?;
+
+    progress("done", "Published!", total, total);
+
+    Ok(PublishResult {
+        share_id: record.id,
+        public_url,
+        images_uploaded,
+        thumbs_uploaded: 0,
+    })
+}
+
+/// Remove the daemon publish record and clear the local status.
+pub async fn unpublish_core(
+    db: &DbPool,
+    client: &DaemonClient,
+    collection_id: &str,
+) -> Result<(), String> {
+    client.unpublish(collection_id).await?;
+
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let collection = repository::get_collection_by_id(&mut conn, collection_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Collection not found")?;
+    let mut meta: serde_json::Value = collection
+        .metadata
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(m) = meta.as_object_mut() {
+        m.remove("share");
+    }
+    let update = crate::db::models::UpdateCollection {
+        metadata: Some(meta.to_string()),
+        ..Default::default()
+    };
+    repository::update_collection(&mut conn, collection_id, &update)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
-
-#[tauri::command]
-pub fn get_share_config(
-    app: AppHandle,
-) -> Result<Option<config::ShareUploadConfig>, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    config::load_config(&data_dir)
-}
-
-#[tauri::command]
-pub async fn test_share_upload(app: AppHandle) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    let cfg = config::load_config(&data_dir)?
-        .ok_or("Share config not found. Configure sharing first.")?;
-    let creds = credentials::load_credentials(&data_dir)?;
-
-    upload::test_upload(&cfg, &creds).await
-}
-
-#[tauri::command]
-pub fn clear_share_config(app: AppHandle) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    config::delete_config(&data_dir)?;
-    credentials::delete_credentials(&data_dir)?;
-    Ok(())
-}
-
-// ============================================================================
-// Publish Commands
-// ============================================================================
 
 #[tauri::command]
 pub async fn publish_collection(
@@ -163,300 +316,23 @@ pub async fn publish_collection(
     state: State<'_, AppState>,
     collection_id: String,
 ) -> Result<PublishResult, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    let cfg = config::load_config(&data_dir)?
-        .ok_or("Share config not found. Configure sharing in Settings.")?;
-    let creds = credentials::load_credentials(&data_dir)?;
-
-    // Load collection
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Collection not found")?;
-
-    // Load images
-    let images = repository::get_images_in_collection(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-
-    // Generate or reuse share_id
-    let existing_status = get_publish_status_from_metadata(&collection.metadata);
-    let share_id = existing_status
-        .map(|s| s.share_id)
-        .unwrap_or_else(|| generate_share_id());
-
-    // Upload all images + thumbnails
-    let mut manifest_images = Vec::new();
-    let mut images_uploaded = 0usize;
-    let mut thumbs_uploaded = 0usize;
-    let mut uploaded_ids = Vec::new();
-
-    for image in &images {
-        let Some(file_path) = &image.url else { continue };
-        let path = std::path::Path::new(file_path);
-        if !path.exists() {
-            log::warn!("Skipping missing file: {}", file_path);
-            continue;
-        }
-
-        let file_data = std::fs::read(path)
-            .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-
-        let content_type = mime_for_path(path);
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg");
-
-        // Upload full image
-        let image_key = upload::share_key(&cfg, &share_id, &format!("images/{}.{}", image.id, ext));
-        upload::upload_file(
-            &cfg,
-            &creds,
-            &image_key,
-            &file_data,
-            content_type,
-            Some("max-age=31536000, immutable"),
-        )
-        .await?;
-        images_uploaded += 1;
-
-        // Generate and upload thumbnail
-        let thumb_data = generate_thumbnail(&file_data)?;
-        let thumb_key = upload::share_key(&cfg, &share_id, &format!("thumbs/{}.jpg", image.id));
-        upload::upload_file(
-            &cfg,
-            &creds,
-            &thumb_key,
-            &thumb_data,
-            "image/jpeg",
-            Some("max-age=31536000, immutable"),
-        )
-        .await?;
-        thumbs_uploaded += 1;
-
-        manifest_images.push(manifest::ManifestImage {
-            id: image.id.clone(),
-            filename: image.filename.clone(),
-            summary: image.summary.clone(),
-            content_type: content_type.to_string(),
-            image_path: format!("images/{}.{}", image.id, ext),
-            thumb_path: format!("thumbs/{}.jpg", image.id),
-            created_at: image.created_at.to_string(),
-            favorite: image.favorite,
-            catalog_ids: vec![],
-            plate_solve: None,
-            objects: vec![],
-        });
-
-        uploaded_ids.push(image.id.clone());
-    }
-
-    // Build and upload manifest
-    let share_manifest = manifest::build_manifest(
-        &collection.name,
-        collection.description.as_deref(),
-        collection.template.as_deref(),
-        manifest_images,
-        None,
-    );
-    let manifest_json = serde_json::to_string_pretty(&share_manifest)
-        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-    let manifest_key = upload::share_key(&cfg, &share_id, "manifest.json");
-    upload::upload_file(
-        &cfg,
-        &creds,
-        &manifest_key,
-        manifest_json.as_bytes(),
-        "application/json; charset=utf-8",
-        Some("max-age=10"),
-    )
-    .await?;
-
-    // Upload viewer
-    let viewer_key = upload::share_key(&cfg, &share_id, "index.html");
-    upload::upload_file(
-        &cfg,
-        &creds,
-        &viewer_key,
-        viewer::VIEWER_HTML.as_bytes(),
-        "text/html; charset=utf-8",
-        Some("max-age=10"),
-    )
-    .await?;
-
-    // Save publish status to collection metadata
-    let public_url = upload::public_url(&cfg, &share_id);
-    let now = chrono::Utc::now().to_rfc3339();
-    let status = PublishStatus {
-        share_id: share_id.clone(),
-        published_at: now.clone(),
-        public_url: public_url.clone(),
-        last_synced_at: now,
-        uploaded_image_ids: uploaded_ids,
-    };
-
-    save_publish_status(&state, &collection_id, &collection.metadata, &status)?;
-
-    Ok(PublishResult {
-        share_id,
-        public_url,
-        images_uploaded,
-        thumbs_uploaded,
+    let client = client_from_config(&app)?;
+    let db = state.db.clone();
+    let progress_app = app.clone();
+    push_and_publish_core(&db, &client, &collection_id, move |step, detail, cur, total| {
+        emit_progress(&progress_app, step, detail, cur, total)
     })
+    .await
 }
 
+/// Sync is a re-push: the ingest protocol is idempotent.
 #[tauri::command]
 pub async fn sync_collection(
     app: AppHandle,
     state: State<'_, AppState>,
     collection_id: String,
 ) -> Result<PublishResult, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    let cfg = config::load_config(&data_dir)?
-        .ok_or("Share config not found")?;
-    let creds = credentials::load_credentials(&data_dir)?;
-
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Collection not found")?;
-
-    let images = repository::get_images_in_collection(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-
-    let status = get_publish_status_from_metadata(&collection.metadata)
-        .ok_or("Collection is not published")?;
-
-    let share_id = &status.share_id;
-    let already_uploaded: std::collections::HashSet<String> =
-        status.uploaded_image_ids.into_iter().collect();
-
-    let mut manifest_images = Vec::new();
-    let mut images_uploaded = 0usize;
-    let mut thumbs_uploaded = 0usize;
-    let mut all_uploaded_ids = Vec::new();
-
-    for image in &images {
-        let Some(file_path) = &image.url else { continue };
-        let path = std::path::Path::new(file_path);
-        if !path.exists() { continue; }
-
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg");
-        let content_type = mime_for_path(path);
-
-        // Only upload new images
-        if !already_uploaded.contains(&image.id) {
-            let file_data = std::fs::read(path)
-                .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-
-            let image_key = upload::share_key(&cfg, share_id, &format!("images/{}.{}", image.id, ext));
-            upload::upload_file(
-                &cfg,
-                &creds,
-                &image_key,
-                &file_data,
-                content_type,
-                Some("max-age=31536000, immutable"),
-            )
-            .await?;
-            images_uploaded += 1;
-
-            let thumb_data = generate_thumbnail(&file_data)?;
-            let thumb_key = upload::share_key(&cfg, share_id, &format!("thumbs/{}.jpg", image.id));
-            upload::upload_file(
-                &cfg,
-                &creds,
-                &thumb_key,
-                &thumb_data,
-                "image/jpeg",
-                Some("max-age=31536000, immutable"),
-            )
-            .await?;
-            thumbs_uploaded += 1;
-        }
-
-        manifest_images.push(manifest::ManifestImage {
-            id: image.id.clone(),
-            filename: image.filename.clone(),
-            summary: image.summary.clone(),
-            content_type: content_type.to_string(),
-            image_path: format!("images/{}.{}", image.id, ext),
-            thumb_path: format!("thumbs/{}.jpg", image.id),
-            created_at: image.created_at.to_string(),
-            favorite: image.favorite,
-            catalog_ids: vec![],
-            plate_solve: None,
-            objects: vec![],
-        });
-
-        all_uploaded_ids.push(image.id.clone());
-    }
-
-    // Always rebuild and upload manifest
-    let share_manifest = manifest::build_manifest(
-        &collection.name,
-        collection.description.as_deref(),
-        collection.template.as_deref(),
-        manifest_images,
-        None,
-    );
-    let manifest_json = serde_json::to_string_pretty(&share_manifest)
-        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-    let manifest_key = upload::share_key(&cfg, share_id, "manifest.json");
-    upload::upload_file(
-        &cfg,
-        &creds,
-        &manifest_key,
-        manifest_json.as_bytes(),
-        "application/json; charset=utf-8",
-        Some("max-age=10"),
-    )
-    .await?;
-
-    // Update viewer too
-    let viewer_key = upload::share_key(&cfg, share_id, "index.html");
-    upload::upload_file(
-        &cfg,
-        &creds,
-        &viewer_key,
-        viewer::VIEWER_HTML.as_bytes(),
-        "text/html; charset=utf-8",
-        Some("max-age=10"),
-    )
-    .await?;
-
-    // Update status
-    let public_url = upload::public_url(&cfg, share_id);
-    let now = chrono::Utc::now().to_rfc3339();
-    let new_status = PublishStatus {
-        share_id: share_id.clone(),
-        published_at: status.published_at,
-        public_url: public_url.clone(),
-        last_synced_at: now,
-        uploaded_image_ids: all_uploaded_ids,
-    };
-
-    save_publish_status(&state, &collection_id, &collection.metadata, &new_status)?;
-
-    Ok(PublishResult {
-        share_id: share_id.clone(),
-        public_url,
-        images_uploaded,
-        thumbs_uploaded,
-    })
+    publish_collection(app, state, collection_id).await
 }
 
 #[tauri::command]
@@ -465,127 +341,9 @@ pub async fn unpublish_collection(
     state: State<'_, AppState>,
     collection_id: String,
 ) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    let cfg = config::load_config(&data_dir)?
-        .ok_or("Share config not found")?;
-    let creds = credentials::load_credentials(&data_dir)?;
-
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Collection not found")?;
-    drop(conn);
-
-    let status = get_publish_status_from_metadata(&collection.metadata)
-        .ok_or("Collection is not published")?;
-
-    let share_id = &status.share_id;
-
-    // Delete known files (best-effort)
-    for image_id in &status.uploaded_image_ids {
-        // We don't know the extension, try common ones
-        for ext in &["jpg", "jpeg", "png", "webp", "gif"] {
-            let key = upload::share_key(&cfg, share_id, &format!("images/{}.{}", image_id, ext));
-            let _ = upload::delete_file(&cfg, &creds, &key).await;
-        }
-        let thumb_key = upload::share_key(&cfg, share_id, &format!("thumbs/{}.jpg", image_id));
-        let _ = upload::delete_file(&cfg, &creds, &thumb_key).await;
-    }
-
-    // Delete manifest and viewer
-    let manifest_key = upload::share_key(&cfg, share_id, "manifest.json");
-    let _ = upload::delete_file(&cfg, &creds, &manifest_key).await;
-    let viewer_key = upload::share_key(&cfg, share_id, "index.html");
-    let _ = upload::delete_file(&cfg, &creds, &viewer_key).await;
-
-    // Clear publish status from metadata
-    save_publish_status(&state, &collection_id, &collection.metadata, &PublishStatus {
-        share_id: String::new(),
-        published_at: String::new(),
-        public_url: String::new(),
-        last_synced_at: String::new(),
-        uploaded_image_ids: Vec::new(),
-    }).ok();
-
-    // Actually remove the share key entirely
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let mut meta: serde_json::Value = collection
-        .metadata
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    meta.as_object_mut().map(|m| m.remove("share"));
-    let meta_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
-    let update = crate::db::models::UpdateCollection {
-        metadata: Some(meta_str),
-        ..Default::default()
-    };
-    repository::update_collection(&mut conn, &collection_id, &update)
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
-}
-
-/// Unpublish a gallery from astra.gallery — calls DELETE API to remove R2 + KV entries
-#[tauri::command]
-pub async fn unpublish_collection_gallery(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    collection_id: String,
-) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    let session = auth::load_session(&data_dir)?
-        .ok_or("Not signed in to astra.gallery. Sign in first.")?;
-
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Collection not found")?;
-    drop(conn);
-
-    let status = get_publish_status_from_metadata(&collection.metadata)
-        .ok_or("Collection is not published")?;
-
-    // Call DELETE API on the worker
-    let client = reqwest::Client::new();
-    let resp = client
-        .delete(format!("https://astra.gallery/api/galleries/{}", status.share_id))
-        .header("Authorization", format!("Bearer {}", session.api_token))
-        .send()
-        .await
-        .map_err(|e| format!("Delete request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        log::warn!("Gallery delete API returned error: {}", body);
-        // Continue anyway to clear local metadata
-    }
-
-    // Clear local publish status
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let mut meta: serde_json::Value = collection
-        .metadata
-        .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    meta.as_object_mut().map(|m| m.remove("share"));
-    let meta_str = serde_json::to_string(&meta).unwrap_or_else(|_| "{}".to_string());
-    let update = crate::db::models::UpdateCollection {
-        metadata: Some(meta_str),
-        ..Default::default()
-    };
-    repository::update_collection(&mut conn, &collection_id, &update)
-        .map_err(|e| e.to_string())?;
-
-    Ok(())
+    let client = client_from_config(&app)?;
+    let db = state.db.clone();
+    unpublish_core(&db, &client, &collection_id).await
 }
 
 #[tauri::command]
@@ -615,7 +373,7 @@ fn get_publish_status_from_metadata(metadata: &Option<String>) -> Option<Publish
 }
 
 fn save_publish_status(
-    state: &State<'_, AppState>,
+    db: &DbPool,
     collection_id: &str,
     existing_metadata: &Option<String>,
     status: &PublishStatus,
@@ -631,7 +389,7 @@ fn save_publish_status(
     let meta_str = serde_json::to_string(&meta)
         .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
 
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let mut conn = db.get().map_err(|e| e.to_string())?;
     let update = crate::db::models::UpdateCollection {
         metadata: Some(meta_str),
         ..Default::default()
@@ -642,432 +400,222 @@ fn save_publish_status(
     Ok(())
 }
 
-fn generate_share_id() -> String {
-    // 12 hex chars from UUID
-    uuid::Uuid::new_v4().to_string().replace('-', "")[..12].to_string()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::collections::{create_collection_core, CreateCollectionInput};
+    use crate::commands::images::{
+        add_image_to_collection_core, create_image_core, CreateImageInput,
+    };
+    use crate::daemon::{auth::mint_token, DaemonState};
+    use crate::db::test_support::{insert_user, test_pool};
+    use std::sync::{Arc, Mutex};
 
-fn generate_thumbnail(image_data: &[u8]) -> Result<Vec<u8>, String> {
-    let img = image::load_from_memory(image_data)
-        .map_err(|e| format!("Failed to decode image for thumbnail: {}", e))?;
-
-    let thumb = img.thumbnail(400, 400);
-
-    let mut buf = std::io::Cursor::new(Vec::new());
-    thumb
-        .write_to(&mut buf, image::ImageFormat::Jpeg)
-        .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
-
-    Ok(buf.into_inner())
-}
-
-fn mime_for_path(path: &std::path::Path) -> &'static str {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        _ => "application/octet-stream",
+    fn tiny_png(seed: u8) -> Vec<u8> {
+        let img = image::RgbImage::from_pixel(32, 32, image::Rgb([seed, 90, 160]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        bytes.into_inner()
     }
-}
 
-// ============================================================================
-// Auth Commands (Clerk OAuth for astra.gallery)
-// ============================================================================
+    /// Boot the real daemon router on an ephemeral port with its own state
+    /// (separate DB + HoardFS — like a real remote daemon).
+    async fn spawn_daemon() -> (String, String, Arc<DaemonState>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = test_pool();
+        // Daemon's local-user is the hosted account (username erewhon from
+        // the tenancy backfill); mint the PAT the desktop will paste.
+        let token = mint_token(&db, "local-user", "desktop").unwrap().token;
 
-#[tauri::command]
-pub async fn clerk_sign_in(app: AppHandle) -> Result<auth::AuthSession, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+        let mut hfs = hoardfs_volume::HoardFs::init(&tmp.path().join("hoardfs"))
+            .await
+            .unwrap();
+        hfs.set_variant_pipeline(hoardfs_variant::VariantPipeline::new().with_image_generator());
 
-    let clerk_publishable_key = std::env::var("CLERK_PUBLISHABLE_KEY")
-        .map_err(|_| "CLERK_PUBLISHABLE_KEY environment variable not set".to_string())?;
-
-    let session = auth::sign_in(&clerk_publishable_key).await?;
-    auth::save_session(&data_dir, &session)?;
-
-    Ok(session)
-}
-
-#[tauri::command]
-pub fn clerk_sign_out(app: AppHandle) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    auth::delete_session(&data_dir)
-}
-
-#[tauri::command]
-pub fn get_auth_session(app: AppHandle) -> Result<Option<auth::AuthSession>, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    auth::load_session(&data_dir)
-}
-
-// ============================================================================
-// Dual-mode Publish (astra.gallery or self-hosted S3)
-// ============================================================================
-
-/// Presigned URL response from the Worker API.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PresignResponse {
-    share_id: String,
-    uploads: Vec<PresignUpload>,
-    public_url: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PresignUpload {
-    key: String,
-    presigned_url: String,
-    expires_at: String,
-}
-
-/// Publish a collection via astra.gallery (presigned URLs).
-#[tauri::command]
-pub async fn publish_collection_gallery(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    collection_id: String,
-) -> Result<PublishResult, String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    emit_progress(&app, "auth", "Checking authentication...", 0, 0);
-
-    let session = auth::load_session(&data_dir)?
-        .ok_or("Not signed in to astra.gallery. Sign in first.")?;
-
-    emit_progress(&app, "loading", "Loading collection...", 0, 0);
-
-    // Load collection and images
-    let mut conn = state.db.get().map_err(|e| e.to_string())?;
-    let collection = repository::get_collection_by_id(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Collection not found")?;
-    let images = repository::get_images_in_collection(&mut conn, &collection_id)
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-
-    // Generate or reuse share_id, and get previously uploaded image IDs
-    let existing_status = get_publish_status_from_metadata(&collection.metadata);
-    let share_id = existing_status
-        .as_ref()
-        .map(|s| s.share_id.clone())
-        .unwrap_or_else(generate_share_id);
-    let already_uploaded: std::collections::HashSet<String> = existing_status
-        .as_ref()
-        .map(|s| s.uploaded_image_ids.iter().cloned().collect())
-        .unwrap_or_default();
-
-    // Build manifest entries for ALL images, but only upload new image files
-    let collection_slug = slugify(&collection.name);
-    let mut files_to_upload: Vec<(String, String, Vec<u8>)> = Vec::new(); // (key, content_type, data)
-    let mut manifest_images = Vec::new();
-    let mut uploaded_ids = Vec::new();
-    let total_images = images.len();
-    let mut new_images = 0usize;
-    let mut skipped_images = 0usize;
-
-    for (idx, image) in images.iter().enumerate() {
-        let Some(file_path) = &image.url else {
-            log::warn!("Skipping image with no URL: {} ({})", image.id, image.filename);
-            continue;
-        };
-        let path = std::path::Path::new(file_path);
-        if !path.exists() {
-            log::warn!("Skipping missing file: {}", file_path);
-            continue;
-        }
-
-        let content_type = mime_for_path(path);
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("jpg");
-        let image_key = format!("images/{}.{}", image.id, ext);
-        let thumb_key = format!("thumbs/{}.jpg", image.id);
-
-        // Only read and queue upload for images not already uploaded
-        if !already_uploaded.contains(&image.id) {
-            emit_progress(&app, "preparing", &format!("Preparing new image {}/{}...", idx + 1, total_images), idx + 1, total_images);
-
-            let file_data = std::fs::read(path)
-                .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
-
-            let thumb_data = generate_thumbnail(&file_data)?;
-
-            files_to_upload.push((image_key.clone(), content_type.to_string(), file_data));
-            files_to_upload.push((thumb_key.clone(), "image/jpeg".to_string(), thumb_data));
-            new_images += 1;
-        } else {
-            skipped_images += 1;
-        }
-
-        // Extract catalog IDs from annotations
-        let mut catalog_ids: Vec<String> = image.annotations.as_ref().map(|ann| {
-            serde_json::from_str::<Vec<serde_json::Value>>(ann)
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|obj| {
-                    obj.get("name").and_then(|n| n.as_str()).map(|name| {
-                        name.replace(' ', "").to_uppercase()
-                    })
-                })
-                .collect::<Vec<_>>()
-        }).unwrap_or_default();
-
-        // Also extract Messier IDs from image summary and annotations
-        // Handles: "M 101", "M101", "Messier 101", "NGC 5457" (via summary)
-        let text_to_search = [
-            image.summary.clone().unwrap_or_default(),
-        ].join(" ");
-        let upper = text_to_search.to_uppercase();
-
-        // Match "M N" or "MN" patterns
-        {
-            let normalized = upper.replace(' ', "");
-            let bytes = normalized.as_bytes();
-            let mut i = 0;
-            while i < bytes.len() {
-                if bytes[i] == b'M' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
-                    let start = i;
-                    i += 1;
-                    while i < bytes.len() && bytes[i].is_ascii_digit() {
-                        i += 1;
-                    }
-                    let mid = normalized[start..i].to_string();
-                    if !catalog_ids.contains(&mid) {
-                        catalog_ids.push(mid);
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        }
-
-        // Match "MESSIER N" pattern → convert to "MN"
-        if let Some(pos) = upper.find("MESSIER") {
-            let after = &upper[pos + 7..].trim_start();
-            let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !num.is_empty() {
-                let mid = format!("M{}", num);
-                if !catalog_ids.contains(&mid) {
-                    catalog_ids.push(mid);
-                }
-            }
-        }
-
-        // Extract plate solve data and objects from metadata
-        let (plate_solve, objects) = image.metadata.as_ref().map(|meta| {
-            let parsed: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
-            let ps = parsed.get("plate_solve").and_then(|ps| {
-                Some(manifest::ManifestPlateSolve {
-                    center_ra: ps.get("center_ra")?.as_f64()?,
-                    center_dec: ps.get("center_dec")?.as_f64()?,
-                    pixel_scale: ps.get("pixel_scale")?.as_f64()?,
-                    rotation: ps.get("rotation")?.as_f64()?,
-                    width_deg: ps.get("width_deg")?.as_f64()?,
-                    height_deg: ps.get("height_deg")?.as_f64()?,
-                    image_width: parse_fits_int(parsed.get("NAXIS1"))
-                        .or_else(|| ps.get("image_width").and_then(|v| v.as_u64()).map(|v| v as u32)),
-                    image_height: parse_fits_int(parsed.get("NAXIS2"))
-                        .or_else(|| ps.get("image_height").and_then(|v| v.as_u64()).map(|v| v as u32)),
-                })
-            });
-            let objs: Vec<manifest::ManifestObject> = image.annotations.as_ref().map(|ann| {
-                serde_json::from_str::<Vec<serde_json::Value>>(ann)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|obj| {
-                        Some(manifest::ManifestObject {
-                            name: obj.get("name")?.as_str()?.to_string(),
-                            ra: obj.get("ra")?.as_f64()?,
-                            dec: obj.get("dec")?.as_f64()?,
-                            magnitude: obj.get("magnitude").and_then(|v| v.as_f64()),
-                            size_arcmin: obj.get("sizeArcmin").and_then(|v| v.as_f64()),
-                            pixel_x: obj.get("pixelX").and_then(|v| v.as_f64()),
-                            pixel_y: obj.get("pixelY").and_then(|v| v.as_f64()),
-                            radius_px: obj.get("radiusPx").and_then(|v| v.as_f64()),
-                        })
-                    })
-                    .collect()
-            }).unwrap_or_default();
-            (ps, objs)
-        }).unwrap_or((None, vec![]));
-
-        // Always include in manifest (even if image already uploaded)
-        manifest_images.push(manifest::ManifestImage {
-            id: image.id.clone(),
-            filename: image.filename.clone(),
-            summary: image.summary.clone(),
-            content_type: content_type.to_string(),
-            image_path: image_key,
-            thumb_path: thumb_key,
-            created_at: image.created_at.to_string(),
-            favorite: image.favorite,
-            catalog_ids,
-            plate_solve,
-            objects,
+        let state = Arc::new(DaemonState {
+            db,
+            hoardfs: Arc::new(Mutex::new(hfs)),
+            oidc: None,
+            limits: Default::default(),
         });
 
-        uploaded_ids.push(image.id.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let router = crate::daemon::router(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (base_url, token, state, tmp)
     }
 
-    if skipped_images > 0 {
-        log::info!("Incremental sync: {} new images, {} already uploaded", new_images, skipped_images);
-    }
+    /// Desktop-side library: a collection with two images whose files exist.
+    fn seed_desktop(dir: &std::path::Path) -> (crate::db::DbPool, String, Vec<String>) {
+        let db = test_pool();
+        insert_user(&db, "desktop-user");
+        let collection = create_collection_core(
+            &db,
+            "desktop-user",
+            CreateCollectionInput {
+                name: "Summer Nebulae".to_string(),
+                description: Some("first light".to_string()),
+                visibility: None,
+                template: None,
+                tags: None,
+            },
+        )
+        .unwrap();
 
-    // Extract date filter from collection metadata
-    let date_range = collection.metadata.as_ref().and_then(|meta| {
-        let parsed: serde_json::Value = serde_json::from_str(meta).ok()?;
-        let df = parsed.get("dateFilter")?;
-        let start = df.get("start")?.as_str()?.to_string();
-        let end = df.get("end")?.as_str()?.to_string();
-        Some((start, end))
-    });
-
-    // Build manifest
-    let share_manifest = manifest::build_manifest(
-        &collection.name,
-        collection.description.as_deref(),
-        collection.template.as_deref(),
-        manifest_images,
-        date_range.as_ref().map(|(s, e)| (s.as_str(), e.as_str())),
-    );
-    let manifest_json = serde_json::to_string_pretty(&share_manifest)
-        .map_err(|e| format!("Failed to serialize manifest: {}", e))?;
-    files_to_upload.push(("manifest.json".to_string(), "application/json".to_string(), manifest_json.into_bytes()));
-
-    // Add cover thumbnail (first image's thumbnail) for gallery cards
-    if let Some(first_image) = images.first() {
-        if let Some(file_path) = &first_image.url {
-            let path = std::path::Path::new(file_path);
-            if path.exists() {
-                match std::fs::read(path) {
-                    Ok(file_data) => {
-                        if let Ok(thumb_data) = generate_thumbnail(&file_data) {
-                            files_to_upload.push(("cover.jpg".to_string(), "image/jpeg".to_string(), thumb_data));
-                        }
-                    }
-                    Err(e) => log::warn!("Failed to read cover image: {}", e),
-                }
-            }
+        let mut image_ids = Vec::new();
+        for i in 0..2u8 {
+            let file = dir.join(format!("frame-{i}.png"));
+            std::fs::write(&file, tiny_png(i * 40 + 10)).unwrap();
+            let image = create_image_core(
+                &db,
+                "desktop-user",
+                CreateImageInput {
+                    collection_id: None,
+                    filename: format!("frame-{i}.png"),
+                    url: Some(file.to_string_lossy().to_string()),
+                    summary: Some(format!("M{}", 42 + i as u32)),
+                    description: None,
+                    content_type: Some("image/png".to_string()),
+                    tags: None,
+                    visibility: None,
+                    location: None,
+                    annotations: None,
+                    metadata: None,
+                    thumbnail: None,
+                },
+            )
+            .unwrap();
+            add_image_to_collection_core(&db, "desktop-user", &image.id, &collection.id)
+                .unwrap();
+            image_ids.push(image.id);
         }
+        (db, collection.id, image_ids)
     }
 
-    // Use catalog viewer for catalog collections, regular viewer otherwise
-    let viewer_html = match collection.template.as_deref() {
-        Some("messier") | Some("caldwell") => viewer::CATALOG_VIEWER_HTML,
-        _ => viewer::VIEWER_HTML,
-    };
-    files_to_upload.push(("index.html".to_string(), "text/html".to_string(), viewer_html.as_bytes().to_vec()));
+    #[tokio::test(flavor = "multi_thread")]
+    async fn publish_sync_unpublish_round_trip_against_real_daemon() {
+        let (base_url, token, daemon_state, _daemon_tmp) = spawn_daemon().await;
+        let desktop_tmp = tempfile::tempdir().unwrap();
+        let (desktop_db, collection_id, image_ids) = seed_desktop(desktop_tmp.path());
 
-    emit_progress(&app, "presigning", "Requesting upload URLs...", 0, 0);
+        let client = DaemonClient::new(&base_url, &token);
+        let mut steps: Vec<String> = Vec::new();
 
-    // Request presigned URLs from Worker
-    let presign_body = serde_json::json!({
-        "shareId": share_id,
-        "collectionSlug": collection_slug,
-        "collectionName": collection.name,
-        "collectionDescription": collection.description,
-        "files": files_to_upload.iter().map(|(key, ct, data)| {
-            serde_json::json!({
-                "key": key,
-                "contentType": ct,
-                "size": data.len(),
-            })
-        }).collect::<Vec<_>>(),
-    });
-
-    let client = reqwest::Client::new();
-    let presign_resp = client
-        .post(format!("{}/api/presign", "https://astra.gallery"))
-        .header("Authorization", format!("Bearer {}", session.api_token))
-        .json(&presign_body)
-        .send()
+        // Publish: metadata + 2 assets + publish record.
+        let result = push_and_publish_core(&desktop_db, &client, &collection_id, |s, _, _, _| {
+            steps.push(s.to_string())
+        })
         .await
-        .map_err(|e| format!("Presign request failed: {}", e))?;
+        .unwrap();
+        assert_eq!(result.images_uploaded, 2);
+        assert!(result.public_url.contains("/@erewhon/summer-nebulae"));
+        assert!(steps.contains(&"uploading".to_string()) && steps.contains(&"done".to_string()));
 
-    if !presign_resp.status().is_success() {
-        let status = presign_resp.status();
-        let body = presign_resp.text().await.unwrap_or_default();
-        return Err(format!("Presign request failed ({}): {}", status, body));
-    }
+        // Daemon side: rows, volume files, publish record all landed.
+        let daemon_images =
+            crate::commands::images::get_images_core(&daemon_state.db, "local-user").unwrap();
+        assert_eq!(daemon_images.len(), 2);
+        assert!(daemon_images.iter().all(|i| i.blob_id.is_some()));
+        {
+            let hfs = daemon_state.hoardfs.lock().unwrap();
+            assert_eq!(hfs.list_files("default", "/").unwrap().len(), 2);
+        }
+        assert!(crate::commands::publish::resolve_public_collection(
+            &daemon_state.db,
+            "erewhon",
+            "summer-nebulae"
+        )
+        .unwrap()
+        .is_some());
 
-    let presign: PresignResponse = presign_resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse presign response: {}", e))?;
-
-    // Upload each file to its presigned URL
-    let mut images_uploaded = 0usize;
-    let mut thumbs_uploaded = 0usize;
-    let total_files = files_to_upload.len();
-
-    for (file_idx, (key, content_type, data)) in files_to_upload.iter().enumerate() {
-        let label = if key.starts_with("images/") {
-            "image"
-        } else if key.starts_with("thumbs/") {
-            "thumbnail"
-        } else {
-            key.as_str()
+        // Desktop side: share status saved into collection metadata.
+        let status = {
+            let mut conn = desktop_db.get().unwrap();
+            let c = repository::get_collection_by_id(&mut conn, &collection_id)
+                .unwrap()
+                .unwrap();
+            get_publish_status_from_metadata(&c.metadata).unwrap()
         };
-        emit_progress(&app, "uploading", &format!("Uploading {} ({}/{})...", label, file_idx + 1, total_files), file_idx + 1, total_files);
+        assert_eq!(status.public_url, result.public_url);
+        assert_eq!(status.uploaded_image_ids.len(), 2);
 
-        let upload_info = presign.uploads.iter().find(|u| &u.key == key)
-            .ok_or_else(|| format!("No presigned URL for {}", key))?;
+        // Sync (re-push): idempotent — nothing re-uploads.
+        let synced = push_and_publish_core(&desktop_db, &client, &collection_id, |_, _, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(synced.images_uploaded, 0);
+        assert_eq!(synced.public_url, result.public_url);
 
-        upload::upload_file_presigned(&upload_info.presigned_url, data, content_type).await?;
+        // A new image syncs incrementally: only the new asset transfers.
+        let file = desktop_tmp.path().join("frame-2.png");
+        std::fs::write(&file, tiny_png(230)).unwrap();
+        let new_image = create_image_core(
+            &desktop_db,
+            "desktop-user",
+            CreateImageInput {
+                collection_id: None,
+                filename: "frame-2.png".to_string(),
+                url: Some(file.to_string_lossy().to_string()),
+                summary: None,
+                description: None,
+                content_type: Some("image/png".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: None,
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+        add_image_to_collection_core(&desktop_db, "desktop-user", &new_image.id, &collection_id)
+            .unwrap();
+        let incremental =
+            push_and_publish_core(&desktop_db, &client, &collection_id, |_, _, _, _| {})
+                .await
+                .unwrap();
+        assert_eq!(incremental.images_uploaded, 1);
 
-        if key.starts_with("images/") {
-            images_uploaded += 1;
-        } else if key.starts_with("thumbs/") {
-            thumbs_uploaded += 1;
-        }
+        // Unpublish: record gone daemon-side, local share status cleared.
+        unpublish_core(&desktop_db, &client, &collection_id)
+            .await
+            .unwrap();
+        assert!(crate::commands::publish::resolve_public_collection(
+            &daemon_state.db,
+            "erewhon",
+            "summer-nebulae"
+        )
+        .unwrap()
+        .is_none());
+        let cleared = {
+            let mut conn = desktop_db.get().unwrap();
+            let c = repository::get_collection_by_id(&mut conn, &collection_id)
+                .unwrap()
+                .unwrap();
+            get_publish_status_from_metadata(&c.metadata)
+        };
+        assert!(cleared.is_none());
+        let _ = image_ids;
     }
 
-    emit_progress(&app, "done", "Published!", total_files, total_files);
+    #[tokio::test(flavor = "multi_thread")]
+    async fn bad_token_surfaces_authentication_errors() {
+        let (base_url, _token, _state, _tmp) = spawn_daemon().await;
+        let desktop_tmp = tempfile::tempdir().unwrap();
+        let (desktop_db, collection_id, _) = seed_desktop(desktop_tmp.path());
 
-    // Save publish status
-    let now = chrono::Utc::now().to_rfc3339();
-    let status = PublishStatus {
-        share_id: presign.share_id.clone(),
-        published_at: now.clone(),
-        public_url: presign.public_url.clone(),
-        last_synced_at: now,
-        uploaded_image_ids: uploaded_ids,
-    };
+        let client = DaemonClient::new(&base_url, "astra_wrong_token");
+        let err = push_and_publish_core(&desktop_db, &client, &collection_id, |_, _, _, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("401"), "expected 401 in error, got: {err}");
 
-    save_publish_status(&state, &collection_id, &collection.metadata, &status)?;
-
-    Ok(PublishResult {
-        share_id: presign.share_id,
-        public_url: presign.public_url,
-        images_uploaded,
-        thumbs_uploaded,
-    })
-}
-
-fn slugify(name: &str) -> String {
-    name.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
+        let err = client.me().await.unwrap_err();
+        assert!(err.contains("401"));
+    }
 }

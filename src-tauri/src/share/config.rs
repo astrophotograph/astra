@@ -1,54 +1,51 @@
-//! Share upload configuration persistence.
+//! Gallery daemon connection configuration persistence.
+//!
+//! Replaces the worker-era S3 share config (`share-config.json`) — the
+//! desktop now publishes by pushing to the Astra daemon with a personal
+//! access token. An orphaned `share-config.json` from older versions is
+//! ignored and harmless.
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Configuration for uploading shares to S3-compatible storage.
+/// Connection to the hosted Astra daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ShareUploadConfig {
-    /// S3-compatible endpoint URL (e.g. "https://<account>.r2.cloudflarestorage.com")
-    pub endpoint_url: String,
-    /// Bucket name
-    pub bucket: String,
-    /// AWS region (use "auto" for Cloudflare R2)
-    pub region: String,
-    /// Key prefix for uploaded objects (e.g. "shares/")
-    pub path_prefix: String,
-    /// Base URL for public access (e.g. "https://astra.gallery")
-    pub public_url_base: String,
+pub struct GalleryDaemonConfig {
+    /// Daemon base URL (e.g. "https://astra.gallery" or "http://127.0.0.1:27872").
+    pub base_url: String,
+    /// Personal access token minted by `astra_daemon --mint-token`.
+    pub token: String,
 }
 
-const CONFIG_FILENAME: &str = "share-config.json";
+const CONFIG_FILENAME: &str = "gallery-daemon.json";
 
-/// Load share config from app data directory.
-pub fn load_config(data_dir: &Path) -> Result<Option<ShareUploadConfig>, String> {
+pub fn load_config(data_dir: &Path) -> Result<Option<GalleryDaemonConfig>, String> {
     let path = data_dir.join(CONFIG_FILENAME);
     if !path.exists() {
         return Ok(None);
     }
     let data = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read share config: {}", e))?;
-    let config: ShareUploadConfig =
-        serde_json::from_str(&data).map_err(|e| format!("Failed to parse share config: {}", e))?;
+        .map_err(|e| format!("Failed to read gallery daemon config: {e}"))?;
+    let config: GalleryDaemonConfig = serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse gallery daemon config: {e}"))?;
     Ok(Some(config))
 }
 
-/// Save share config to app data directory.
-pub fn save_config(data_dir: &Path, config: &ShareUploadConfig) -> Result<(), String> {
+pub fn save_config(data_dir: &Path, config: &GalleryDaemonConfig) -> Result<(), String> {
     let path = data_dir.join(CONFIG_FILENAME);
     let data = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize share config: {}", e))?;
-    std::fs::write(&path, data).map_err(|e| format!("Failed to write share config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize gallery daemon config: {e}"))?;
+    std::fs::write(&path, data)
+        .map_err(|e| format!("Failed to write gallery daemon config: {e}"))?;
     Ok(())
 }
 
-/// Delete share config from app data directory.
 pub fn delete_config(data_dir: &Path) -> Result<(), String> {
     let path = data_dir.join(CONFIG_FILENAME);
     if path.exists() {
         std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete share config: {}", e))?;
+            .map_err(|e| format!("Failed to delete gallery daemon config: {e}"))?;
     }
     Ok(())
 }

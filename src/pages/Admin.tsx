@@ -68,14 +68,12 @@ import {
   backupApi,
   imageApi,
   shareApi,
-  authApi,
-  type AuthSession,
   type AutoImportConfig,
   type AutoImportStatus,
   type BackupInfo,
   type PathPrefix,
   type PopulateFitsUrlsResult,
-  type ShareUploadConfig,
+  type GalleryDaemonStatus,
 } from "@/lib/tauri/commands";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -238,17 +236,9 @@ export default function AdminPage() {
   const [isRestoring, setIsRestoring] = useState(false);
 
   // Sharing config
-  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [isSigningIn, setIsSigningIn] = useState(false);
-  const [showAdvancedShare, setShowAdvancedShare] = useState(false);
-  const [shareConfig, setShareConfig] = useState<ShareUploadConfig | null>(null);
-  const [shareEndpoint, setShareEndpoint] = useState("");
-  const [shareBucket, setShareBucket] = useState("");
-  const [shareRegion, setShareRegion] = useState("auto");
-  const [sharePathPrefix, setSharePathPrefix] = useState("shares/");
-  const [sharePublicUrl, setSharePublicUrl] = useState("");
-  const [shareAccessKey, setShareAccessKey] = useState("");
-  const [shareSecretKey, setShareSecretKey] = useState("");
+  const [daemonConfig, setDaemonConfig] = useState<GalleryDaemonStatus | null>(null);
+  const [daemonUrl, setDaemonUrl] = useState("");
+  const [daemonToken, setDaemonToken] = useState("");
   const [isSavingShare, setIsSavingShare] = useState(false);
   const [isTestingShare, setIsTestingShare] = useState(false);
 
@@ -436,7 +426,6 @@ export default function AdminPage() {
     appApi.getInfo().then(setAppInfo).catch(console.error);
     loadBackups();
     loadShareConfig();
-    loadAuthSession();
     autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
     checkDownloadedDbs();
     imageApi.getImageStats().then(setImageStats).catch(console.error);
@@ -510,38 +499,6 @@ export default function AdminPage() {
       unlisten.then((fn) => fn());
     };
   }, []);
-
-  const loadAuthSession = async () => {
-    try {
-      const session = await authApi.getSession();
-      setAuthSession(session);
-    } catch (e) {
-      console.error("Failed to load auth session:", e);
-    }
-  };
-
-  const handleSignIn = async () => {
-    setIsSigningIn(true);
-    try {
-      const session = await authApi.signIn();
-      setAuthSession(session);
-      toast.success(`Signed in as @${session.username}`);
-    } catch (e) {
-      toast.error("Sign in failed: " + e);
-    } finally {
-      setIsSigningIn(false);
-    }
-  };
-
-  const handleSignOut = async () => {
-    try {
-      await authApi.signOut();
-      setAuthSession(null);
-      toast.success("Signed out of astra.gallery");
-    } catch (e) {
-      toast.error("Sign out failed: " + e);
-    }
-  };
 
   // Auto-import handlers
   const saveAutoImportConfig = (config: AutoImportConfig) => {
@@ -635,38 +592,25 @@ export default function AdminPage() {
 
   const loadShareConfig = async () => {
     try {
-      const cfg = await shareApi.getConfig();
-      setShareConfig(cfg);
+      const cfg = await shareApi.getDaemonConfig();
+      setDaemonConfig(cfg);
       if (cfg) {
-        setShareEndpoint(cfg.endpointUrl);
-        setShareBucket(cfg.bucket);
-        setShareRegion(cfg.region);
-        setSharePathPrefix(cfg.pathPrefix);
-        setSharePublicUrl(cfg.publicUrlBase);
+        setDaemonUrl(cfg.baseUrl);
       }
     } catch (e) {
-      console.error("Failed to load share config:", e);
+      console.error("Failed to load gallery daemon config:", e);
     }
   };
 
   const handleSaveShareConfig = async () => {
     setIsSavingShare(true);
     try {
-      await shareApi.configureUpload({
-        endpointUrl: shareEndpoint,
-        bucket: shareBucket,
-        region: shareRegion,
-        pathPrefix: sharePathPrefix,
-        publicUrlBase: sharePublicUrl,
-        accessKeyId: shareAccessKey,
-        secretAccessKey: shareSecretKey,
-      });
-      toast.success("Share configuration saved");
-      setShareAccessKey("");
-      setShareSecretKey("");
+      await shareApi.configureDaemon({ baseUrl: daemonUrl, token: daemonToken });
+      toast.success("Gallery daemon configured");
+      setDaemonToken("");
       await loadShareConfig();
     } catch (e) {
-      toast.error("Failed to save share config: " + e);
+      toast.error("Failed to save daemon config: " + e);
     } finally {
       setIsSavingShare(false);
     }
@@ -675,8 +619,8 @@ export default function AdminPage() {
   const handleTestShareUpload = async () => {
     setIsTestingShare(true);
     try {
-      await shareApi.testUpload();
-      toast.success("Connection test passed!");
+      const handle = await shareApi.testDaemon();
+      toast.success(`Connected as @${handle}`);
     } catch (e) {
       toast.error("Connection test failed: " + e);
     } finally {
@@ -686,18 +630,13 @@ export default function AdminPage() {
 
   const handleClearShareConfig = async () => {
     try {
-      await shareApi.clearConfig();
-      setShareConfig(null);
-      setShareEndpoint("");
-      setShareBucket("");
-      setShareRegion("auto");
-      setSharePathPrefix("shares/");
-      setSharePublicUrl("");
-      setShareAccessKey("");
-      setShareSecretKey("");
-      toast.success("Share configuration cleared");
+      await shareApi.clearDaemonConfig();
+      setDaemonConfig(null);
+      setDaemonUrl("");
+      setDaemonToken("");
+      toast.success("Gallery daemon config cleared");
     } catch (e) {
-      toast.error("Failed to clear share config: " + e);
+      toast.error("Failed to clear daemon config: " + e);
     }
   };
 
@@ -2028,194 +1967,90 @@ export default function AdminPage() {
         {/* Sharing Section */}
         {activeSection === "sharing" && (
           <div className="space-y-6">
-            {/* astra.gallery Sign In */}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Upload className="w-5 h-5" />
-                  astra.gallery
+                  Gallery Daemon
                 </CardTitle>
                 <CardDescription>
-                  Sign in to publish collections directly to astra.gallery
+                  Publish collections by pushing them to your hosted Astra daemon.
+                  Mint a token with <code className="text-xs">astra_daemon --mint-token &lt;user&gt; &lt;name&gt;</code> and paste it here.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {authSession ? (
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium">
-                        Signed in as <span className="text-primary">@{authSession.username}</span>
-                      </p>
-                      {authSession.displayName && (
-                        <p className="text-sm text-muted-foreground">{authSession.displayName}</p>
-                      )}
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Token expires {new Date(authSession.expiresAt).toLocaleString()}
-                      </p>
-                    </div>
-                    <Button variant="outline" onClick={handleSignOut}>
-                      Sign Out
-                    </Button>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
+                    <Label htmlFor="daemon-url">Daemon URL</Label>
+                    <Input
+                      id="daemon-url"
+                      placeholder="https://astra.gallery"
+                      value={daemonUrl}
+                      onChange={(e) => setDaemonUrl(e.target.value)}
+                      className="mt-1"
+                    />
                   </div>
-                ) : (
-                  <div>
-                    <p className="text-sm text-muted-foreground mb-3">
-                      Sign in to publish your collections as galleries at astra.gallery/@username. No manual credential configuration needed.
-                    </p>
-                    <Button onClick={handleSignIn} disabled={isSigningIn}>
-                      {isSigningIn ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                          Signing in...
-                        </>
-                      ) : (
-                        "Sign In to astra.gallery"
-                      )}
-                    </Button>
+                  <div className="col-span-2">
+                    <Label htmlFor="daemon-token">Access Token</Label>
+                    <Input
+                      id="daemon-token"
+                      type="password"
+                      placeholder={daemonConfig?.hasToken ? "••••••••  (saved)" : "astra_..."}
+                      value={daemonToken}
+                      onChange={(e) => setDaemonToken(e.target.value)}
+                      className="mt-1"
+                    />
                   </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Advanced / Self-hosted S3 Config */}
-            <Card>
-              <CardHeader
-                className="cursor-pointer"
-                onClick={() => setShowAdvancedShare(!showAdvancedShare)}
-              >
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Wrench className="w-4 h-4" />
-                  Advanced / Self-hosted
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {showAdvancedShare ? "▾" : "▸"}
-                  </span>
-                </CardTitle>
-                <CardDescription>
-                  Configure your own S3-compatible storage for self-hosted gallery sharing
-                </CardDescription>
-              </CardHeader>
-              {showAdvancedShare && (
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="col-span-2">
-                      <Label htmlFor="share-endpoint">R2 Endpoint URL</Label>
-                      <Input
-                        id="share-endpoint"
-                        placeholder="https://<account-id>.r2.cloudflarestorage.com"
-                        value={shareEndpoint}
-                        onChange={(e) => setShareEndpoint(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-bucket">Bucket</Label>
-                      <Input
-                        id="share-bucket"
-                        placeholder="astra-gallery"
-                        value={shareBucket}
-                        onChange={(e) => setShareBucket(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-region">Region</Label>
-                      <Input
-                        id="share-region"
-                        placeholder="auto"
-                        value={shareRegion}
-                        onChange={(e) => setShareRegion(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-prefix">Path Prefix</Label>
-                      <Input
-                        id="share-prefix"
-                        placeholder="shares/"
-                        value={sharePathPrefix}
-                        onChange={(e) => setSharePathPrefix(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-public-url">Public URL Base</Label>
-                      <Input
-                        id="share-public-url"
-                        placeholder="https://astra.gallery"
-                        value={sharePublicUrl}
-                        onChange={(e) => setSharePublicUrl(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-access-key">Access Key ID</Label>
-                      <Input
-                        id="share-access-key"
-                        type="password"
-                        placeholder={shareConfig ? "••••••••" : "Enter access key"}
-                        value={shareAccessKey}
-                        onChange={(e) => setShareAccessKey(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="share-secret-key">Secret Access Key</Label>
-                      <Input
-                        id="share-secret-key"
-                        type="password"
-                        placeholder={shareConfig ? "••••••••" : "Enter secret key"}
-                        value={shareSecretKey}
-                        onChange={(e) => setShareSecretKey(e.target.value)}
-                        className="mt-1"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={handleSaveShareConfig}
-                      disabled={isSavingShare || !shareEndpoint || !shareBucket}
-                    >
-                      {isSavingShare ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        "Save Configuration"
-                      )}
-                    </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={handleSaveShareConfig}
+                    disabled={isSavingShare || !daemonUrl || !daemonToken}
+                  >
+                    {isSavingShare ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      "Save"
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleTestShareUpload}
+                    disabled={isTestingShare || !daemonConfig}
+                  >
+                    {isTestingShare ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                        Testing...
+                      </>
+                    ) : (
+                      "Test Connection"
+                    )}
+                  </Button>
+                  {daemonConfig && (
                     <Button
                       variant="outline"
-                      onClick={handleTestShareUpload}
-                      disabled={isTestingShare || !shareConfig}
+                      className="text-destructive"
+                      onClick={handleClearShareConfig}
                     >
-                      {isTestingShare ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                          Testing...
-                        </>
-                      ) : (
-                        "Test Connection"
-                      )}
+                      <Trash2 className="w-4 h-4 mr-2" />
+                      Clear
                     </Button>
-                    {shareConfig && (
-                      <Button
-                        variant="outline"
-                        className="text-destructive"
-                        onClick={handleClearShareConfig}
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" />
-                        Clear
-                      </Button>
-                    )}
-                  </div>
-                  {shareConfig && (
-                    <p className="text-sm text-muted-foreground">
-                      Configured: {shareConfig.bucket} at {shareConfig.endpointUrl}
-                    </p>
                   )}
-                </CardContent>
-              )}
+                </div>
+                {daemonConfig && (
+                  <p className="text-sm text-muted-foreground">
+                    Configured: {daemonConfig.baseUrl}
+                  </p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Sign-in via browser (OIDC device flow) is planned; for now the
+                  daemon CLI mints tokens.
+                </p>
+              </CardContent>
             </Card>
           </div>
         )}

@@ -335,22 +335,15 @@ pub fn run() {
             commands::get_targets,
             commands::search_images_by_target,
             commands::get_images_by_target,
-            // Share commands
-            commands::configure_share_upload,
-            commands::get_share_config,
-            commands::test_share_upload,
-            commands::clear_share_config,
+            // Share commands (daemon push)
+            commands::configure_gallery_daemon,
+            commands::get_gallery_daemon_config,
+            commands::test_gallery_daemon,
+            commands::clear_gallery_daemon_config,
             commands::publish_collection,
             commands::sync_collection,
             commands::unpublish_collection,
             commands::get_publish_status,
-            // Auth commands (astra.gallery)
-            commands::clerk_sign_in,
-            commands::clerk_sign_out,
-            commands::get_auth_session,
-            // Gallery publish (authenticated)
-            commands::publish_collection_gallery,
-            commands::unpublish_collection_gallery,
             // HoardFS storage
             commands::import_images_hoardfs,
             commands::migrate_images_to_hoardfs,

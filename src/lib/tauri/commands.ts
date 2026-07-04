@@ -992,30 +992,6 @@ export const targetApi = {
 };
 
 // =============================================================================
-// Auth Types (astra.gallery)
-// =============================================================================
-
-export interface AuthSession {
-  userId: string;
-  username: string;
-  displayName: string | null;
-  apiToken: string;
-  expiresAt: string;
-}
-
-// =============================================================================
-// Auth Commands (astra.gallery)
-// =============================================================================
-
-export const authApi = {
-  signIn: () => invoke<AuthSession>("clerk_sign_in"),
-
-  signOut: () => invoke<void>("clerk_sign_out"),
-
-  getSession: () => invoke<AuthSession | null>("get_auth_session"),
-};
-
-// =============================================================================
 // Auto-Import Types
 // =============================================================================
 
@@ -1072,22 +1048,14 @@ export const autoImportApi = {
 // Share Types
 // =============================================================================
 
-export interface ShareUploadConfig {
-  endpointUrl: string;
-  bucket: string;
-  region: string;
-  pathPrefix: string;
-  publicUrlBase: string;
+export interface GalleryDaemonStatus {
+  baseUrl: string;
+  hasToken: boolean;
 }
 
-export interface ConfigureShareInput {
-  endpointUrl: string;
-  bucket: string;
-  region: string;
-  pathPrefix: string;
-  publicUrlBase: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+export interface ConfigureGalleryDaemonInput {
+  baseUrl: string;
+  token: string;
 }
 
 export interface PublishResult {
@@ -1110,17 +1078,18 @@ export interface PublishStatus {
 // =============================================================================
 
 export const shareApi = {
-  configureUpload: (input: ConfigureShareInput) =>
-    invoke<void>("configure_share_upload", { input }),
+  configureDaemon: (input: ConfigureGalleryDaemonInput) =>
+    invoke<void>("configure_gallery_daemon", { input }),
 
-  getConfig: () =>
-    invoke<ShareUploadConfig | null>("get_share_config"),
+  getDaemonConfig: () =>
+    invoke<GalleryDaemonStatus | null>("get_gallery_daemon_config"),
 
-  testUpload: () =>
-    invoke<void>("test_share_upload"),
+  /** Verifies the daemon + token; resolves to the @handle it maps to. */
+  testDaemon: () =>
+    invoke<string>("test_gallery_daemon"),
 
-  clearConfig: () =>
-    invoke<void>("clear_share_config"),
+  clearDaemonConfig: () =>
+    invoke<void>("clear_gallery_daemon_config"),
 
   publish: (collectionId: string) =>
     invoke<PublishResult>("publish_collection", { collectionId }),
@@ -1133,7 +1102,4 @@ export const shareApi = {
 
   getPublishStatus: (collectionId: string) =>
     invoke<PublishStatus | null>("get_publish_status", { collectionId }),
-
-  publishGallery: (collectionId: string) =>
-    invoke<PublishResult>("publish_collection_gallery", { collectionId }),
 };
