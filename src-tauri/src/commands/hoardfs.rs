@@ -255,7 +255,7 @@ pub async fn import_images_hoardfs(
 }
 
 /// Helper: resolve HoardFS path for an image from its metadata
-fn resolve_hfs_path(image: &crate::db::models::Image) -> Option<String> {
+pub(crate) fn resolve_hfs_path(image: &crate::db::models::Image) -> Option<String> {
     image.metadata.as_ref().and_then(|m| {
         serde_json::from_str::<serde_json::Value>(m).ok()
     }).and_then(|v| {

@@ -28,6 +28,7 @@
 //! global. The public surface is `/healthz` and (later) the public gallery
 //! pages — nothing else.
 
+pub mod api;
 pub mod auth;
 pub mod oidc;
 
@@ -138,6 +139,12 @@ impl Daemon {
 pub fn router(state: Arc<DaemonState>) -> Router {
     let api = Router::new()
         .route("/me", get(me))
+        .route("/images", get(api::list_images))
+        .route("/images/{id}", get(api::get_image))
+        .route("/images/{id}/thumbnail", get(api::image_thumbnail))
+        .route("/images/{id}/preview", get(api::image_preview))
+        .route("/collections", get(api::list_collections))
+        .route("/collections/{id}", get(api::get_collection))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
