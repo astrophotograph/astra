@@ -1,9 +1,9 @@
 import { useEffect } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { LocationProvider } from "./contexts/LocationContext";
 import { EquipmentProvider } from "./contexts/EquipmentContext";
-import { autoImportApi, type AutoImportConfig } from "./lib/tauri/commands";
+import { autoImportApi, isTauri, type AutoImportConfig } from "./lib/tauri/commands";
 import Layout from "./components/Layout";
 import Home from "./pages/Home";
 import Todo from "./pages/Todo";
@@ -46,7 +46,12 @@ function App() {
           <Routes>
             <Route path="/slideshow" element={<Slideshow />} />
             <Route element={<Layout />}>
-              <Route path="/" element={<Home />} />
+              {/* Home is a desktop dashboard for now — web lands on the
+                  image library instead. */}
+              <Route
+                path="/"
+                element={isTauri() ? <Home /> : <Navigate to="/images" replace />}
+              />
               <Route path="/todo" element={<Todo />} />
               <Route path="/collections" element={<Collections />} />
               <Route path="/plan" element={<Plan />} />

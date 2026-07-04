@@ -59,7 +59,7 @@ import {
   useAddScheduleItem,
   useCreateSchedule,
 } from "@/hooks/use-schedules";
-import { astronomyApi, type ScheduleItem } from "@/lib/tauri/commands";
+import { astronomyApi, isTauri, type ScheduleItem } from "@/lib/tauri/commands";
 import type { AstronomyTodo } from "@/lib/tauri/commands";
 import { getObjectTypeInfo } from "@/lib/objectTypeMap";
 import {
@@ -121,6 +121,12 @@ export default function TodoPage() {
   const [newTags, setNewTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [isLookupLoading, setIsLookupLoading] = useState(false);
+  // Manual coordinates — the web build has no SIMBAD lookup (Python-backed),
+  // so the dialog degrades to typed-in entry there.
+  const [manualRa, setManualRa] = useState("");
+  const [manualDec, setManualDec] = useState("");
+  const [manualMagnitude, setManualMagnitude] = useState("");
+  const [manualSize, setManualSize] = useState("");
 
   // Tag filters
   const [tagFilters, setTagFilters] = useState<Set<string>>(new Set());
@@ -452,9 +458,46 @@ export default function TodoPage() {
     </button>
   );
 
+  const resetAddDialog = () => {
+    setDialogOpen(false);
+    setObjectName("");
+    setNotes("");
+    setNewTags([]);
+    setTagInput("");
+    setManualRa("");
+    setManualDec("");
+    setManualMagnitude("");
+    setManualSize("");
+  };
+
   const handleAddTodo = async () => {
     if (!objectName.trim()) {
       toast.error("Please enter an object name");
+      return;
+    }
+
+    // Web: no SIMBAD lookup — the typed-in coordinates are the record.
+    if (!isTauri()) {
+      if (!manualRa.trim() || !manualDec.trim()) {
+        toast.error("Please enter RA and Dec (SIMBAD lookup needs the desktop app)");
+        return;
+      }
+      try {
+        await createTodo.mutateAsync({
+          name: objectName.trim(),
+          ra: manualRa.trim(),
+          dec: manualDec.trim(),
+          magnitude: manualMagnitude.trim() || "N/A",
+          size: manualSize.trim() || "N/A",
+          notes: notes.trim() || undefined,
+          tags: newTags.length > 0 ? newTags : undefined,
+        });
+        toast.success(`Added ${objectName.trim()} to your todo list`);
+        resetAddDialog();
+      } catch (err) {
+        toast.error("Failed to add object");
+        console.error(err);
+      }
       return;
     }
 
@@ -863,7 +906,9 @@ export default function TodoPage() {
               <DialogHeader>
                 <DialogTitle>Add Astronomy Object</DialogTitle>
                 <DialogDescription>
-                  Enter the name of a celestial object to look up in SIMBAD.
+                  {isTauri()
+                    ? "Enter the name of a celestial object to look up in SIMBAD."
+                    : "Enter the object's name and coordinates."}
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4">
@@ -877,9 +922,55 @@ export default function TodoPage() {
                     onKeyDown={handleKeyDown}
                   />
                   <p className="text-sm text-muted-foreground">
-                    The object's coordinates and details will be looked up automatically.
+                    {isTauri()
+                      ? "The object's coordinates and details will be looked up automatically."
+                      : "SIMBAD lookup is available in the desktop app — enter coordinates below."}
                   </p>
                 </div>
+                {!isTauri() && (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="manual_ra">RA</Label>
+                        <Input
+                          id="manual_ra"
+                          placeholder="e.g., 05h 35m 17s"
+                          value={manualRa}
+                          onChange={(e) => setManualRa(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="manual_dec">Dec</Label>
+                        <Input
+                          id="manual_dec"
+                          placeholder="e.g., -05° 23′ 28″"
+                          value={manualDec}
+                          onChange={(e) => setManualDec(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="grid gap-2">
+                        <Label htmlFor="manual_magnitude">Magnitude (optional)</Label>
+                        <Input
+                          id="manual_magnitude"
+                          placeholder="e.g., 4.0"
+                          value={manualMagnitude}
+                          onChange={(e) => setManualMagnitude(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="manual_size">Size (optional)</Label>
+                        <Input
+                          id="manual_size"
+                          placeholder="e.g., 85′ × 60′"
+                          value={manualSize}
+                          onChange={(e) => setManualSize(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="grid gap-2">
                   <Label htmlFor="notes">Notes (optional)</Label>
                   <Textarea

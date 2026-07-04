@@ -109,7 +109,9 @@ export function RecommendationsPanel({
         const allTargets: CatalogTarget[] = [];
 
         for (const catalog of catalogs) {
-          const response = await fetch(`/catalogs/${catalog}.json`);
+          const response = await fetch(
+            `${import.meta.env.BASE_URL}catalogs/${catalog}.json`,
+          );
           if (!response.ok) continue;
 
           const data = await response.json();
