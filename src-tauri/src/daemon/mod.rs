@@ -29,6 +29,7 @@
 //! pages — nothing else.
 
 pub mod api;
+pub mod api_write;
 pub mod auth;
 pub mod gallery;
 pub mod ingest;
@@ -148,11 +149,29 @@ pub fn router(state: Arc<DaemonState>) -> Router {
     let api = Router::new()
         .route("/me", get(me))
         .route("/images", get(api::list_images))
-        .route("/images/{id}", get(api::get_image))
+        .route(
+            "/images/{id}",
+            get(api::get_image)
+                .patch(api_write::update_image)
+                .delete(api_write::delete_image),
+        )
         .route("/images/{id}/thumbnail", get(api::image_thumbnail))
         .route("/images/{id}/preview", get(api::image_preview))
-        .route("/collections", get(api::list_collections))
-        .route("/collections/{id}", get(api::get_collection))
+        .route(
+            "/collections",
+            get(api::list_collections).post(api_write::create_collection),
+        )
+        .route(
+            "/collections/{id}",
+            get(api::get_collection)
+                .patch(api_write::update_collection)
+                .delete(api_write::delete_collection),
+        )
+        .route(
+            "/collections/{id}/images/{image_id}",
+            axum::routing::put(api_write::add_collection_image)
+                .delete(api_write::remove_collection_image),
+        )
         .route(
             "/collections/{id}/publish",
             get(api::publish_status)

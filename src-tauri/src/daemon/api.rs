@@ -56,7 +56,7 @@ struct CollectionDetail {
     images: Vec<Image>,
 }
 
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(serde_json::json!({ "error": "not found" })),
@@ -64,7 +64,7 @@ fn not_found() -> Response {
         .into_response()
 }
 
-fn internal(context: &str, detail: String) -> Response {
+pub(crate) fn internal(context: &str, detail: String) -> Response {
     log::error!("{context}: {detail}");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -75,7 +75,7 @@ fn internal(context: &str, detail: String) -> Response {
 
 /// The embedded base64 thumbnail is legacy storage being decommissioned —
 /// never ship it over the API.
-fn strip_thumbnail(mut image: Image) -> Image {
+pub(crate) fn strip_thumbnail(mut image: Image) -> Image {
     image.thumbnail = None;
     image
 }
