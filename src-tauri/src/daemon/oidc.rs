@@ -391,6 +391,7 @@ i4Dfn7SyS3H/p6KNDaJ+Xg==
             db: test_pool(),
             hoardfs: Arc::new(Mutex::new(hfs)),
             oidc: with_oidc.then(|| Arc::new(verifier())),
+            limits: Default::default(),
         });
         (state, tmp)
     }

@@ -58,6 +58,9 @@ getrandom = "0.3"
 # OIDC JWT validation (Zitadel sessions)
 jsonwebtoken = "9"
 
+# Content hashing for push ingest (matches HoardFS blob ids)
+blake3 = "1"
+
 # Crypto (for S3 signing)
 hmac = "0.12"
 hex = "0.4"

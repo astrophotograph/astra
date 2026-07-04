@@ -30,6 +30,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod ingest;
 pub mod oidc;
 
 use std::future::Future;
@@ -85,6 +86,9 @@ pub struct DaemonState {
     /// OIDC session verification (Zitadel). None → only PATs authenticate.
     /// Configured via `ASTRA_OIDC_ISSUER` + `ASTRA_OIDC_CLIENT_ID`.
     pub oidc: Option<Arc<oidc::OidcVerifier>>,
+    /// Push-ingest request limits (env: ASTRA_MAX_PUSH_IMAGES,
+    /// ASTRA_MAX_ASSET_MB).
+    pub limits: ingest::IngestLimits,
 }
 
 /// A daemon that has initialized its backend and bound its listener but is
@@ -150,6 +154,17 @@ pub fn router(state: Arc<DaemonState>) -> Router {
             get(api::publish_status)
                 .post(api::publish_collection)
                 .delete(api::unpublish_collection),
+        )
+        .route(
+            "/push/collections",
+            axum::routing::post(ingest::push_collection)
+                .layer(axum::extract::DefaultBodyLimit::max(32 * 1024 * 1024)),
+        )
+        .route(
+            "/push/images/{id}/asset",
+            axum::routing::put(ingest::put_image_asset).layer(
+                axum::extract::DefaultBodyLimit::max(state.limits.max_asset_bytes),
+            ),
         )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -253,10 +268,25 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         }
     };
 
+    let mut limits = ingest::IngestLimits::default();
+    if let Some(n) = std::env::var("ASTRA_MAX_PUSH_IMAGES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        limits.max_images_per_push = n;
+    }
+    if let Some(mb) = std::env::var("ASTRA_MAX_ASSET_MB")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        limits.max_asset_bytes = mb * 1024 * 1024;
+    }
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
         oidc,
+        limits,
     })
 }
 

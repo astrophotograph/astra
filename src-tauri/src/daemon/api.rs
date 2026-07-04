@@ -445,6 +445,7 @@ mod tests {
             db,
             hoardfs: Arc::new(Mutex::new(hfs)),
             oidc: None,
+            limits: Default::default(),
         });
         (state, tmp, alice_token, bob_token, image)
     }

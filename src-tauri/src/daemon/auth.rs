@@ -302,6 +302,7 @@ mod tests {
             db: test_pool(),
             hoardfs: Arc::new(std::sync::Mutex::new(hfs)),
             oidc: None,
+            limits: Default::default(),
         });
         (state, tmp)
     }
