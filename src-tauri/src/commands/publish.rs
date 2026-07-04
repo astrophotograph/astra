@@ -229,7 +229,7 @@ pub fn resolve_public_collection(
     Ok(collection.map(|c| (record, c)))
 }
 
-fn user_id_for_username(
+pub(crate) fn user_id_for_username(
     conn: &mut SqliteConnection,
     username: &str,
 ) -> Result<Option<String>, String> {

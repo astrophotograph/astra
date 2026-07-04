@@ -77,6 +77,194 @@ pub struct ManifestObject {
     pub radius_px: Option<f64>,
 }
 
+/// Parse a FITS integer value from the fitrs debug format
+fn parse_fits_int(val: Option<&serde_json::Value>) -> Option<u32> {
+    let val = val?;
+    let s = match val.as_str() {
+        Some(s) => s.to_string(),
+        None => val.to_string().trim_matches('"').to_string(),
+    };
+    // Try: Some(IntegerNumber(6248))
+    if let Some(caps) = s.strip_prefix("Some(IntegerNumber(") {
+        if let Some(num) = caps.strip_suffix("))") {
+            return num.parse().ok();
+        }
+    }
+    // Try: IntegerNumber(6248)
+    if let Some(caps) = s.strip_prefix("IntegerNumber(") {
+        if let Some(num) = caps.strip_suffix(")") {
+            return num.parse().ok();
+        }
+    }
+    // Try plain number
+    s.parse().ok()
+}
+
+fn content_type_for_filename(filename: &str) -> &'static str {
+    let ext = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "fit" | "fits" => "image/fits",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Build a [`ManifestImage`] straight from a database row — catalog ids from
+/// annotations + summary, plate solve and overlay objects from metadata.
+/// (Ported from the worker-era push flow; the daemon now builds manifests
+/// live at request time.)
+pub fn manifest_image_from_row(image: &crate::db::models::Image) -> ManifestImage {
+    let ext = std::path::Path::new(&image.filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("jpg");
+
+    // Catalog IDs from annotation names.
+    let mut catalog_ids: Vec<String> = image
+        .annotations
+        .as_ref()
+        .map(|ann| {
+            serde_json::from_str::<Vec<serde_json::Value>>(ann)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|obj| {
+                    obj.get("name")
+                        .and_then(|n| n.as_str())
+                        .map(|name| name.replace(' ', "").to_uppercase())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Messier IDs from the summary: "M 101", "M101", "Messier 101".
+    let upper = image.summary.clone().unwrap_or_default().to_uppercase();
+    {
+        let normalized = upper.replace(' ', "");
+        let bytes = normalized.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'M' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+                let start = i;
+                i += 1;
+                while i < bytes.len() && bytes[i].is_ascii_digit() {
+                    i += 1;
+                }
+                let mid = normalized[start..i].to_string();
+                if !catalog_ids.contains(&mid) {
+                    catalog_ids.push(mid);
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+    if let Some(pos) = upper.find("MESSIER") {
+        let after = &upper[pos + 7..].trim_start();
+        let num: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if !num.is_empty() {
+            let mid = format!("M{}", num);
+            if !catalog_ids.contains(&mid) {
+                catalog_ids.push(mid);
+            }
+        }
+    }
+
+    // Plate solve + overlay objects from metadata.
+    let (plate_solve, objects) = image
+        .metadata
+        .as_ref()
+        .map(|meta| {
+            let parsed: serde_json::Value = serde_json::from_str(meta).unwrap_or_default();
+            let ps = parsed.get("plate_solve").and_then(|ps| {
+                Some(ManifestPlateSolve {
+                    center_ra: ps.get("center_ra")?.as_f64()?,
+                    center_dec: ps.get("center_dec")?.as_f64()?,
+                    pixel_scale: ps.get("pixel_scale")?.as_f64()?,
+                    rotation: ps.get("rotation")?.as_f64()?,
+                    width_deg: ps.get("width_deg")?.as_f64()?,
+                    height_deg: ps.get("height_deg")?.as_f64()?,
+                    image_width: parse_fits_int(parsed.get("NAXIS1")).or_else(|| {
+                        ps.get("image_width").and_then(|v| v.as_u64()).map(|v| v as u32)
+                    }),
+                    image_height: parse_fits_int(parsed.get("NAXIS2")).or_else(|| {
+                        ps.get("image_height").and_then(|v| v.as_u64()).map(|v| v as u32)
+                    }),
+                })
+            });
+            let objs: Vec<ManifestObject> = image
+                .annotations
+                .as_ref()
+                .map(|ann| {
+                    serde_json::from_str::<Vec<serde_json::Value>>(ann)
+                        .unwrap_or_default()
+                        .iter()
+                        .filter_map(|obj| {
+                            Some(ManifestObject {
+                                name: obj.get("name")?.as_str()?.to_string(),
+                                ra: obj.get("ra")?.as_f64()?,
+                                dec: obj.get("dec")?.as_f64()?,
+                                magnitude: obj.get("magnitude").and_then(|v| v.as_f64()),
+                                size_arcmin: obj.get("sizeArcmin").and_then(|v| v.as_f64()),
+                                pixel_x: obj.get("pixelX").and_then(|v| v.as_f64()),
+                                pixel_y: obj.get("pixelY").and_then(|v| v.as_f64()),
+                                radius_px: obj.get("radiusPx").and_then(|v| v.as_f64()),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            (ps, objs)
+        })
+        .unwrap_or((None, vec![]));
+
+    ManifestImage {
+        id: image.id.clone(),
+        filename: image.filename.clone(),
+        summary: image.summary.clone(),
+        content_type: image
+            .content_type
+            .clone()
+            .unwrap_or_else(|| content_type_for_filename(&image.filename).to_string()),
+        image_path: format!("images/{}.{}", image.id, ext),
+        thumb_path: format!("thumbs/{}.jpg", image.id),
+        created_at: image.created_at.to_string(),
+        favorite: image.favorite,
+        catalog_ids,
+        plate_solve,
+        objects,
+    }
+}
+
+/// Build the full live manifest for a collection from database rows,
+/// including the dateFilter range from collection metadata.
+pub fn build_manifest_for_collection(
+    collection: &crate::db::models::Collection,
+    images: &[crate::db::models::Image],
+) -> ShareManifest {
+    let date_range = collection.metadata.as_ref().and_then(|meta| {
+        let parsed: serde_json::Value = serde_json::from_str(meta).ok()?;
+        let df = parsed.get("dateFilter")?;
+        let start = df.get("start")?.as_str()?.to_string();
+        let end = df.get("end")?.as_str()?.to_string();
+        Some((start, end))
+    });
+
+    build_manifest(
+        &collection.name,
+        collection.description.as_deref(),
+        collection.template.as_deref(),
+        images.iter().map(manifest_image_from_row).collect(),
+        date_range.as_ref().map(|(s, e)| (s.as_str(), e.as_str())),
+    )
+}
+
 /// Build a manifest for a collection and its images.
 pub fn build_manifest(
     collection_name: &str,

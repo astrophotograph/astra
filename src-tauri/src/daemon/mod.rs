@@ -30,6 +30,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod gallery;
 pub mod ingest;
 pub mod oidc;
 
@@ -174,6 +175,14 @@ pub fn router(state: Arc<DaemonState>) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/api", api)
+        // Public gallery surface: `{user}` carries the leading `@`; handlers
+        // 404 anything else. Gated by publish-record resolution, not auth.
+        .route("/{user}", get(gallery::profile_page))
+        .route("/{user}/{slug}", get(gallery::gallery_page))
+        .route("/{user}/{slug}/", get(gallery::gallery_page))
+        .route("/{user}/{slug}/manifest.json", get(gallery::gallery_manifest))
+        .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
+        .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
         .with_state(state)
 }
 

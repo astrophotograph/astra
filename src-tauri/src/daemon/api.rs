@@ -269,8 +269,7 @@ fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
 }
 
 /// Serve image bytes at the requested quality from the caller's HoardFS
-/// volume. `blob_id` is the natural ETag: content-addressed, so it changes
-/// exactly when the bytes do.
+/// volume (authenticated flavor: private cache).
 async fn serve_variant(
     state: Arc<DaemonState>,
     user: AuthedUser,
@@ -292,9 +291,25 @@ async fn serve_variant(
         Err(e) => return internal("serve_variant lookup task", e.to_string()),
     };
 
+    let volume = tenancy::volume_name(&user.user_id);
+    variant_response(state, image, volume, quality, &headers, "private, max-age=3600").await
+}
+
+/// Shared variant-bytes response: conditional ETag handling (blob_id is the
+/// natural ETag — content-addressed, it changes exactly when the bytes do),
+/// HoardFS fetch, content-type + cache headers. Callers decide the
+/// cache-control policy (private for the authed API, public for galleries).
+pub(crate) async fn variant_response(
+    state: Arc<DaemonState>,
+    image: crate::db::models::Image,
+    volume: String,
+    quality: Quality,
+    req_headers: &HeaderMap,
+    cache_control: &'static str,
+) -> Response {
     let etag = image.blob_id.as_deref().map(etag_for);
     if let Some(etag) = &etag {
-        if if_none_match_hits(&headers, etag) {
+        if if_none_match_hits(req_headers, etag) {
             let mut response = StatusCode::NOT_MODIFIED.into_response();
             let response_headers = response.headers_mut();
             if let Ok(etag) = etag.parse() {
@@ -302,18 +317,18 @@ async fn serve_variant(
             }
             response_headers.insert(
                 header::CACHE_CONTROL,
-                header::HeaderValue::from_static("private, max-age=3600"),
+                header::HeaderValue::from_static(cache_control),
             );
             return response;
         }
     }
 
+    let image_id = image.id.clone();
     let Some(hfs_path) = resolve_hfs_path(&image) else {
         log::debug!("image {image_id} has no HoardFS path");
         return not_found();
     };
 
-    let volume = tenancy::volume_name(&user.user_id);
     let hfs_arc = state.hoardfs.clone();
     let rt = tokio::runtime::Handle::current();
     let fetched = tokio::task::spawn_blocking(move || {
@@ -335,7 +350,7 @@ async fn serve_variant(
             );
             headers.insert(
                 header::CACHE_CONTROL,
-                header::HeaderValue::from_static("private, max-age=3600"),
+                header::HeaderValue::from_static(cache_control),
             );
             if let Some(etag) = etag.and_then(|e| e.parse().ok()) {
                 headers.insert(header::ETAG, etag);
@@ -346,7 +361,7 @@ async fn serve_variant(
             log::debug!("variant fetch for image {image_id} failed: {e}");
             not_found()
         }
-        Err(e) => internal("serve_variant fetch task", e.to_string()),
+        Err(e) => internal("variant fetch task", e.to_string()),
     }
 }
 
