@@ -60,6 +60,23 @@ verify-variants *ARGS:
 daemon *ARGS:
     cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
 
+# Rebuild the release daemon and (re)install + restart the staging units
+deploy-staging:
+    cd src-tauri && cargo build --release --bin astra_daemon
+    mkdir -p ~/.config/systemd/user
+    cp deploy/astra-daemon.service deploy/astra-tunnel.service ~/.config/systemd/user/
+    systemctl --user daemon-reload
+    systemctl --user enable --now astra-daemon astra-tunnel
+    systemctl --user restart astra-daemon astra-tunnel
+
+# Status of the staging daemon + tunnel units
+daemon-status:
+    systemctl --user status astra-daemon astra-tunnel --no-pager || true
+
+# Follow the staging daemon + tunnel journals
+daemon-logs:
+    journalctl --user -u astra-daemon -u astra-tunnel -f
+
 # Run Rust tests
 test-rust:
     cd src-tauri && cargo test

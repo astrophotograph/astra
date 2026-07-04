@@ -1,0 +1,17 @@
+# Cloudflare tunnel for staging.astra.gallery — dedicated tunnel
+# (astra-staging), isolated from the production /etc/cloudflared ingress.
+# Config lives at ~/.cloudflared/astra-staging.yml; credentials JSON is
+# backed up in `ho secret get astra/tunnel-credentials`, never committed.
+# Install: just deploy-staging   (copies to ~/.config/systemd/user/)
+[Unit]
+Description=Cloudflare tunnel for staging.astra.gallery
+After=network-online.target astra-daemon.service
+Wants=astra-daemon.service
+
+[Service]
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel --config %h/.cloudflared/astra-staging.yml run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
