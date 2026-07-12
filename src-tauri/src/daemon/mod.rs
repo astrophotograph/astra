@@ -37,6 +37,7 @@ pub mod ingest;
 pub mod kith_store;
 pub mod oidc;
 pub mod session;
+pub mod social_routes;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -107,6 +108,20 @@ pub struct DaemonState {
     pub limits: ingest::IngestLimits,
     /// HMAC key for browser session cookies ({data_dir}/session-key).
     pub session_key: [u8; 32],
+}
+
+impl DaemonState {
+    /// Kith storage adapter over this state's pool. The store is just an
+    /// Arc'd pool handle, so constructing per call is free — one definition
+    /// point without adding a field to every `DaemonState` literal.
+    pub fn kith(&self) -> kith_store::AstraKithStore {
+        kith_store::AstraKithStore::new(self.db.clone())
+    }
+
+    /// High-level social graph over [`Self::kith`].
+    pub fn social(&self) -> kith::graph::SocialGraph<kith_store::AstraKithStore> {
+        kith::graph::SocialGraph::new(self.kith())
+    }
 }
 
 /// A daemon that has initialized its backend and bound its listener but is
@@ -256,6 +271,7 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
                 axum::extract::DefaultBodyLimit::max(state.limits.max_asset_bytes),
             ),
         )
+        .nest("/social", social_routes::routes())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
