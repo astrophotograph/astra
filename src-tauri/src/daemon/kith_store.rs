@@ -589,6 +589,28 @@ impl NotificationStore for AstraKithStore {
     }
 }
 
+impl AstraKithStore {
+    /// Who a notification belongs to, or `None` if the id is unknown.
+    ///
+    /// Not part of any Kith trait: `NotificationStore::mark_read` takes only
+    /// an id, so route-level ownership checks ("mark only your own") need
+    /// this lookup — recorded as trait-surface friction on the epic.
+    pub async fn notification_recipient(&self, notification_id: &str) -> Result<Option<String>> {
+        let pool = self.pool.clone();
+        let id = notification_id.to_owned();
+        run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
+            kith_notifications::table
+                .filter(kith_notifications::id.eq(id))
+                .select(kith_notifications::recipient_id)
+                .first::<String>(&mut conn)
+                .optional()
+                .map_err(storage_err)
+        })
+        .await
+    }
+}
+
 /// Parity with Kith's `SqliteStore`: the store itself can act as a delivery
 /// sink, so an engine with no external channels still persists in-app
 /// notifications.

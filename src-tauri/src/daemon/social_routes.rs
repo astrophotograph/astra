@@ -36,6 +36,18 @@ pub fn routes() -> Router<Arc<DaemonState>> {
         .route("/following", get(following))
         .route("/counts/{kind}/{id}", get(counts))
         .route("/mutual/{user_id}", get(mutual))
+        .route("/notifications", get(list_notifications))
+        // Static segments outrank the {id} capture, so unread-count and
+        // read-all are never shadowed.
+        .route("/notifications/unread-count", get(unread_count))
+        .route(
+            "/notifications/read-all",
+            axum::routing::post(mark_all_notifications_read),
+        )
+        .route(
+            "/notifications/{id}/read",
+            axum::routing::post(mark_notification_read),
+        )
 }
 
 /// `user | object | collection` — the kinds the social surface accepts for
@@ -316,6 +328,95 @@ pub async fn mutual(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct NotificationParams {
+    unread_only: Option<bool>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+}
+
+/// GET /api/social/notifications?unread_only=&limit=&cursor= — the caller's
+/// feed, newest first. Items are kith `Notification`s serialized as-is.
+pub async fn list_notifications(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Query(params): Query<NotificationParams>,
+) -> Response {
+    let recipient = UserId(user.user_id);
+    let page = PageParams {
+        limit: params.limit,
+        cursor: params.cursor,
+    }
+    .request();
+
+    let result = kith::storage::NotificationStore::notifications_for_page(
+        &state.kith(),
+        &recipient,
+        params.unread_only.unwrap_or(false),
+        &page,
+    )
+    .await;
+    match result {
+        Ok(page) => Json(json!({
+            "items": page.items,
+            "next_cursor": page.next_cursor,
+            "total": page.total,
+        }))
+        .into_response(),
+        Err(e) => kith_error("social notifications", e),
+    }
+}
+
+/// GET /api/social/notifications/unread-count
+pub async fn unread_count(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+) -> Response {
+    let recipient = UserId(user.user_id);
+    match kith::storage::NotificationStore::unread_count(&state.kith(), &recipient).await {
+        Ok(count) => Json(json!({ "count": count })).into_response(),
+        Err(e) => kith_error("social unread-count", e),
+    }
+}
+
+/// POST /api/social/notifications/{id}/read — 204. Only the recipient may
+/// mark a notification; anyone else (or an unknown id) gets 404 so the
+/// route doesn't leak which ids exist.
+pub async fn mark_notification_read(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+) -> Response {
+    let store = state.kith();
+    match store.notification_recipient(&id).await {
+        Ok(Some(recipient)) if recipient == user.user_id => {
+            match kith::storage::NotificationStore::mark_read(&store, &id).await {
+                Ok(()) => StatusCode::NO_CONTENT.into_response(),
+                Err(e) => kith_error("social mark-read", e),
+            }
+        }
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("notification {id}") })),
+        )
+            .into_response(),
+        Err(e) => kith_error("social mark-read", e),
+    }
+}
+
+/// POST /api/social/notifications/read-all — 204. Scoped to the caller by
+/// construction.
+pub async fn mark_all_notifications_read(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+) -> Response {
+    let recipient = UserId(user.user_id);
+    match kith::storage::NotificationStore::mark_all_read(&state.kith(), &recipient).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => kith_error("social read-all", e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,6 +676,155 @@ mod tests {
 
         let (_, body) = send(&router, "GET", "/api/social/mutual/bob", t, None).await;
         assert_eq!(body["mutual"], true);
+    }
+
+    fn seed_notification(id: &str, recipient: &str, minutes_ago: i64) -> kith::types::Notification {
+        kith::types::Notification {
+            id: id.to_string(),
+            recipient: UserId::from(recipient),
+            event: kith::types::Event {
+                source: UserId::from("bob"),
+                entity: EntityId::object("M42"),
+                kind: kith::types::EventKind::NewContent,
+                payload: Default::default(),
+            },
+            created_at: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+            read: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn notification_feed_and_read_lifecycle() {
+        let (router, state, token, _tmp) = setup().await;
+        let t = Some(token.as_str());
+        let store = state.kith();
+
+        use kith::storage::NotificationStore;
+        store
+            .store_notification(&seed_notification("n_a1", "alice", 10))
+            .await
+            .unwrap();
+        store
+            .store_notification(&seed_notification("n_a2", "alice", 1))
+            .await
+            .unwrap();
+        store
+            .store_notification(&seed_notification("n_b1", "bob", 5))
+            .await
+            .unwrap();
+
+        // Feed: alice sees only her two, newest first.
+        let (status, body) = send(&router, "GET", "/api/social/notifications", t, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["total"], 2);
+        assert_eq!(body["items"][0]["id"], "n_a2");
+        assert_eq!(body["items"][1]["id"], "n_a1");
+
+        let (_, body) = send(
+            &router,
+            "GET",
+            "/api/social/notifications/unread-count",
+            t,
+            None,
+        )
+        .await;
+        assert_eq!(body["count"], 2);
+
+        // Mark one read: unread-only feed and count shrink.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/social/notifications/n_a1/read",
+            t,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, body) = send(
+            &router,
+            "GET",
+            "/api/social/notifications?unread_only=true",
+            t,
+            None,
+        )
+        .await;
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["items"][0]["id"], "n_a2");
+
+        // Read-all zeroes the badge.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/social/notifications/read-all",
+            t,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (_, body) = send(
+            &router,
+            "GET",
+            "/api/social/notifications/unread-count",
+            t,
+            None,
+        )
+        .await;
+        assert_eq!(body["count"], 0);
+    }
+
+    #[tokio::test]
+    async fn cannot_mark_someone_elses_notification() {
+        let (router, state, token, _tmp) = setup().await;
+        use kith::storage::NotificationStore;
+        state
+            .kith()
+            .store_notification(&seed_notification("n_bob", "bob", 1))
+            .await
+            .unwrap();
+
+        // Alice marking bob's notification: 404, and bob's stays unread.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/social/notifications/n_bob/read",
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            state
+                .kith()
+                .unread_count(&UserId::from("bob"))
+                .await
+                .unwrap(),
+            1
+        );
+
+        // Unknown id: same 404.
+        let (status, _) = send(
+            &router,
+            "POST",
+            "/api/social/notifications/nope/read",
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn notification_routes_require_auth() {
+        let (router, _state, _token, _tmp) = setup().await;
+        for (method, uri) in [
+            ("GET", "/api/social/notifications"),
+            ("GET", "/api/social/notifications/unread-count"),
+            ("POST", "/api/social/notifications/x/read"),
+            ("POST", "/api/social/notifications/read-all"),
+        ] {
+            let (status, _) = send(&router, method, uri, None, None).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+        }
     }
 
     #[tokio::test]
