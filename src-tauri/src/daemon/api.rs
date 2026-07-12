@@ -337,6 +337,9 @@ pub async fn publish_collection(
     let db = state.db.clone();
     let user_id = user.user_id.clone();
     let result = tokio::task::spawn_blocking(move || {
+        // Fresh publish vs. update of an existing record — only the former
+        // fans out to followers below.
+        let was_new = get_publish_status_core(&db, &user_id, &id)?.is_none();
         publish_collection_core(
             &db,
             &user_id,
@@ -344,11 +347,25 @@ pub async fn publish_collection(
             visibility.unwrap_or(PublishVisibility::Public),
             slug.as_deref(),
         )
+        .map(|record| (record, was_new))
     })
     .await;
 
     match result {
-        Ok(Ok(record)) => Json(record).into_response(),
+        Ok(Ok((record, was_new))) => {
+            // Notify followers post-commit, fire-and-forget: fan-out latency
+            // and errors never touch the publish response. Unlisted galleries
+            // stay quiet.
+            if was_new && record.visibility == PublishVisibility::Public.as_str() {
+                tokio::spawn(super::social_events::emit_new_gallery(
+                    state.clone(),
+                    record.user_id.clone(),
+                    record.title.clone(),
+                    record.slug.clone(),
+                ));
+            }
+            Json(record).into_response()
+        }
         Ok(Err(e)) if e.starts_with("Collection not found") => not_found(),
         Ok(Err(e)) => internal("publish_collection", e),
         Err(e) => internal("publish_collection task", e.to_string()),

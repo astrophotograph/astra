@@ -37,6 +37,7 @@ pub mod ingest;
 pub mod kith_store;
 pub mod oidc;
 pub mod session;
+pub mod social_events;
 pub mod social_routes;
 
 use std::future::Future;
