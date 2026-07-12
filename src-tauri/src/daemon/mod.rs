@@ -34,6 +34,7 @@ pub mod auth;
 pub mod webapp;
 pub mod gallery;
 pub mod ingest;
+pub mod kith_store;
 pub mod oidc;
 pub mod session;
 
