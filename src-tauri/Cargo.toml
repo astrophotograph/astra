@@ -76,7 +76,8 @@ open = "5"
 # FITS file parsing
 fitrs = "0.5"
 
-# Native image processing
+# Native image processing (stretch pipeline lives in processinator)
+processinator = { path = "../../processinator-rs" }
 rayon = "1"
 
 # Native plate solver

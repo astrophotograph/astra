@@ -1,15 +1,16 @@
 //! FITS variant generator for HoardFS.
 //!
 //! Implements the HoardFS VariantGenerator trait for FITS files,
-//! using Astra's stretch pipeline to produce JPEG thumbnails and previews.
+//! using the processinator stretch pipeline to produce JPEG thumbnails
+//! and previews.
 
 use async_trait::async_trait;
 use hoardfs_core::{Quality, Result as HoardResult};
 use hoardfs_variant::{VariantGenerator, VariantOutput};
+use processinator::{read_fits, stretch, to_dynamic_image, StretchAlgorithm, StretchOptions};
 use std::io::Cursor;
 
 use crate::stretch::StretchParams;
-use crate::stretch::mtf;
 
 /// Variant generator for FITS astrophotography files.
 ///
@@ -54,77 +55,43 @@ impl VariantGenerator for FitsVariantGenerator {
             _ => 90u8,
         };
 
-        // fitrs only reads from file paths, so write to a temp file
+        // The FITS reader only works from file paths, so write to a temp file
         let tmp = std::env::temp_dir().join(format!("astra_fits_{}.fits", uuid::Uuid::new_v4()));
         std::fs::write(&tmp, source)
             .map_err(|e| hoardfs_core::HoardError::Backend(format!("Temp write: {}", e)))?;
-        let result = crate::stretch::read_fits_pixels(&tmp);
+        let result = read_fits(&tmp);
         let _ = std::fs::remove_file(&tmp);
-        let (width, height, pixels, is_color) = result
+        let data = result
             .map_err(|e| hoardfs_core::HoardError::Backend(format!("FITS parse: {}", e)))?;
 
-        let channel_size = width * height;
+        // Normalize + MTF stretch (no autocrop for variants, matching the
+        // pre-processinator behavior)
+        let stretched = stretch(
+            &data,
+            &StretchOptions {
+                algorithm: StretchAlgorithm::Mtf {
+                    bg_percent: self.params.bg_percent,
+                    sigma: self.params.sigma,
+                    linked: true,
+                },
+                autocrop: false,
+                pre_normalized: false,
+            },
+        );
 
-        // Split into channels
-        let mut channels: Vec<Vec<f64>> = if is_color {
-            vec![
-                pixels[0..channel_size].to_vec(),
-                pixels[channel_size..channel_size * 2].to_vec(),
-                pixels[channel_size * 2..channel_size * 3].to_vec(),
-            ]
-        } else {
-            vec![pixels[0..channel_size].to_vec()]
-        };
-
-        // Normalize
-        for ch in channels.iter_mut() {
-            let mut sorted = ch.clone();
-            let lo_idx = (sorted.len() as f64 * 0.001) as usize;
-            let hi_idx = ((sorted.len() as f64 * 0.9999) as usize).min(sorted.len() - 1);
-            sorted.select_nth_unstable_by(lo_idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let lo = sorted[lo_idx];
-            sorted.select_nth_unstable_by(hi_idx, |a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let hi = sorted[hi_idx];
-            let range = hi - lo;
-            if range > 0.0 {
-                for v in ch.iter_mut() {
-                    *v = ((*v - lo) / range).clamp(0.0, 1.0);
-                }
-            }
-        }
-
-        // MTF stretch
-        mtf::stretch_mtf_rgb(&mut channels, self.params.bg_percent, self.params.sigma);
-
-        // Convert to RGB bytes
-        let mut rgb = vec![0u8; channel_size * 3];
-        if is_color {
-            for i in 0..channel_size {
-                rgb[i * 3] = (channels[0][i] * 255.0).clamp(0.0, 255.0) as u8;
-                rgb[i * 3 + 1] = (channels[1][i] * 255.0).clamp(0.0, 255.0) as u8;
-                rgb[i * 3 + 2] = (channels[2][i] * 255.0).clamp(0.0, 255.0) as u8;
-            }
-        } else {
-            for i in 0..channel_size {
-                let v = (channels[0][i] * 255.0).clamp(0.0, 255.0) as u8;
-                rgb[i * 3] = v;
-                rgb[i * 3 + 1] = v;
-                rgb[i * 3 + 2] = v;
-            }
-        }
-
-        let img = image::RgbImage::from_raw(width as u32, height as u32, rgb)
-            .ok_or_else(|| hoardfs_core::HoardError::Backend("Failed to create image buffer".into()))?;
+        // Mono comes back as Luma8; variants are always RGB JPEGs
+        let img = to_dynamic_image(&stretched).to_rgb8();
+        let (width, height) = (img.width(), img.height());
 
         // Resize if needed
-        let (out_w, out_h) = if width as u32 > max_dim || height as u32 > max_dim {
+        let (out_w, out_h) = if width > max_dim || height > max_dim {
             let scale = max_dim as f64 / (width.max(height) as f64);
             ((width as f64 * scale) as u32, (height as f64 * scale) as u32)
         } else {
-            (width as u32, height as u32)
+            (width, height)
         };
 
-        let resized = if out_w != width as u32 || out_h != height as u32 {
+        let resized = if out_w != width || out_h != height {
             image::imageops::resize(&img, out_w, out_h, image::imageops::FilterType::Lanczos3)
         } else {
             image::imageops::resize(&img, out_w, out_h, image::imageops::FilterType::Nearest)
