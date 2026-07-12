@@ -2,9 +2,12 @@
 //!
 //! First real Rust consumer of Kith's storage traits backed by a store Kith
 //! does not own. Column shapes and value encodings mirror Kith's reference
-//! `SqliteStore` (kith/src/sqlite.rs): `edge_kind` and `target_kind` are
-//! serde-JSON strings, `metadata` is a JSON object, `created_at` is RFC3339
-//! TEXT — so rows stay portable between the two stores.
+//! `SqliteStore` (kith/src/sqlite.rs): `edge_kind` and `target_kind` use
+//! kith's canonical TEXT codec (`EdgeKind`/`EntityKind` `Display`/`FromStr`:
+//! `follow`, `vouch:identity`, `circle:{name}`, `user`, ...), `metadata` is a
+//! JSON object, `created_at` is RFC3339 TEXT — so rows stay portable between
+//! the two stores. Pre-codec serde-JSON rows are rewritten by the
+//! `kith_canonical_kinds` migration.
 //!
 //! Every method runs its Diesel work inside `tokio::task::spawn_blocking`:
 //! pooled r2d2 connections must not be held across await points.
@@ -50,22 +53,24 @@ where
         .map_err(|e| storage_err(format!("blocking task join: {e}")))?
 }
 
-/// Serde-JSON encoding of kind enums, exactly as Kith's `SqliteStore` writes
-/// them (e.g. `"Follow"`, `{"Circle":"friends"}`, `{"Vouch":{"axis":"Identity"}}`).
-fn encode_edge_kind(kind: &EdgeKind) -> Result<String> {
-    serde_json::to_string(kind).map_err(storage_err)
+/// Kith's canonical TEXT codec for kind enums (`EdgeKind`/`EntityKind`
+/// `Display`), e.g. `follow`, `circle:friends`, `vouch:identity`, `user`.
+fn encode_edge_kind(kind: &EdgeKind) -> String {
+    kind.to_string()
 }
 
 fn decode_edge_kind(s: &str) -> Result<EdgeKind> {
-    serde_json::from_str(s).map_err(|e| storage_err(format!("bad edge_kind {s:?}: {e}")))
+    s.parse()
+        .map_err(|e| storage_err(format!("bad edge_kind {s:?}: {e}")))
 }
 
-fn encode_entity_kind(kind: &EntityKind) -> Result<String> {
-    serde_json::to_string(kind).map_err(storage_err)
+fn encode_entity_kind(kind: &EntityKind) -> String {
+    kind.to_string()
 }
 
 fn decode_entity_kind(s: &str) -> Result<EntityKind> {
-    serde_json::from_str(s).map_err(|e| storage_err(format!("bad target_kind {s:?}: {e}")))
+    s.parse()
+        .map_err(|e| storage_err(format!("bad target_kind {s:?}: {e}")))
 }
 
 /// One `kith_edges` row. Field order matches the `table!` declaration.
@@ -102,9 +107,9 @@ impl GraphStore for AstraKithStore {
     async fn add_edge(&self, edge: &Edge) -> Result<()> {
         let pool = self.pool.clone();
         let actor = edge.actor.0.clone();
-        let target_kind = encode_entity_kind(&edge.target.kind)?;
+        let target_kind = encode_entity_kind(&edge.target.kind);
         let target_id = edge.target.id.clone();
-        let edge_kind = encode_edge_kind(&edge.kind)?;
+        let edge_kind = encode_edge_kind(&edge.kind);
         let weight = edge.weight as f64;
         let metadata = serde_json::to_string(&edge.metadata).map_err(storage_err)?;
         let created_at = edge.created_at.to_rfc3339();
@@ -131,9 +136,9 @@ impl GraphStore for AstraKithStore {
     async fn remove_edge(&self, actor: &UserId, target: &EntityId, kind: &EdgeKind) -> Result<()> {
         let pool = self.pool.clone();
         let actor = actor.0.clone();
-        let target_kind = encode_entity_kind(&target.kind)?;
+        let target_kind = encode_entity_kind(&target.kind);
         let target_id = target.id.clone();
-        let edge_kind = encode_edge_kind(kind)?;
+        let edge_kind = encode_edge_kind(kind);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -159,9 +164,9 @@ impl GraphStore for AstraKithStore {
     ) -> Result<bool> {
         let pool = self.pool.clone();
         let actor = actor.0.clone();
-        let target_kind = encode_entity_kind(&target.kind)?;
+        let target_kind = encode_entity_kind(&target.kind);
         let target_id = target.id.clone();
-        let edge_kind = encode_edge_kind(kind)?;
+        let edge_kind = encode_edge_kind(kind);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -180,9 +185,9 @@ impl GraphStore for AstraKithStore {
 
     async fn followers(&self, target: &EntityId, kind: &EdgeKind) -> Result<Vec<Edge>> {
         let pool = self.pool.clone();
-        let target_kind = encode_entity_kind(&target.kind)?;
+        let target_kind = encode_entity_kind(&target.kind);
         let target_id = target.id.clone();
-        let edge_kind = encode_edge_kind(kind)?;
+        let edge_kind = encode_edge_kind(kind);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -203,7 +208,7 @@ impl GraphStore for AstraKithStore {
     async fn following(&self, actor: &UserId, kind: &EdgeKind) -> Result<Vec<Edge>> {
         let pool = self.pool.clone();
         let actor = actor.0.clone();
-        let edge_kind = encode_edge_kind(kind)?;
+        let edge_kind = encode_edge_kind(kind);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -220,22 +225,15 @@ impl GraphStore for AstraKithStore {
         .await
     }
 
-    async fn mutual(&self, a: &UserId, b: &UserId) -> Result<bool> {
-        let a_follows_b = self
-            .edge_exists(a, &EntityId::user(b), &EdgeKind::Follow)
-            .await?;
-        if !a_follows_b {
-            return Ok(false);
-        }
-        self.edge_exists(b, &EntityId::user(a), &EdgeKind::Follow)
-            .await
-    }
+    // `mutual` uses the trait's provided implementation — two short-circuited
+    // edge_exists probes, identical to what this adapter hand-wrote before
+    // the kith respec made it a default method.
 
     async fn count_followers(&self, target: &EntityId) -> Result<u64> {
         let pool = self.pool.clone();
-        let target_kind = encode_entity_kind(&target.kind)?;
+        let target_kind = encode_entity_kind(&target.kind);
         let target_id = target.id.clone();
-        let edge_kind = encode_edge_kind(&EdgeKind::Follow)?;
+        let edge_kind = encode_edge_kind(&EdgeKind::Follow);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -254,7 +252,7 @@ impl GraphStore for AstraKithStore {
     async fn count_following(&self, actor: &UserId) -> Result<u64> {
         let pool = self.pool.clone();
         let actor = actor.0.clone();
-        let edge_kind = encode_edge_kind(&EdgeKind::Follow)?;
+        let edge_kind = encode_edge_kind(&EdgeKind::Follow);
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -275,12 +273,11 @@ impl GraphStore for AstraKithStore {
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
-            // Same shape as Kith's SqliteStore: the JSON encoding of
-            // EdgeKind::Circle is `{"Circle":"name"}`, so a LIKE prefilter
-            // narrows the DISTINCT scan and decode confirms.
+            // The canonical codec makes circles a true prefix query — circle
+            // edges are exactly the rows whose edge_kind starts with 'circle:'.
             let kinds: Vec<String> = kith_edges::table
                 .filter(kith_edges::actor_id.eq(actor))
-                .filter(kith_edges::edge_kind.like("%Circle%"))
+                .filter(kith_edges::edge_kind.like("circle:%"))
                 .select(kith_edges::edge_kind)
                 .distinct()
                 .load(&mut conn)
@@ -386,7 +383,7 @@ impl SubscriptionStore for AstraKithStore {
         let pool = self.pool.clone();
         let row_id = id.0.clone();
         let actor = actor.0.clone();
-        let topic_kind = encode_entity_kind(&topic.kind)?;
+        let topic_kind = encode_entity_kind(&topic.kind);
         let topic_id = topic.id.clone();
         let filter_json = serde_json::to_string(&filter).map_err(storage_err)?;
         let created_at = Utc::now().to_rfc3339();
@@ -442,7 +439,7 @@ impl SubscriptionStore for AstraKithStore {
 
     async fn subscribers_of(&self, topic: &EntityId) -> Result<Vec<Subscription>> {
         let pool = self.pool.clone();
-        let topic_kind = encode_entity_kind(&topic.kind)?;
+        let topic_kind = encode_entity_kind(&topic.kind);
         let topic_id = topic.id.clone();
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
@@ -467,7 +464,7 @@ impl NotificationStore for AstraKithStore {
         let id = notification.id.clone();
         let recipient = notification.recipient.0.clone();
         let source = notification.event.source.0.clone();
-        let entity_kind = encode_entity_kind(&notification.event.entity.kind)?;
+        let entity_kind = encode_entity_kind(&notification.event.entity.kind);
         let entity_id = notification.event.entity.id.clone();
         let event_kind = serde_json::to_string(&notification.event.kind).map_err(storage_err)?;
         let payload_json = serde_json::to_string(&notification.event.payload).map_err(storage_err)?;
@@ -521,16 +518,36 @@ impl NotificationStore for AstraKithStore {
         .await
     }
 
-    async fn mark_read(&self, notification_id: &str) -> Result<()> {
+    async fn notification(&self, notification_id: &str) -> Result<Option<Notification>> {
         let pool = self.pool.clone();
         let id = notification_id.to_owned();
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
-            let updated =
-                diesel::update(kith_notifications::table.filter(kith_notifications::id.eq(&id)))
-                    .set(kith_notifications::read.eq(1))
-                    .execute(&mut conn)
-                    .map_err(storage_err)?;
+            kith_notifications::table
+                .filter(kith_notifications::id.eq(id))
+                .first::<NotificationRow>(&mut conn)
+                .optional()
+                .map_err(storage_err)?
+                .map(NotificationRow::into_notification)
+                .transpose()
+        })
+        .await
+    }
+
+    async fn mark_read(&self, recipient: &UserId, notification_id: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let recipient = recipient.0.clone();
+        let id = notification_id.to_owned();
+        run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
+            let updated = diesel::update(
+                kith_notifications::table
+                    .filter(kith_notifications::id.eq(&id))
+                    .filter(kith_notifications::recipient_id.eq(recipient)),
+            )
+            .set(kith_notifications::read.eq(1))
+            .execute(&mut conn)
+            .map_err(storage_err)?;
             if updated == 0 {
                 return Err(KithError::NotFound(format!("notification {id}")));
             }
@@ -571,41 +588,23 @@ impl NotificationStore for AstraKithStore {
         .await
     }
 
-    async fn delete_notification(&self, notification_id: &str) -> Result<()> {
+    async fn delete_notification(&self, recipient: &UserId, notification_id: &str) -> Result<()> {
         let pool = self.pool.clone();
+        let recipient = recipient.0.clone();
         let id = notification_id.to_owned();
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
-            let deleted =
-                diesel::delete(kith_notifications::table.filter(kith_notifications::id.eq(&id)))
-                    .execute(&mut conn)
-                    .map_err(storage_err)?;
+            let deleted = diesel::delete(
+                kith_notifications::table
+                    .filter(kith_notifications::id.eq(&id))
+                    .filter(kith_notifications::recipient_id.eq(recipient)),
+            )
+            .execute(&mut conn)
+            .map_err(storage_err)?;
             if deleted == 0 {
                 return Err(KithError::NotFound(format!("notification {id}")));
             }
             Ok(())
-        })
-        .await
-    }
-}
-
-impl AstraKithStore {
-    /// Who a notification belongs to, or `None` if the id is unknown.
-    ///
-    /// Not part of any Kith trait: `NotificationStore::mark_read` takes only
-    /// an id, so route-level ownership checks ("mark only your own") need
-    /// this lookup — recorded as trait-surface friction on the epic.
-    pub async fn notification_recipient(&self, notification_id: &str) -> Result<Option<String>> {
-        let pool = self.pool.clone();
-        let id = notification_id.to_owned();
-        run_blocking(move || {
-            let mut conn = pool.get().map_err(storage_err)?;
-            kith_notifications::table
-                .filter(kith_notifications::id.eq(id))
-                .select(kith_notifications::recipient_id)
-                .first::<String>(&mut conn)
-                .optional()
-                .map_err(storage_err)
         })
         .await
     }
@@ -960,10 +959,36 @@ mod tests {
             Some("orion")
         );
 
-        store.mark_read("n_old").await.unwrap();
+        store.mark_read(&alice(), "n_old").await.unwrap();
         let unread = store.notifications_for(&alice(), true).await.unwrap();
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].id, "n_new");
+    }
+
+    #[tokio::test]
+    async fn notification_get_by_id_and_recipient_scoping() {
+        let store = store();
+        assert!(store.notification("n1").await.unwrap().is_none());
+
+        store
+            .store_notification(&notification("n1", &alice(), 1))
+            .await
+            .unwrap();
+
+        let n = store.notification("n1").await.unwrap().unwrap();
+        assert_eq!(n.recipient, alice());
+
+        // The wrong recipient can neither mark nor delete, and can't
+        // distinguish "not mine" from "doesn't exist".
+        assert!(matches!(
+            store.mark_read(&carol(), "n1").await,
+            Err(KithError::NotFound(_))
+        ));
+        assert!(matches!(
+            store.delete_notification(&carol(), "n1").await,
+            Err(KithError::NotFound(_))
+        ));
+        assert_eq!(store.unread_count(&alice()).await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -983,13 +1008,13 @@ mod tests {
             .unwrap();
         assert_eq!(store.unread_count(&alice()).await.unwrap(), 3);
 
-        store.mark_read("n1").await.unwrap();
+        store.mark_read(&alice(), "n1").await.unwrap();
         assert_eq!(store.unread_count(&alice()).await.unwrap(), 2);
 
         store.mark_all_read(&alice()).await.unwrap();
         assert_eq!(store.unread_count(&alice()).await.unwrap(), 0);
 
-        store.delete_notification("n2").await.unwrap();
+        store.delete_notification(&alice(), "n2").await.unwrap();
         let remaining = store.notifications_for(&alice(), false).await.unwrap();
         assert_eq!(
             remaining.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
@@ -998,11 +1023,11 @@ mod tests {
 
         // Missing IDs surface NotFound, matching kith's SqliteStore.
         assert!(matches!(
-            store.mark_read("nope").await,
+            store.mark_read(&alice(), "nope").await,
             Err(KithError::NotFound(_))
         ));
         assert!(matches!(
-            store.delete_notification("n2").await,
+            store.delete_notification(&alice(), "n2").await,
             Err(KithError::NotFound(_))
         ));
     }
@@ -1039,11 +1064,9 @@ mod tests {
 
         let store = store();
         // No external sinks; persistence goes through the notification store.
-        // `with_graph_store` only exists on the unparameterized engine, so
-        // the second attachment must use the `_on` variant.
-        let engine = SubscriptionEngine::new(store.clone(), Vec::<AstraKithStore>::new())
+        let engine = SubscriptionEngine::without_sinks(store.clone())
             .with_notification_store(store.clone())
-            .with_graph_store_on(store.clone());
+            .with_graph_store(store.clone());
 
         // Alice and Carol both subscribe to M42; Carol has blocked Bob.
         engine

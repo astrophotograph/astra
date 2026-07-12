@@ -131,6 +131,10 @@ mod tests {
         let pool = test_support::test_pool();
         let mut conn = pool.get().unwrap();
 
+        // Two kith migrations sit on top: canonical kind codec, then the
+        // table-creating kith_social underneath it.
+        conn.revert_last_migration(MIGRATIONS).unwrap();
+        assert_eq!(kith_table_names(&mut conn).len(), 3);
         conn.revert_last_migration(MIGRATIONS).unwrap();
         assert!(kith_table_names(&mut conn).is_empty());
 
@@ -138,6 +142,93 @@ mod tests {
         // exercises the incremental (existing-DB) path.
         run_migrations(&mut conn).unwrap();
         assert_eq!(kith_table_names(&mut conn).len(), 3);
+    }
+
+    #[test]
+    fn kith_canonical_kinds_migration_rewrites_legacy_rows() {
+        use diesel::connection::SimpleConnection;
+
+        let pool = test_support::test_pool();
+        let mut conn = pool.get().unwrap();
+
+        // Wind back the codec migration and plant legacy serde-JSON rows,
+        // exactly as the pre-codec AstraKithStore wrote them.
+        conn.revert_last_migration(MIGRATIONS).unwrap();
+        conn.batch_execute(
+            r#"
+            INSERT INTO kith_edges (actor_id, target_kind, target_id, edge_kind, weight, metadata, created_at)
+            VALUES
+                ('alice', '"User"', 'bob', '"Follow"', 1.0, '{}', '2026-07-01T00:00:00+00:00'),
+                ('alice', '"User"', 'bob', '{"Vouch":{"axis":"Identity"}}', 1.0, '{}', '2026-07-01T00:00:00+00:00'),
+                ('alice', '{"Custom":"room"}', 'r1', '{"Circle":"close:friends"}', 1.0, '{}', '2026-07-01T00:00:00+00:00');
+            INSERT INTO kith_subscriptions (id, actor_id, topic_kind, topic_id, filter_json, created_at)
+            VALUES ('sub_legacy', 'alice', '"Object"', 'M42', '{}', '2026-07-01T00:00:00+00:00');
+            INSERT INTO kith_notifications (id, recipient_id, source_id, entity_kind, entity_id, event_kind, payload_json, created_at, read)
+            VALUES ('n_legacy', 'alice', 'bob', '"User"', 'bob', '"NewContent"', '{}', '2026-07-01T00:00:00+00:00', 0);
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&mut conn).unwrap();
+
+        #[derive(QueryableByName)]
+        struct Kind {
+            #[diesel(sql_type = Text)]
+            kind: String,
+        }
+        let edge_kinds: Vec<String> = sql_query(
+            "SELECT edge_kind AS kind FROM kith_edges ORDER BY 1",
+        )
+        .load::<Kind>(&mut conn)
+        .unwrap()
+        .into_iter()
+        .map(|k| k.kind)
+        .collect();
+        assert_eq!(
+            edge_kinds,
+            ["circle:close:friends", "follow", "vouch:identity"]
+        );
+
+        let target_kinds: Vec<String> = sql_query(
+            "SELECT DISTINCT target_kind AS kind FROM kith_edges ORDER BY 1",
+        )
+        .load::<Kind>(&mut conn)
+        .unwrap()
+        .into_iter()
+        .map(|k| k.kind)
+        .collect();
+        assert_eq!(target_kinds, ["custom:room", "user"]);
+
+        let topic_kind: Vec<String> = sql_query(
+            "SELECT topic_kind AS kind FROM kith_subscriptions",
+        )
+        .load::<Kind>(&mut conn)
+        .unwrap()
+        .into_iter()
+        .map(|k| k.kind)
+        .collect();
+        assert_eq!(topic_kind, ["object"]);
+
+        let entity_kind: Vec<String> = sql_query(
+            "SELECT entity_kind AS kind FROM kith_notifications",
+        )
+        .load::<Kind>(&mut conn)
+        .unwrap()
+        .into_iter()
+        .map(|k| k.kind)
+        .collect();
+        assert_eq!(entity_kind, ["user"]);
+
+        // event_kind is not part of the codec and stays serde-JSON.
+        let event_kind: Vec<String> = sql_query(
+            "SELECT event_kind AS kind FROM kith_notifications",
+        )
+        .load::<Kind>(&mut conn)
+        .unwrap()
+        .into_iter()
+        .map(|k| k.kind)
+        .collect();
+        assert_eq!(event_kind, ["\"NewContent\""]);
     }
 }
 

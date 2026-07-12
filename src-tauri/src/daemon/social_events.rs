@@ -13,7 +13,6 @@ use diesel::prelude::*;
 use kith::subscribe::SubscriptionEngine;
 use kith::types::{EntityId, Event, EventKind, UserId};
 
-use super::kith_store::AstraKithStore;
 use super::DaemonState;
 use crate::db::schema::users;
 
@@ -69,9 +68,9 @@ async fn emit_new_gallery_inner(
     let store = state.kith();
     // No external sinks yet (ntfy/push are follow-ups); persistence via the
     // notification store, block/mute suppression via the graph store.
-    let engine = SubscriptionEngine::new(store.clone(), Vec::<AstraKithStore>::new())
+    let engine = SubscriptionEngine::without_sinks(store.clone())
         .with_notification_store(store.clone())
-        .with_graph_store_on(store);
+        .with_graph_store(store);
 
     let publisher = UserId::from(publisher);
     let event = Event {

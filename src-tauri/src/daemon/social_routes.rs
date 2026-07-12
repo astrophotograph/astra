@@ -381,25 +381,16 @@ pub async fn unread_count(
 
 /// POST /api/social/notifications/{id}/read — 204. Only the recipient may
 /// mark a notification; anyone else (or an unknown id) gets 404 so the
-/// route doesn't leak which ids exist.
+/// route doesn't leak which ids exist. Recipient scoping is enforced by the
+/// store — `mark_read` is NotFound unless the notification is the caller's.
 pub async fn mark_notification_read(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
     Path(id): Path<String>,
 ) -> Response {
-    let store = state.kith();
-    match store.notification_recipient(&id).await {
-        Ok(Some(recipient)) if recipient == user.user_id => {
-            match kith::storage::NotificationStore::mark_read(&store, &id).await {
-                Ok(()) => StatusCode::NO_CONTENT.into_response(),
-                Err(e) => kith_error("social mark-read", e),
-            }
-        }
-        Ok(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("notification {id}") })),
-        )
-            .into_response(),
+    let recipient = UserId(user.user_id);
+    match kith::storage::NotificationStore::mark_read(&state.kith(), &recipient, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => kith_error("social mark-read", e),
     }
 }
