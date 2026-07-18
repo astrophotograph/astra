@@ -12,8 +12,76 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+// Fallback cards (procedural thumbnails) shown when the KV index is
+// empty, so the section is never a hollow gap in dev / fresh installs.
+const PLACEHOLDER_CARDS = `        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="emission" data-seed="11" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>Summer Nebulae</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@sarahk</span><span class="recent-card-date">Jul 12, 2026</span></div>
+          </div>
+        </a>
+        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="galaxy" data-seed="7" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>M31 — Andromeda Rising</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@deepskydan</span><span class="recent-card-date">Jul 10, 2026</span></div>
+          </div>
+        </a>
+        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="wide" data-seed="23" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>Cygnus Widefield</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@nightshift</span><span class="recent-card-date">Jul 8, 2026</span></div>
+          </div>
+        </a>
+        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="globular" data-seed="42" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>Globulars of July</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@astroval</span><span class="recent-card-date">Jul 5, 2026</span></div>
+          </div>
+        </a>
+        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="planetary" data-seed="5" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>First Light — Seestar S50</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@newmoon</span><span class="recent-card-date">Jul 3, 2026</span></div>
+          </div>
+        </a>
+        <a href="/explore" class="recent-card" data-slot="gallery-card">
+          <div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="cluster" data-seed="31" width="400" height="240" aria-hidden="true"></canvas></div>
+          <div class="recent-card-content">
+            <h3>Rho Ophiuchi Complex</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@southernskies</span><span class="recent-card-date">Jun 29, 2026</span></div>
+          </div>
+        </a>`;
+
+function buildRecentCards(entries: GalleryIndexEntry[]): string {
+  if (entries.length === 0) return PLACEHOLDER_CARDS;
+  return entries
+    .map((e, i) => {
+      const pubDate = new Date(e.createdAt).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      const href = `/@${escapeHtml(e.username)}/${escapeHtml(e.collectionSlug)}`;
+      const visual = e.thumbnailUrl
+        ? `<div class="recent-card-image"><img src="${escapeHtml(e.thumbnailUrl)}" alt="${escapeHtml(e.collectionName)}" loading="lazy" /></div>`
+        : `<div class="recent-card-image"><canvas data-slot="thumbnail" data-kind="emission" data-seed="${11 + i * 6}" width="400" height="240" aria-hidden="true"></canvas></div>`;
+      return `<a href="${href}" class="recent-card" data-slot="gallery-card">
+          ${visual}
+          <div class="recent-card-content">
+            <h3>${escapeHtml(e.collectionName)}</h3>
+            <div class="recent-card-meta"><span class="recent-card-user">@${escapeHtml(e.username)}</span><span class="recent-card-date">${pubDate}</span></div>
+          </div>
+        </a>`;
+    })
+    .join("\n");
+}
+
 landingRoutes.get("/", async (c) => {
-  // Fetch recent galleries for the landing page
   const listResult = await c.env.GALLERY_KV.list({
     prefix: "gallery-index/",
     limit: 6,
@@ -27,78 +95,24 @@ landingRoutes.get("/", async (c) => {
     }
   }
 
-  // Sort newest first
   entries.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
 
-  let recentGalleriesSection = "";
-  if (entries.length > 0) {
-    const cards = entries
-      .map((e) => {
-        const pubDate = new Date(e.createdAt).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-        });
-        const visual = e.thumbnailUrl
-          ? `<div class="recent-card-image">
-              <img src="${escapeHtml(e.thumbnailUrl)}" alt="${escapeHtml(e.collectionName)}" loading="lazy" />
-            </div>`
-          : `<div class="recent-card-placeholder">
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
-              <path d="M2 12h20"/>
-              <circle cx="12" cy="5" r="0.5" fill="currentColor" stroke="none"/>
-              <circle cx="18" cy="9" r="0.5" fill="currentColor" stroke="none"/>
-              <circle cx="7" cy="16" r="0.5" fill="currentColor" stroke="none"/>
-              <circle cx="15" cy="14" r="0.5" fill="currentColor" stroke="none"/>
-            </svg>
-          </div>`;
-        return `
-        <a href="/@${escapeHtml(e.username)}/${escapeHtml(e.collectionSlug)}" class="recent-card">
-          ${visual}
-          <div class="recent-card-content">
-            <h3>${escapeHtml(e.collectionName)}</h3>
-            <span class="recent-card-user">@${escapeHtml(e.username)}</span>
-            <span class="recent-card-date">${pubDate}</span>
-          </div>
-        </a>`;
-      })
-      .join("");
-
-    recentGalleriesSection = `
-  <section class="recent-galleries">
-    <div class="container reveal">
-      <div class="section-header">
-        <div class="section-label">Community</div>
-        <h2>Recent Galleries</h2>
-      </div>
-      <div class="gallery-grid">
-        ${cards}
-      </div>
-      <div style="text-align: center; margin-top: 2rem;">
-        <a href="/explore" class="btn btn-ghost">Explore All &rarr;</a>
-      </div>
-    </div>
-  </section>`;
-  }
-
-  return c.html(buildLandingHtml(recentGalleriesSection));
+  return c.html(buildLandingHtml(buildRecentCards(entries)));
 });
 
-function buildLandingHtml(recentGalleriesSection: string): string {
+function buildLandingHtml(recentCards: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Astra Gallery — Share your astrophotography</title>
-<meta name="description" content="Publish and share your astrophotography collections. Auto-refreshing galleries, direct from your desktop.">
+<title>Astra Gallery — Watch the night develop</title>
+<meta name="description" content="Publish your astrophotography as auto-refreshing galleries. Share one link at the start of your session and viewers watch it grow, image by image, until dawn.">
 ${faviconLink()}
-<script defer data-domain="astra.gallery" src="https://pulse.steve.net/js/script.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300;1,9..40,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<script defer data-domain="astra.gallery" src="https://pulse.steve.net/js/script.js"></script>
 <style>
 *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -106,15 +120,16 @@ ${faviconLink()}
   --void: #0a0e1a;
   --deep: #0f1424;
   --surface: #151b2e;
-  --purple: #2D1B69;
-  --mid: #4A2D8A;
   --accent: #6366f1;
-  --light: #8b5cf6;
+  --violet: #8b5cf6;
   --glow: #c4b5fd;
   --teal: #80CBC4;
   --text: #c8cdd8;
+  --text-body: #8891a4;
   --text-dim: #6b7280;
   --text-bright: #e8ecf4;
+  --hairline: rgba(99, 102, 241, 0.1);
+  --hairline-strong: rgba(99, 102, 241, 0.22);
   --serif: 'Cormorant Garamond', Georgia, serif;
   --sans: 'DM Sans', -apple-system, sans-serif;
 }
@@ -131,6 +146,14 @@ html {
 
 body { overflow-x: hidden; }
 
+::selection { background: rgba(99, 102, 241, 0.35); color: var(--text-bright); }
+
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
 #starfield {
   position: fixed;
   inset: 0;
@@ -141,22 +164,21 @@ body { overflow-x: hidden; }
 .container {
   position: relative;
   z-index: 1;
-  max-width: 1100px;
+  max-width: 1160px;
   margin: 0 auto;
   padding: 0 2rem;
 }
 
+/* ── Nav ─────────────────────────────────────────── */
 nav {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
+  top: 0; left: 0; right: 0;
   z-index: 100;
   padding: 1.25rem 2rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: linear-gradient(to bottom, var(--void) 60%, transparent);
+  background: linear-gradient(to bottom, rgba(10,14,26,0.92) 55%, transparent);
 }
 
 nav .wordmark {
@@ -166,6 +188,17 @@ nav .wordmark {
   letter-spacing: 0.15em;
   color: var(--text-bright);
   text-decoration: none;
+}
+
+nav .wordmark .beta {
+  font-family: var(--sans);
+  font-size: 0.55rem;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  vertical-align: super;
+  margin-left: 0.5rem;
 }
 
 nav .nav-links {
@@ -179,7 +212,6 @@ nav .nav-links a {
   color: var(--text-dim);
   text-decoration: none;
   font-size: 0.8rem;
-  font-weight: 400;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   transition: color 0.3s;
@@ -187,70 +219,113 @@ nav .nav-links a {
 
 nav .nav-links a:hover { color: var(--glow); }
 
+/* ── Hero ────────────────────────────────────────── */
 .hero {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 6rem 2rem 4rem;
-  position: relative;
+  padding: 7rem 0 4rem;
 }
 
-.hero-label {
-  font-family: var(--serif);
-  font-size: 1rem;
-  font-weight: 300;
-  letter-spacing: 0.4em;
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 4rem;
+  align-items: center;
+  width: 100%;
+}
+
+.hero-copy { max-width: 30rem; }
+
+.live-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.28em;
   text-transform: uppercase;
   color: var(--text-dim);
   margin-bottom: 2rem;
   opacity: 0;
-  animation: fadeUp 1s 0.2s forwards;
+  animation: fadeUp 1s 0.15s forwards;
+}
+
+.live-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px 2px rgba(99, 102, 241, 0.5);
+  animation: livePulse 2.4s ease-in-out infinite;
 }
 
 .hero h1 {
   font-family: var(--serif);
-  font-size: clamp(3.5rem, 9vw, 7rem);
+  font-size: clamp(3rem, 5.6vw, 4.6rem);
   font-weight: 300;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  line-height: 1.02;
   color: var(--text-bright);
-  line-height: 1;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.75rem;
+  text-wrap: balance;
   opacity: 0;
-  animation: fadeUp 1s 0.4s forwards;
+  animation: fadeUp 1s 0.3s forwards;
+}
+
+.hero h1 em {
+  font-style: italic;
+  font-weight: 300;
+  color: var(--glow);
 }
 
 .hero-tagline {
   font-family: var(--serif);
-  font-size: clamp(1.1rem, 2.5vw, 1.4rem);
+  font-size: clamp(1.1rem, 1.7vw, 1.3rem);
   font-weight: 300;
   font-style: italic;
+  line-height: 1.55;
   color: var(--text);
-  max-width: 520px;
-  margin-bottom: 3rem;
+  margin-bottom: 2.5rem;
   opacity: 0;
-  animation: fadeUp 1s 0.6s forwards;
+  animation: fadeUp 1s 0.45s forwards;
 }
 
 .hero-cta {
   display: flex;
   gap: 1rem;
+  flex-wrap: wrap;
   opacity: 0;
-  animation: fadeUp 1s 0.8s forwards;
+  animation: fadeUp 1s 0.6s forwards;
 }
+
+.hero-note {
+  margin-top: 2.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 0.3rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  opacity: 0;
+  animation: fadeUp 1s 0.75s forwards;
+}
+
+.hero-note .sep { margin: 0 0.7rem; color: var(--hairline-strong); }
+.hero-note span:not(.sep) { white-space: nowrap; }
 
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.75rem 2rem;
+  padding: 0.8rem 2rem;
   border-radius: 2px;
   font-family: var(--sans);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 500;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   text-decoration: none;
   transition: all 0.3s;
@@ -258,227 +333,424 @@ nav .nav-links a:hover { color: var(--glow); }
   border: none;
 }
 
-.btn-primary {
-  background: var(--accent);
-  color: #fff;
-}
-
-.btn-primary:hover {
-  background: var(--light);
-  color: #fff;
-}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--violet); box-shadow: 0 4px 24px rgba(139, 92, 246, 0.3); }
 
 .btn-ghost {
   background: transparent;
   color: var(--text);
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+.btn-ghost:hover { border-color: var(--violet); color: var(--text-bright); }
+
+/* ── The live plate ──────────────────────────────── */
+.plate-wrap {
+  opacity: 0;
+  animation: fadeUp 1.2s 0.5s forwards;
 }
 
-.btn-ghost:hover {
-  border-color: var(--light);
+.plate-frame {
+  position: relative;
+  border: 1px solid var(--hairline-strong);
+  background: #05070f;
+  padding: 10px;
+}
+
+/* atlas-plate corner ticks */
+.plate-frame::before, .plate-frame::after,
+.plate-inner::before, .plate-inner::after {
+  content: '';
+  position: absolute;
+  width: 14px; height: 14px;
+  border-color: rgba(196, 181, 253, 0.5);
+  border-style: solid;
+}
+.plate-frame::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.plate-frame::after  { top: -1px; right: -1px; border-width: 1px 1px 0 0; }
+.plate-inner::before { bottom: -1px; left: -1px; border-width: 0 0 1px 1px; }
+.plate-inner::after  { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+.plate-inner { position: absolute; inset: 0; pointer-events: none; }
+
+#stack-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 3 / 2;
+  background: #05070f;
+  transition: opacity 0.5s ease;
+}
+
+.plate-status {
+  position: absolute;
+  top: 1.35rem; right: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--glow);
+  background: rgba(10, 14, 26, 0.72);
+  border: 1px solid var(--hairline-strong);
+  backdrop-filter: blur(4px);
+}
+
+.plate-status .live-dot { width: 5px; height: 5px; }
+
+.plate-status.complete { color: var(--teal); border-color: rgba(128, 203, 196, 0.3); }
+.plate-status.complete .live-dot {
+  background: var(--teal);
+  box-shadow: 0 0 8px 1px rgba(128, 203, 196, 0.5);
+  animation: none;
+}
+
+.plate-progress {
+  height: 1px;
+  background: rgba(99, 102, 241, 0.15);
+  margin-top: 10px;
+  position: relative;
+  overflow: hidden;
+}
+
+.plate-progress .fill {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--violet));
+  transition: width 0.6s ease;
+}
+
+.plate-hud {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 0.15rem 0;
+  flex-wrap: wrap;
+}
+
+.plate-target {
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.plate-target .con { color: var(--text-dim); }
+
+.plate-readout {
+  display: flex;
+  gap: 1.4rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.plate-readout b { font-weight: 400; color: var(--glow); }
+
+.plate-caption {
+  margin-top: 1.1rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  font-style: italic;
+  font-family: var(--serif);
+  font-size: 0.92rem;
+}
+
+/* ── Sections ────────────────────────────────────── */
+section { position: relative; z-index: 1; padding: 7.5rem 0; }
+section + section { border-top: 1px solid var(--hairline); }
+
+.section-header { margin-bottom: 3.5rem; }
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1rem;
+}
+
+.section-header h2 {
+  font-family: var(--serif);
+  font-size: clamp(1.9rem, 3.4vw, 2.6rem);
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  color: var(--text-bright);
+  text-wrap: balance;
+}
+
+.section-header .section-sub {
+  margin-top: 1rem;
+  max-width: 34rem;
+  color: var(--text-body);
+  font-size: 0.95rem;
+}
+
+/* ── Session timeline ────────────────────────────── */
+.timeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  position: relative;
+}
+
+.timeline::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--hairline-strong), var(--hairline) 85%, transparent);
+}
+
+.timeline-entry { padding: 0 2rem 0 0; position: relative; }
+
+.timeline-entry .tick {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--void);
+  border: 1px solid var(--accent);
+}
+
+.timeline-entry .tick::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.85;
+}
+
+.timeline-entry:last-child .tick { border-color: var(--teal); }
+.timeline-entry:last-child .tick::after { background: var(--teal); }
+
+.timeline-entry .time {
+  display: block;
+  margin: 1.6rem 0 0.6rem;
+  font-family: var(--serif);
+  font-size: 1.7rem;
+  font-weight: 300;
+  color: var(--text-bright);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.timeline-entry .event {
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+
+.timeline-entry:last-child .event { color: var(--teal); }
+
+.timeline-entry p {
+  font-size: 0.88rem;
+  color: var(--text-body);
+  line-height: 1.6;
+  max-width: 15rem;
+}
+
+/* ── Viewer demo ─────────────────────────────────── */
+.viewer-demo {
+  border: 1px solid var(--hairline-strong);
+  background: rgba(10, 14, 26, 0.65);
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.viewer-chrome {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.7rem 1.1rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.viewer-chrome .dots { display: flex; gap: 5px; }
+.viewer-chrome .dots span {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+}
+
+.viewer-chrome .url {
+  flex: 1;
+  text-align: center;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-chrome .url b { color: var(--text); font-weight: 400; }
+
+.viewer-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.62rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.viewer-refresh .live-dot { width: 5px; height: 5px; }
+
+.viewer-body { padding: 1.5rem; }
+
+.viewer-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.viewer-title {
+  font-family: var(--serif);
+  font-size: 1.45rem;
+  font-weight: 400;
   color: var(--text-bright);
 }
 
-.hero-scroll {
-  position: absolute;
-  bottom: 2rem;
-  left: 50%;
-  transform: translateX(-50%);
-  opacity: 0;
-  animation: fadeUp 1s 1.2s forwards;
+.viewer-title .by { font-size: 0.95rem; color: var(--text-dim); font-style: italic; }
+
+.viewer-count {
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
-.hero-scroll span {
+.viewer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.viewer-tile {
+  position: relative;
+  aspect-ratio: 1;
+  background: var(--deep);
+  border: 1px solid rgba(99, 102, 241, 0.07);
+  overflow: hidden;
+}
+
+.viewer-tile canvas {
   display: block;
-  width: 1px;
-  height: 40px;
-  background: linear-gradient(to bottom, var(--accent), transparent);
-  margin: 0 auto;
-  animation: pulse 2s infinite;
+  width: 100%; height: 100%;
+  opacity: 0;
+  transform: scale(1.04);
+  transition: opacity 1.1s ease, transform 1.4s ease;
 }
 
-section { padding: 8rem 0; }
-section + section { border-top: 1px solid rgba(99, 102, 241, 0.1); }
+.viewer-tile.landed canvas { opacity: 1; transform: scale(1); }
 
+.viewer-tile .tile-flash {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(196, 181, 253, 0.7);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer-tile.landed .tile-flash { animation: tileFlash 1.6s ease forwards; }
+
+/* pending tiles use the same skeleton shimmer as the
+   real gallery viewer while it waits for new frames */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+.viewer-tile .pending-mark {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, #0d1120 25%, #131a2c 50%, #0d1120 75%);
+  background-size: 800px 100%;
+  animation: shimmer 2.2s ease-in-out infinite;
+}
+
+.viewer-tile.landed .pending-mark { display: none; }
+
+.viewer-footnote {
+  margin-top: 2rem;
+  text-align: center;
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+}
+
+/* ── Features ────────────────────────────────────── */
 .features-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1px;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
 }
 
 .feature {
   background: var(--void);
-  padding: 2.5rem;
+  padding: 2.75rem 2.5rem;
   transition: background 0.4s;
 }
 
 .feature:hover { background: var(--deep); }
 
 .feature-label {
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 500;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.24em;
   text-transform: uppercase;
   color: var(--accent);
-  margin-bottom: 1rem;
+  margin-bottom: 1.1rem;
 }
 
 .feature h3 {
   font-family: var(--serif);
-  font-size: 1.35rem;
+  font-size: 1.4rem;
   font-weight: 400;
   color: var(--text-bright);
-  margin-bottom: 0.75rem;
-  line-height: 1.3;
+  margin-bottom: 0.7rem;
+  line-height: 1.25;
 }
 
 .feature p {
-  font-size: 0.9rem;
-  color: var(--text-dim);
-  line-height: 1.6;
+  font-size: 0.88rem;
+  color: var(--text-body);
+  line-height: 1.65;
 }
 
-.open-source {
-  text-align: center;
-  padding: 6rem 0;
-}
-
-.open-source-inner {
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  padding: 4rem;
-  max-width: 600px;
-  margin: 0 auto;
-  position: relative;
-}
-
-.open-source-inner::before {
-  content: '';
-  position: absolute;
-  inset: -1px;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), transparent, rgba(128, 203, 196, 0.05));
-  z-index: -1;
-}
-
-.open-source h2 {
-  font-family: var(--serif);
-  font-size: 1.6rem;
-  font-weight: 300;
-  color: var(--text-bright);
-  margin-bottom: 1rem;
-}
-
-.open-source p {
-  color: var(--text-dim);
-  font-size: 0.9rem;
-  margin-bottom: 2rem;
-  line-height: 1.7;
-}
-
-.open-source .license {
-  font-size: 0.7rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--teal);
-}
-
-footer {
-  padding: 3rem 0;
-  border-top: 1px solid rgba(99, 102, 241, 0.1);
-}
-
-footer .footer-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 0 2rem;
-  font-size: 0.8rem;
-  color: var(--text-dim);
-}
-
-footer a {
-  color: var(--text-dim);
-  text-decoration: none;
-  transition: color 0.3s;
-}
-
-footer a:hover { color: var(--glow); }
-
-footer .footer-links {
-  display: flex;
-  gap: 2rem;
-  list-style: none;
-}
-
-.footer-wordmark {
-  font-family: var(--serif);
-  font-weight: 300;
-  letter-spacing: 0.1em;
-  color: var(--text);
-}
-
-@keyframes fadeUp {
-  from { opacity: 0; transform: translateY(20px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 0.8; }
-}
-
-.reveal {
-  opacity: 0;
-  transform: translateY(30px);
-  transition: opacity 0.8s, transform 0.8s;
-}
-
-.reveal.visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-@media (max-width: 768px) {
-  nav .nav-links { display: none; }
-  .features-grid { grid-template-columns: 1fr; }
-  .container { padding: 0 1.25rem; }
-  section { padding: 5rem 0; }
-  .open-source-inner { padding: 2.5rem; }
-  footer .footer-inner {
-    flex-direction: column;
-    gap: 1.5rem;
-    text-align: center;
-  }
-}
-
-/* Recent galleries section */
-.recent-galleries { padding: 8rem 0; }
-
-.section-header {
-  margin-bottom: 2.5rem;
-}
-
-.recent-galleries .section-label {
-  margin-bottom: 0.75rem;
-}
-
-.recent-galleries h2 {
-  font-family: var(--serif);
-  font-size: clamp(1.6rem, 3vw, 2.2rem);
-  font-weight: 300;
-  color: var(--text-bright);
-  letter-spacing: 0.02em;
-}
-
+/* ══ RECENT-GALLERIES SLOT ═══════════════════════════
+   At port time this section body is emitted by the
+   worker from KV (see landing.ts recentGalleriesSection).
+   Card contract: thumbnail → <img src=thumbnailUrl>,
+   name, @username, formatted date, link to
+   /@username/collectionSlug.
+   ════════════════════════════════════════════════════ */
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1px;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.1);
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
 }
 
 .recent-card {
@@ -487,105 +759,234 @@ footer .footer-links {
   background: var(--void);
   text-decoration: none;
   color: inherit;
-  transition: background 0.3s, box-shadow 0.3s;
+  transition: background 0.3s;
 }
 
-.recent-card:hover {
-  background: var(--deep);
-  box-shadow: inset 0 0 30px rgba(99, 102, 241, 0.06);
-}
-
-.recent-card:hover .recent-card-placeholder {
-  border-bottom-color: rgba(99, 102, 241, 0.2);
-}
-
-.recent-card:hover .recent-card-placeholder svg {
-  color: var(--accent);
-  opacity: 0.6;
-}
+.recent-card:hover { background: var(--deep); }
 
 .recent-card-image {
-  height: 140px;
+  aspect-ratio: 5 / 3;
   overflow: hidden;
   border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+  position: relative;
 }
 
+/* Placeholder thumbnails are procedural canvases.
+   Port note: replace each <canvas data-slot="thumbnail">
+   with <img src="\${thumbnailUrl}" loading="lazy">. */
+.recent-card-image canvas,
 .recent-card-image img {
-  width: 100%;
-  height: 100%;
+  display: block;
+  width: 100%; height: 100%;
   object-fit: cover;
-  transition: transform 0.3s;
+  transition: transform 0.5s ease;
 }
 
-.recent-card:hover .recent-card-image img {
-  transform: scale(1.03);
-}
+.recent-card:hover .recent-card-image canvas,
+.recent-card:hover .recent-card-image img { transform: scale(1.04); }
 
-.recent-card-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100px;
-  border-bottom: 1px solid rgba(99, 102, 241, 0.06);
-  background:
-    radial-gradient(ellipse at 30% 40%, rgba(99, 102, 241, 0.04) 0%, transparent 60%),
-    radial-gradient(ellipse at 70% 70%, rgba(128, 203, 196, 0.03) 0%, transparent 50%);
-  transition: border-color 0.3s;
-}
-
-.recent-card-placeholder svg {
-  color: var(--text-dim);
-  opacity: 0.3;
-  transition: color 0.3s, opacity 0.3s;
-}
-
-.recent-card-content {
-  padding: 1rem 1.25rem 1.25rem;
-}
+.recent-card-content { padding: 1.2rem 1.4rem 1.5rem; }
 
 .recent-card h3 {
   font-family: var(--serif);
-  font-size: 1.15rem;
+  font-size: 1.25rem;
   font-weight: 400;
   color: var(--text-bright);
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.35rem;
   line-height: 1.3;
 }
 
-.recent-card-user {
-  font-size: 0.8rem;
-  color: var(--text-dim);
-  display: block;
-  margin-bottom: 0.15rem;
+.recent-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
 }
 
+.recent-card-user { font-size: 0.8rem; color: var(--text-dim); }
+.recent-card:hover .recent-card-user { color: var(--glow); transition: color 0.3s; }
+
 .recent-card-date {
-  font-size: 0.75rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   color: var(--text-dim);
-  letter-spacing: 0.03em;
+}
+
+.explore-all { text-align: center; margin-top: 2.5rem; }
+
+/* ── Open source ─────────────────────────────────── */
+.open-source { text-align: center; }
+
+.open-source-inner {
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 4rem 3rem;
+  max-width: 640px;
+  margin: 0 auto;
+  position: relative;
+  background: rgba(15, 20, 36, 0.4);
+}
+
+.open-source h2 {
+  font-family: var(--serif);
+  font-size: 1.9rem;
+  font-weight: 300;
+  color: var(--text-bright);
+  margin-bottom: 1.1rem;
+}
+
+.open-source p {
+  color: var(--text-body);
+  font-size: 0.92rem;
+  margin-bottom: 2.25rem;
+  line-height: 1.75;
+}
+
+.open-source .license {
+  display: block;
+  margin-top: 1.75rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+/* ── Footer ──────────────────────────────────────── */
+footer {
+  position: relative;
+  z-index: 1;
+  padding: 3rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+footer .footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+footer .footer-wordmark {
+  font-family: var(--serif);
+  font-weight: 300;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+
+footer .footer-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+}
+
+footer a { color: var(--text-dim); text-decoration: none; transition: color 0.3s; }
+footer a:hover { color: var(--glow); }
+
+footer .footer-license { letter-spacing: 0.06em; }
+footer .footer-license a { color: var(--teal); }
+
+/* ── Motion ──────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@keyframes tileFlash {
+  0% { opacity: 0.9; }
+  100% { opacity: 0; }
+}
+
+/* reveal styles only apply when JS is running (html.js),
+   so content is never hidden without the observer to show it */
+.js .reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.9s ease, transform 0.9s ease;
+}
+
+.js .reveal.visible { opacity: 1; transform: translateY(0); }
+
+/* timeline entries settle in sequence — the one place
+   order genuinely carries meaning */
+.js .reveal .timeline-entry {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+.js .reveal.visible .timeline-entry { opacity: 1; transform: translateY(0); }
+.js .reveal.visible .timeline-entry:nth-child(1) { transition-delay: 0.1s; }
+.js .reveal.visible .timeline-entry:nth-child(2) { transition-delay: 0.3s; }
+.js .reveal.visible .timeline-entry:nth-child(3) { transition-delay: 0.5s; }
+.js .reveal.visible .timeline-entry:nth-child(4) { transition-delay: 0.7s; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+  .hero h1, .hero-tagline, .hero-cta, .hero-note, .live-eyebrow, .plate-wrap { opacity: 1; }
+}
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 1020px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 3.5rem; }
+  .hero-grid > * { min-width: 0; }
+  .hero { padding-top: 8rem; }
+  .hero-copy { max-width: 36rem; }
+  .plate-wrap { max-width: 640px; }
+  .timeline { grid-template-columns: repeat(2, 1fr); row-gap: 3.5rem; }
+  .timeline::before { display: none; }
+  .timeline-entry { border-top: 1px solid var(--hairline); }
+  .timeline-entry .tick { top: -6px; }
 }
 
 @media (max-width: 768px) {
+  nav { padding: 1rem 1.25rem; }
+  nav .nav-links { gap: 1.1rem; }
+  nav .nav-links li:nth-child(2), nav .nav-links li:nth-child(3) { display: none; }
+  .container { padding: 0 1.25rem; }
+  section { padding: 5rem 0; }
+  .features-grid { grid-template-columns: 1fr; }
   .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+  .viewer-grid { grid-template-columns: repeat(3, 1fr); }
+  .viewer-chrome .url b { display: none; }
+  .open-source-inner { padding: 2.75rem 1.75rem; }
+  footer .footer-inner { flex-direction: column; text-align: center; }
 }
 
-@media (max-width: 480px) {
-  .hero-cta {
-    flex-direction: column;
-    width: 100%;
-    max-width: 280px;
-  }
+@media (max-width: 520px) {
+  .hero-cta { flex-direction: column; width: 100%; max-width: 300px; }
   .btn { justify-content: center; }
+  .timeline { grid-template-columns: 1fr; }
   .gallery-grid { grid-template-columns: 1fr; }
+  .viewer-grid { grid-template-columns: repeat(2, 1fr); }
+  .plate-readout { gap: 0.5rem 1.1rem; flex-wrap: wrap; }
+  .hero-copy, .plate-wrap { max-width: 100%; }
 }
 </style>
 </head>
 <body>
 
-<canvas id="starfield"></canvas>
+<canvas id="starfield" aria-hidden="true"></canvas>
 
 <nav>
-  <a href="/" class="wordmark">astra.gallery</a>
+  <a href="/" class="wordmark">astra.gallery<span class="beta">beta</span></a>
   <ul class="nav-links">
     <li><a href="/explore">Explore</a></li>
     <li><a href="#features">Features</a></li>
@@ -595,159 +996,887 @@ footer .footer-links {
 </nav>
 
 <main>
-  <section class="hero">
-    <div class="hero-label">astrophotography, shared</div>
-    <h1>Astra Gallery</h1>
-    <p class="hero-tagline">Publish your astrophotography collections as beautiful, auto-refreshing galleries</p>
-    <div class="hero-cta">
-      <a href="https://github.com/astrophotograph/astra/releases" class="btn btn-primary" target="_blank" rel="noopener">Download Astra</a>
-      <a href="/explore" class="btn btn-ghost">Explore Galleries</a>
+
+  <!-- ── Hero: a live stack, integrating in front of you ── -->
+  <section class="hero" aria-label="Introduction">
+    <div class="container">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="live-eyebrow"><span class="live-dot"></span>A session in progress</p>
+          <h1>Watch the night <em>develop</em></h1>
+          <p class="hero-tagline">Publish your gallery before the first exposure lands. Share one link — and viewers watch it grow, frame by frame, until dawn.</p>
+          <div class="hero-cta">
+            <a href="https://github.com/astrophotograph/astra/releases" class="btn btn-primary" target="_blank" rel="noopener">Download Astra</a>
+            <a href="/explore" class="btn btn-ghost">Explore live galleries</a>
+          </div>
+          <p class="hero-note"><span>Free software</span><span class="sep">·</span><span>Self-hostable</span><span class="sep">·</span><span>Seestar-friendly</span></p>
+        </div>
+
+        <div class="plate-wrap" aria-label="Simulated live image stack">
+          <div class="plate-frame">
+            <canvas id="stack-canvas" width="720" height="480" aria-hidden="true"></canvas>
+            <div class="plate-inner"></div>
+            <div class="plate-status" id="plate-status"><span class="live-dot"></span><span id="plate-status-text">Live stack</span></div>
+          </div>
+          <div class="plate-progress"><div class="fill" id="stack-progress"></div></div>
+          <div class="plate-hud">
+            <div class="plate-target" id="stack-target">NGC 7000 · <span class="con">Cygnus</span></div>
+            <div class="plate-readout">
+              <span>Subs <b id="hud-subs">000/096</b></span>
+              <span>Integration <b id="hud-time">0m 00s</b></span>
+              <span>SNR <b id="hud-snr">—</b></span>
+            </div>
+          </div>
+          <p class="plate-caption">A live stack, recreated — every Astra gallery refreshes like this while you image.</p>
+        </div>
+      </div>
     </div>
-    <div class="hero-scroll"><span></span></div>
   </section>
 
-  <section id="features">
+  <!-- ── Session timeline ── -->
+  <section aria-label="How a session unfolds">
     <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">One link, all night</div>
+        <h2>A session, as your viewers live it</h2>
+      </div>
+      <div class="timeline">
+        <div class="timeline-entry">
+          <span class="tick"></span>
+          <span class="time">21:42</span>
+          <div class="event">Shutter opens</div>
+          <p>You start imaging and publish the collection from Astra — one click, before a single frame exists.</p>
+        </div>
+        <div class="timeline-entry">
+          <span class="tick"></span>
+          <span class="time">21:43</span>
+          <div class="event">Link shared</div>
+          <p>The gallery is live. You send the link to your club, your group chat, your feed.</p>
+        </div>
+        <div class="timeline-entry">
+          <span class="tick"></span>
+          <span class="time">23:15</span>
+          <div class="event">Growing</div>
+          <p>Every thirty seconds the gallery checks for new images. Each finished frame appears as it lands.</p>
+        </div>
+        <div class="timeline-entry">
+          <span class="tick"></span>
+          <span class="time">04:17</span>
+          <div class="event">Dawn</div>
+          <p>The session ends. The finished collection is already published — nothing left to upload.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Viewer-side demo ── -->
+  <section aria-label="What your viewers see">
+    <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">The other side of the link</div>
+        <h2>What your viewers see</h2>
+        <p class="section-sub">No account, no app, no refresh button. The gallery keeps itself current while they watch.</p>
+      </div>
+      <div class="viewer-demo">
+        <div class="viewer-chrome">
+          <div class="dots" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="url"><b>astra.gallery</b>/@you/summer-nebulae</div>
+          <div class="viewer-refresh"><span class="live-dot"></span><span id="refresh-label">updated 2s ago</span></div>
+        </div>
+        <div class="viewer-body">
+          <div class="viewer-title-row">
+            <div class="viewer-title">Summer Nebulae <span class="by">· a night in Cygnus</span></div>
+            <div class="viewer-count" id="viewer-count">3 of 8 images</div>
+          </div>
+          <div class="viewer-grid" id="viewer-grid"></div>
+          <p class="viewer-footnote">Recreated here — in a published gallery these frames arrive from your telescope.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section id="features" aria-label="Features">
+    <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">The rest of the observatory</div>
+        <h2>Built around the log, not the likes</h2>
+      </div>
       <div class="features-grid">
         <div class="feature">
+          <div class="feature-label">Observe</div>
+          <h3>An honest observation log</h3>
+          <p>Every session catalogued — targets, conditions, integration, notes. FITS metadata read straight from your files.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Equip</div>
+          <h3>Your gear, remembered</h3>
+          <p>Telescopes, mounts, cameras, filters. Seestar owners get presets out of the box — your images arrive already understood.</p>
+        </div>
+        <div class="feature">
           <div class="feature-label">Publish</div>
-          <h3>Collection Galleries</h3>
-          <p>Turn any image collection into a shareable gallery. Thumbnails, lightbox viewer, and metadata — all generated automatically from your observation log.</p>
+          <h3>One-click galleries</h3>
+          <p>Pick a collection, publish. Thumbnails, lightbox, object data — generated for you, straight from the desktop app.</p>
         </div>
         <div class="feature">
           <div class="feature-label">Live</div>
-          <h3>Auto-Refreshing</h3>
-          <p>Galleries update every 30 seconds. Share the link at the start of your session and let viewers watch your collection grow as you image through the night.</p>
+          <h3>Auto-refreshing by default</h3>
+          <p>Published galleries poll for new images every thirty seconds. Share the link at dusk; it's still growing at dawn.</p>
         </div>
         <div class="feature">
-          <div class="feature-label">Desktop</div>
-          <h3>Direct from Astra</h3>
-          <p>One click from the desktop app. Sign in, pick a collection, publish. No manual uploads, no file management. Images go straight to the cloud.</p>
+          <div class="feature-label">Yours</div>
+          <h3>Your data stays yours</h3>
+          <p>Run the whole service on your own hardware if you like. No lock-in, no harvesting — the log lives with you.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Open</div>
+          <h3>Free software, all the way down</h3>
+          <p>Desktop app, gallery service, viewer — every line is AGPL v3. Read it, change it, run your own.</p>
         </div>
       </div>
     </div>
   </section>
 
-  ${recentGalleriesSection}
-
-  <section class="open-source">
+  <!-- ══ RECENT-GALLERIES SLOT START ═══════════════════
+       Port: the worker replaces this section's inner
+       markup with real KV-backed cards (thumbnailUrl,
+       collectionName, username, createdAt, slug).
+       Placeholder canvases stand in for thumbnails. -->
+  <section aria-label="Recent galleries">
     <div class="container reveal">
-      <div class="open-source-inner">
-        <h2>Open source</h2>
-        <p>Astra is free software. The desktop app, this gallery service, and every line of code in between. Built in the open because your data should always be yours.</p>
-        <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">Browse the source</a>
-        <p class="license" style="margin-top: 1.5rem; margin-bottom: 0;">Licensed under GNU AGPL v3</p>
+      <div class="section-header">
+        <div class="section-label">Community</div>
+        <h2>Recently published</h2>
+      </div>
+      <div class="gallery-grid" id="recent-grid">
+${recentCards}
+      </div>
+      <div class="explore-all">
+        <a href="/explore" class="btn btn-ghost">Explore all &rarr;</a>
       </div>
     </div>
   </section>
+  <!-- ══ RECENT-GALLERIES SLOT END ══ -->
+
+  <!-- ── Open source ── -->
+  <section class="open-source" aria-label="Open source">
+    <div class="container reveal">
+      <div class="open-source-inner">
+        <h2>Free software, in the old sense</h2>
+        <p>The desktop app, this gallery service, and every line between them are open. Built that way on purpose — because your observation log is a record of your nights under the sky, and your data should always be yours.</p>
+        <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">Browse the source</a>
+        <span class="license">Licensed under GNU AGPL v3</span>
+      </div>
+    </div>
+  </section>
+
 </main>
 
 <footer>
   <div class="footer-inner">
     <span class="footer-wordmark">astra.gallery</span>
     <ul class="footer-links">
+      <li><a href="/explore">Explore</a></li>
       <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://github.com/astrophotograph/astra/releases" target="_blank" rel="noopener">Download</a></li>
     </ul>
+    <span class="footer-license">Free software · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3</a></span>
   </div>
 </footer>
 
 <script>
-// Star field background
-(function() {
-  const canvas = document.getElementById('starfield');
-  const ctx = canvas.getContext('2d');
-  let stars = [];
-  let w, h;
+(function () {
+  'use strict';
 
-  function resize() {
-    w = canvas.width = window.innerWidth;
-    h = canvas.height = window.innerHeight * 3;
+  document.documentElement.classList.add('js');
+
+  var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ── Seeded RNG + helpers ─────────────────────── */
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
   }
 
-  function init() {
-    resize();
-    stars = [];
-    const count = Math.floor((w * h) / 30000);
-    for (let i = 0; i < count; i++) {
-      stars.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        r: Math.random() * 1.2 + 0.2,
-        vx: (Math.random() - 0.5) * 0.04,
-        vy: (Math.random() - 0.5) * 0.04,
-        alpha: Math.random() * 0.5 + 0.1,
-        twinkleSpeed: Math.random() * 0.02 + 0.005,
-        twinkleOffset: Math.random() * Math.PI * 2,
-      });
+  /* value-noise fbm for nebula structure */
+  function makeNoise(rand) {
+    var SIZE = 256, grid = new Float32Array(SIZE * SIZE);
+    for (var i = 0; i < grid.length; i++) grid[i] = rand();
+    function smooth(t) { return t * t * (3 - 2 * t); }
+    function at(x, y) {
+      var xi = Math.floor(x), yi = Math.floor(y);
+      var xf = x - xi, yf = y - yi;
+      var x0 = xi & (SIZE - 1), y0 = yi & (SIZE - 1);
+      var x1 = (x0 + 1) & (SIZE - 1), y1 = (y0 + 1) & (SIZE - 1);
+      var sx = smooth(xf), sy = smooth(yf);
+      var a = grid[y0 * SIZE + x0], b = grid[y0 * SIZE + x1];
+      var c = grid[y1 * SIZE + x0], d = grid[y1 * SIZE + x1];
+      return a + sx * (b - a) + sy * (c - a) + sx * sy * (a - b - c + d);
+    }
+    return function fbm(x, y, oct) {
+      var v = 0, amp = 0.5, f = 1;
+      for (var o = 0; o < oct; o++) { v += amp * at(x * f, y * f); amp *= 0.5; f *= 2; }
+      return v;
+    };
+  }
+
+  /* draw a star with a soft PSF glow */
+  function drawStar(ctx, x, y, r, tint, alpha) {
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+    g.addColorStop(0, 'rgba(' + tint + ',' + alpha + ')');
+    g.addColorStop(0.25, 'rgba(' + tint + ',' + (alpha * 0.35) + ')');
+    g.addColorStop(1, 'rgba(' + tint + ',0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r * 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, alpha + 0.15) + ')';
+    ctx.beginPath();
+    ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function scatterStars(ctx, w, h, rand, count, brightCount) {
+    var tints = ['200,214,240', '228,224,255', '255,240,220', '190,205,235'];
+    for (var i = 0; i < count; i++) {
+      var x = rand() * w, y = rand() * h;
+      var r = Math.pow(rand(), 2.6) * 1.6 + 0.3;
+      drawStar(ctx, x, y, r, tints[(rand() * tints.length) | 0], 0.25 + rand() * 0.5);
+    }
+    for (var j = 0; j < brightCount; j++) {
+      drawStar(ctx, rand() * w, rand() * h, 1.6 + rand() * 1.3, tints[(rand() * tints.length) | 0], 0.85);
     }
   }
 
-  let frame = 0;
-  function draw() {
-    ctx.clearRect(0, 0, w, h);
-    frame++;
+  /* ── Fixed starfield backdrop (calm: twinkle only) ── */
+  (function starfield() {
+    var canvas = document.getElementById('starfield');
+    var ctx = canvas.getContext('2d');
+    var stars = [], links = [], w = 0, h = 0, frame = 0, running = true;
 
-    // Draw faint connections between nearby stars
-    for (let i = 0; i < stars.length; i++) {
-      for (let j = i + 1; j < stars.length; j++) {
-        const dx = stars[i].x - stars[j].x;
-        const dy = stars[i].y - stars[j].y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 100) {
-          const alpha = (1 - dist / 100) * 0.03;
-          ctx.strokeStyle = 'rgba(99, 102, 241, ' + alpha + ')';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath();
-          ctx.moveTo(stars[i].x, stars[i].y);
-          ctx.lineTo(stars[j].x, stars[j].y);
-          ctx.stroke();
+    function init() {
+      w = canvas.width = window.innerWidth;
+      h = canvas.height = window.innerHeight;
+      var rand = mulberry32(7261);
+      stars = [];
+      var count = Math.min(150, Math.floor((w * h) / 14000));
+      for (var i = 0; i < count; i++) {
+        stars.push({
+          x: rand() * w, y: rand() * h,
+          r: Math.pow(rand(), 2) * 1.1 + 0.25,
+          base: 0.10 + rand() * 0.42,
+          spd: 0.004 + rand() * 0.014,
+          off: rand() * Math.PI * 2
+        });
+      }
+      links = [];
+      for (var a = 0; a < stars.length; a++) {
+        for (var b = a + 1; b < stars.length; b++) {
+          var dx = stars[a].x - stars[b].x, dy = stars[a].y - stars[b].y;
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d < 110) links.push([a, b, (1 - d / 110) * 0.05]);
         }
       }
     }
 
-    // Draw stars with twinkling
-    for (const star of stars) {
-      const twinkle = Math.sin(frame * star.twinkleSpeed + star.twinkleOffset);
-      const alpha = star.alpha + twinkle * 0.15;
-
-      ctx.beginPath();
-      ctx.arc(star.x, star.y, star.r, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(200, 210, 230, ' + Math.max(0.05, alpha) + ')';
-      ctx.fill();
-
-      star.x += star.vx;
-      star.y += star.vy;
-      if (star.x < 0 || star.x > w) star.vx *= -1;
-      if (star.y < 0 || star.y > h) star.vy *= -1;
+    function draw() {
+      if (!running) return;
+      ctx.clearRect(0, 0, w, h);
+      frame++;
+      ctx.lineWidth = 0.5;
+      for (var l = 0; l < links.length; l++) {
+        var lk = links[l];
+        ctx.strokeStyle = 'rgba(99,102,241,' + lk[2] + ')';
+        ctx.beginPath();
+        ctx.moveTo(stars[lk[0]].x, stars[lk[0]].y);
+        ctx.lineTo(stars[lk[1]].x, stars[lk[1]].y);
+        ctx.stroke();
+      }
+      for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        var tw = Math.sin(frame * s.spd + s.off) * 0.16;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(200,210,230,' + Math.max(0.04, s.base + tw) + ')';
+        ctx.fill();
+      }
+      requestAnimationFrame(draw);
     }
 
-    requestAnimationFrame(draw);
+    function drawStatic() {
+      ctx.clearRect(0, 0, w, h);
+      ctx.lineWidth = 0.5;
+      for (var l = 0; l < links.length; l++) {
+        var lk = links[l];
+        ctx.strokeStyle = 'rgba(99,102,241,' + lk[2] + ')';
+        ctx.beginPath(); ctx.moveTo(stars[lk[0]].x, stars[lk[0]].y); ctx.lineTo(stars[lk[1]].x, stars[lk[1]].y); ctx.stroke();
+      }
+      for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(200,210,230,' + s.base + ')'; ctx.fill();
+      }
+    }
+
+    init();
+    if (REDUCED) { running = false; drawStatic(); }
+    else { draw(); }
+
+    var resizeTimer;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () {
+        init();
+        if (REDUCED) drawStatic();
+      }, 150);
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (REDUCED) return;
+      if (document.hidden) { running = false; }
+      else { running = true; draw(); }
+    });
+  })();
+
+  /* ── Procedural deep-sky targets (720×480 truth frames) ── */
+  var TW = 720, TH = 480;
+
+  function baseCanvas() {
+    var c = document.createElement('canvas');
+    c.width = TW; c.height = TH;
+    var ctx = c.getContext('2d', { willReadFrequently: true });
+    var g = ctx.createLinearGradient(0, 0, TW, TH);
+    g.addColorStop(0, '#060912');
+    g.addColorStop(1, '#080b16');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, TW, TH);
+    return c;
   }
 
-  init();
-  draw();
-  window.addEventListener('resize', init);
-})();
-
-// Scroll reveal
-(function() {
-  const els = document.querySelectorAll('.reveal');
-  const observer = new IntersectionObserver(function(entries) {
-    entries.forEach(function(e) {
-      if (e.isIntersecting) {
-        e.target.classList.add('visible');
-        observer.unobserve(e.target);
+  /* Emission nebula via domain-warped fbm (NGC 7000-ish) */
+  function genEmission(seed) {
+    var c = baseCanvas(), ctx = c.getContext('2d');
+    var rand = mulberry32(seed);
+    var fbm = makeNoise(rand);
+    var img = ctx.getImageData(0, 0, TW, TH);
+    var d = img.data;
+    for (var y = 0; y < TH; y++) {
+      for (var x = 0; x < TW; x++) {
+        var wx = fbm(x * 0.008 + 31.7, y * 0.008, 3);
+        var wy = fbm(x * 0.008, y * 0.008 + 77.2, 3);
+        var n = fbm((x + 90 * wx) * 0.006, (y + 90 * wy) * 0.006, 4);
+        var cx = (x - TW * 0.54) / (TW * 0.52), cy = (y - TH * 0.46) / (TH * 0.55);
+        var mask = Math.max(0, 1 - (cx * cx + cy * cy));
+        var neb = Math.max(0, (n - 0.42)) * 2.4 * mask;
+        neb = Math.min(1, neb * neb * 1.8 + neb * 0.35);
+        var dust = fbm(x * 0.011 + 99.1, y * 0.011 + 7.3, 3);
+        if (dust < 0.40) neb *= Math.max(0.08, dust / 0.40);
+        var i = (y * TW + x) * 4;
+        d[i]     = Math.min(255, d[i]     + neb * 158);
+        d[i + 1] = Math.min(255, d[i + 1] + neb * 58);
+        d[i + 2] = Math.min(255, d[i + 2] + neb * 108);
+        /* faint blue-violet reflection component */
+        var refl = Math.max(0, fbm(x * 0.004 + 3.3, y * 0.004 + 50.5, 3) - 0.52) * mask * 1.9;
+        d[i]     = Math.min(255, d[i]     + refl * 40);
+        d[i + 1] = Math.min(255, d[i + 1] + refl * 48);
+        d[i + 2] = Math.min(255, d[i + 2] + refl * 92);
       }
+    }
+    ctx.putImageData(img, 0, 0);
+    scatterStars(ctx, TW, TH, rand, 260, 7);
+    return c;
+  }
+
+  /* Spiral galaxy built from particles along log arms */
+  function genGalaxy(seed) {
+    var c = baseCanvas(), ctx = c.getContext('2d');
+    var rand = mulberry32(seed);
+    var cx = TW * 0.5, cy = TH * 0.5;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-0.4);
+    ctx.scale(1, 0.62);
+    /* halo */
+    var halo = ctx.createRadialGradient(0, 0, 0, 0, 0, 170);
+    halo.addColorStop(0, 'rgba(190,180,215,0.20)');
+    halo.addColorStop(0.45, 'rgba(130,125,185,0.08)');
+    halo.addColorStop(1, 'rgba(90,90,150,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath(); ctx.arc(0, 0, 170, 0, Math.PI * 2); ctx.fill();
+    /* soft inter-arm disc haze */
+    for (var hz = 0; hz < 2400; hz++) {
+      var hr = Math.pow(rand(), 0.7) * 120;
+      var ha = rand() * Math.PI * 2;
+      ctx.fillStyle = 'rgba(185,178,212,' + (0.02 + rand() * 0.04) + ')';
+      ctx.beginPath();
+      ctx.arc(Math.cos(ha) * hr, Math.sin(ha) * hr, 0.6 + rand() * 1.4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    /* arms: two log spirals of fine particles, blended
+       into the disc by wide jitter and an inner fade */
+    for (var arm = 0; arm < 2; arm++) {
+      var phase = arm * Math.PI;
+      for (var i = 0; i < 6000; i++) {
+        var t = rand() * 5.2 + 0.1;
+        var r = 14 * Math.exp(0.32 * t);
+        var jitter = (rand() - 0.5) * (14 + r * 0.34);
+        var ang = t + phase + (rand() - 0.5) * 0.16;
+        var px = Math.cos(ang) * (r + jitter);
+        var py = Math.sin(ang) * (r + jitter);
+        var young = rand();
+        var fade = Math.min(1, t / 1.6) * (1 - t / 7.5);
+        var alpha = (0.03 + rand() * 0.06) * fade;
+        var col = young > 0.88 ? '160,178,250' : (young > 0.6 ? '205,200,235' : '192,183,216');
+        ctx.fillStyle = 'rgba(' + col + ',' + alpha + ')';
+        var pr = 0.5 + rand() * 1.2;
+        ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill();
+        /* sprinkle HII knots on outer arms */
+        if (young > 0.978 && r > 70) {
+          ctx.fillStyle = 'rgba(215,115,150,' + (0.09 * fade) + ')';
+          ctx.beginPath(); ctx.arc(px, py, 1.9, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    }
+    /* core */
+    var core = ctx.createRadialGradient(0, 0, 0, 0, 0, 34);
+    core.addColorStop(0, 'rgba(255,246,226,0.9)');
+    core.addColorStop(0.35, 'rgba(240,224,196,0.4)');
+    core.addColorStop(1, 'rgba(210,195,180,0)');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(0, 0, 34, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    scatterStars(ctx, TW, TH, rand, 200, 5);
+    return c;
+  }
+
+  /* Globular cluster: gaussian swarm */
+  function genGlobular(seed) {
+    var c = baseCanvas(), ctx = c.getContext('2d');
+    var rand = mulberry32(seed);
+    var cx = TW * 0.5, cy = TH * 0.5;
+    var glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 150);
+    glow.addColorStop(0, 'rgba(230,222,255,0.14)');
+    glow.addColorStop(0.55, 'rgba(160,150,220,0.05)');
+    glow.addColorStop(1, 'rgba(120,120,190,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(cx, cy, 150, 0, Math.PI * 2); ctx.fill();
+    function gauss() {
+      var u = 0, v = 0;
+      while (u === 0) u = rand();
+      while (v === 0) v = rand();
+      return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    }
+    var tints = ['255,246,228', '235,232,250', '255,238,210'];
+    for (var i = 0; i < 3200; i++) {
+      var r = Math.abs(gauss()) * 62;
+      var ang = rand() * Math.PI * 2;
+      var x = cx + Math.cos(ang) * r;
+      var y = cy + Math.sin(ang) * r * 0.96;
+      var sr = Math.pow(rand(), 2.4) * 1.15 + 0.25;
+      var al = Math.max(0.12, 0.65 - r / 260) * (0.5 + rand() * 0.5);
+      ctx.fillStyle = 'rgba(' + tints[(rand() * 3) | 0] + ',' + al + ')';
+      ctx.beginPath(); ctx.arc(x, y, sr, 0, Math.PI * 2); ctx.fill();
+    }
+    for (var j = 0; j < 26; j++) {
+      var rr = Math.abs(gauss()) * 70;
+      var aa = rand() * Math.PI * 2;
+      drawStar(ctx, cx + Math.cos(aa) * rr, cy + Math.sin(aa) * rr, 0.9 + rand() * 0.7, '255,244,224', 0.8);
+    }
+    scatterStars(ctx, TW, TH, rand, 170, 4);
+    return c;
+  }
+
+  var TARGETS = [
+    { name: 'NGC 7000', con: 'Cygnus', gen: genEmission, seed: 40217 },
+    { name: 'M51',      con: 'Canes Venatici', gen: genGalaxy, seed: 5151 },
+    { name: 'M13',      con: 'Hercules', gen: genGlobular, seed: 1313 }
+  ];
+
+  /* ── Live stacking engine (true running mean) ──── */
+  (function liveStack() {
+    var display = document.getElementById('stack-canvas');
+    var dctx = display.getContext('2d');
+    var stack = document.createElement('canvas'); stack.width = TW; stack.height = TH;
+    var sctx = stack.getContext('2d');
+    var temp = document.createElement('canvas'); temp.width = TW; temp.height = TH;
+    var tctx = temp.getContext('2d');
+
+    var hudSubs = document.getElementById('hud-subs');
+    var hudTime = document.getElementById('hud-time');
+    var hudSnr = document.getElementById('hud-snr');
+    var progress = document.getElementById('stack-progress');
+    var targetEl = document.getElementById('stack-target');
+    var statusEl = document.getElementById('plate-status');
+    var statusText = document.getElementById('plate-status-text');
+
+    var N_MAX = 96, EXP_S = 30, TICK_MS = 700, HOLD_MS = 5200;
+    var SIGMA = 46;
+
+    var truthData = null, truth = null;
+    var k = 0, targetIdx = 0, lastSubAt = 0, holdUntil = 0;
+    var switching = false;
+    var visible = true, timer = null;
+
+    var noiseRand = mulberry32(998877);
+
+    function loadTarget(idx) {
+      var t = TARGETS[idx % TARGETS.length];
+      truth = t.gen(t.seed);
+      truthData = truth.getContext('2d').getImageData(0, 0, TW, TH).data;
+      k = 0;
+      sctx.fillStyle = '#05070f';
+      sctx.globalAlpha = 1;
+      sctx.fillRect(0, 0, TW, TH);
+      targetEl.innerHTML = t.name + ' · <span class="con">' + t.con + '</span>';
+      statusEl.classList.remove('complete');
+      statusText.textContent = 'Live stack';
+      progress.style.width = '0%';
+      hudSubs.textContent = '000/' + String(N_MAX).padStart(3, '0');
+      hudTime.textContent = '0m 00s';
+      hudSnr.textContent = '—';
+    }
+
+    /* one sub-exposure = truth + gaussian read noise */
+    function makeSub() {
+      var img = tctx.createImageData(TW, TH);
+      var d = img.data, td = truthData;
+      var i, n = TW * TH * 4;
+      for (i = 0; i < n; i += 4) {
+        /* Box-Muller once per pixel, luminance noise */
+        var u = noiseRand() || 1e-9, v = noiseRand();
+        var g = Math.sqrt(-2 * Math.log(u)) * Math.cos(6.2831853 * v) * SIGMA;
+        d[i]     = td[i] + g;
+        d[i + 1] = td[i + 1] + g;
+        d[i + 2] = td[i + 2] + g * 1.12;
+        d[i + 3] = 255;
+      }
+      tctx.putImageData(img, 0, 0);
+      /* one satellite crosses sub #9, then averages away */
+      if (k === 9) {
+        tctx.strokeStyle = 'rgba(235,240,255,0.85)';
+        tctx.lineWidth = 1.2;
+        tctx.beginPath();
+        tctx.moveTo(-20, TH * 0.72);
+        tctx.lineTo(TW + 20, TH * 0.18);
+        tctx.stroke();
+      }
+    }
+
+    function fmtTime(totalS) {
+      var m = Math.floor(totalS / 60), s = totalS % 60;
+      return m + 'm ' + (s < 10 ? '0' : '') + s + 's';
+    }
+
+    function tick() {
+      var now = performance.now();
+      if (switching) return;
+      if (holdUntil) {
+        if (now >= holdUntil) {
+          holdUntil = 0;
+          targetIdx++;
+          /* dip to black between targets, then rebuild */
+          switching = true;
+          display.style.opacity = '0';
+          setTimeout(function () {
+            loadTarget(targetIdx);
+            display.style.opacity = '1';
+            switching = false;
+          }, 500);
+        }
+        return;
+      }
+      k++;
+      makeSub();
+      sctx.globalAlpha = 1 / k;
+      sctx.drawImage(temp, 0, 0);
+      sctx.globalAlpha = 1;
+      lastSubAt = now;
+
+      hudSubs.textContent = String(k).padStart(3, '0') + '/' + String(N_MAX).padStart(3, '0');
+      hudTime.textContent = fmtTime(k * EXP_S);
+      hudSnr.textContent = (2.4 * Math.sqrt(k)).toFixed(1);
+      progress.style.width = (k / N_MAX * 100).toFixed(1) + '%';
+
+      if (k >= N_MAX) {
+        holdUntil = now + HOLD_MS;
+        statusEl.classList.add('complete');
+        statusText.textContent = 'Stack complete';
+      }
+    }
+
+    function render() {
+      dctx.drawImage(stack, 0, 0);
+      /* newest sub shimmers in briefly */
+      var dt = performance.now() - lastSubAt;
+      if (dt < 240 && k > 0 && k < N_MAX) {
+        dctx.globalAlpha = 0.22 * (1 - dt / 240);
+        dctx.drawImage(temp, 0, 0);
+        dctx.globalAlpha = 1;
+      }
+      if (visible && !REDUCED) requestAnimationFrame(render);
+    }
+
+    loadTarget(0);
+
+    if (REDUCED) {
+      /* show the finished stack, no animation */
+      k = N_MAX;
+      sctx.drawImage(truth, 0, 0);
+      hudSubs.textContent = '096/096';
+      hudTime.textContent = fmtTime(N_MAX * EXP_S);
+      hudSnr.textContent = (2.4 * Math.sqrt(N_MAX)).toFixed(1);
+      progress.style.width = '100%';
+      statusEl.classList.add('complete');
+      statusText.textContent = 'Stack complete';
+      dctx.drawImage(stack, 0, 0);
+      return;
+    }
+
+    function start() {
+      if (timer) return;
+      timer = setInterval(tick, TICK_MS);
+      requestAnimationFrame(render);
+    }
+    function stop() {
+      if (timer) { clearInterval(timer); timer = null; }
+    }
+
+    var io = new IntersectionObserver(function (entries) {
+      visible = entries[0].isIntersecting;
+      if (visible && !document.hidden) start(); else stop();
+    }, { threshold: 0.05 });
+    io.observe(display);
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stop();
+      else if (visible) start();
     });
-  }, { threshold: 0.15 });
-  els.forEach(function(el) { observer.observe(el); });
+
+    start();
+  })();
+
+  /* ── Thumbnail renderer for gallery cards ──────── */
+  function renderThumb(canvas) {
+    var kind = canvas.dataset.kind || 'emission';
+    var seed = parseInt(canvas.dataset.seed || '1', 10) * 7919 + 13;
+    var w = canvas.width, h = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var rand = mulberry32(seed);
+    var g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, '#070a14');
+    g.addColorStop(1, '#090d18');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    var cx = w * (0.35 + rand() * 0.3), cy = h * (0.35 + rand() * 0.3);
+
+    if (kind === 'emission') {
+      for (var i = 0; i < 14; i++) {
+        var bx = cx + (rand() - 0.5) * w * 0.55;
+        var by = cy + (rand() - 0.5) * h * 0.6;
+        var br = 24 + rand() * 60;
+        var grad = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+        var warm = rand() > 0.4;
+        grad.addColorStop(0, warm ? 'rgba(190,80,120,0.13)' : 'rgba(110,100,200,0.11)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      }
+    } else if (kind === 'galaxy') {
+      ctx.save();
+      ctx.translate(cx + w * 0.12, cy + h * 0.1);
+      ctx.rotate(rand() * Math.PI);
+      ctx.scale(1, 0.5);
+      for (var ring = 5; ring > 0; ring--) {
+        var rr = ring * 15 + 6;
+        var grd = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+        grd.addColorStop(0, 'rgba(230,218,200,' + (0.06 + ring * 0.02) + ')');
+        grd.addColorStop(1, 'rgba(140,135,200,0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.fill();
+      }
+      /* faint spiral arm hints */
+      for (var ai = 0; ai < 260; ai++) {
+        var at = rand() * 2.6 + 0.3;
+        var ar = 10 * Math.exp(0.5 * at);
+        var aang = at + (ai % 2) * Math.PI + (rand() - 0.5) * 0.2;
+        ctx.fillStyle = 'rgba(215,208,235,' + (0.04 + rand() * 0.07) + ')';
+        ctx.beginPath();
+        ctx.arc(Math.cos(aang) * ar, Math.sin(aang) * ar, 0.8 + rand() * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      var core2 = ctx.createRadialGradient(0, 0, 0, 0, 0, 16);
+      core2.addColorStop(0, 'rgba(255,248,230,0.95)');
+      core2.addColorStop(0.4, 'rgba(245,232,205,0.4)');
+      core2.addColorStop(1, 'rgba(255,246,226,0)');
+      ctx.fillStyle = core2;
+      ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    } else if (kind === 'globular') {
+      var glow2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, 55);
+      glow2.addColorStop(0, 'rgba(235,228,255,0.16)');
+      glow2.addColorStop(1, 'rgba(150,140,220,0)');
+      ctx.fillStyle = glow2;
+      ctx.beginPath(); ctx.arc(cx, cy, 55, 0, Math.PI * 2); ctx.fill();
+      for (var s2 = 0; s2 < 420; s2++) {
+        var ang2 = rand() * Math.PI * 2;
+        var rad2 = Math.pow(rand(), 2) * 48;
+        ctx.fillStyle = 'rgba(255,246,228,' + (0.25 + rand() * 0.5) + ')';
+        ctx.fillRect(cx + Math.cos(ang2) * rad2, cy + Math.sin(ang2) * rad2, 1, 1);
+      }
+    } else if (kind === 'planetary') {
+      var pcx = w * 0.5, pcy = h * 0.5;
+      var R = Math.min(w, h) * 0.24;
+      var halo = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, R * 1.9);
+      halo.addColorStop(0, 'rgba(128,203,196,0.10)');
+      halo.addColorStop(0.6, 'rgba(99,102,241,0.05)');
+      halo.addColorStop(1, 'rgba(99,102,241,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(pcx, pcy, R * 1.9, 0, Math.PI * 2); ctx.fill();
+      var ring2 = ctx.createRadialGradient(pcx, pcy, R * 0.2, pcx, pcy, R);
+      ring2.addColorStop(0, 'rgba(150,220,214,0.06)');
+      ring2.addColorStop(0.62, 'rgba(128,203,196,0.42)');
+      ring2.addColorStop(0.82, 'rgba(110,120,240,0.3)');
+      ring2.addColorStop(1, 'rgba(99,102,241,0)');
+      ctx.fillStyle = ring2;
+      ctx.beginPath(); ctx.arc(pcx, pcy, R, 0, Math.PI * 2); ctx.fill();
+      drawStar(ctx, pcx, pcy, 1.0, '220,240,255', 0.95);
+    } else if (kind === 'cluster') {
+      for (var s3 = 0; s3 < 26; s3++) {
+        var xx = cx + (rand() - 0.5) * w * 0.5;
+        var yy = cy + (rand() - 0.5) * h * 0.5;
+        drawStar(ctx, xx, yy, 0.7 + rand() * 1.5, s3 % 3 ? '170,190,255' : '255,240,220', 0.5 + rand() * 0.4);
+      }
+    } else { /* wide: milky way band */
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(-0.5);
+      var band = ctx.createLinearGradient(0, -h * 0.35, 0, h * 0.35);
+      band.addColorStop(0, 'rgba(120,115,190,0)');
+      band.addColorStop(0.5, 'rgba(175,168,220,0.13)');
+      band.addColorStop(1, 'rgba(120,115,190,0)');
+      ctx.fillStyle = band;
+      ctx.fillRect(-w, -h * 0.35, w * 2, h * 0.7);
+      for (var p = 0; p < 300; p++) {
+        var py2 = (rand() + rand() + rand() - 1.5) / 1.5 * h * 0.3;
+        ctx.fillStyle = 'rgba(225,222,245,' + (0.1 + rand() * 0.4) + ')';
+        ctx.fillRect((rand() - 0.5) * w * 2.1, py2, 1, 1);
+      }
+      ctx.restore();
+    }
+    scatterStars(ctx, w, h, rand, 60, 2);
+  }
+
+  document.querySelectorAll('canvas[data-slot="thumbnail"]').forEach(renderThumb);
+
+  /* ── Viewer-side auto-refresh demo ─────────────── */
+  (function viewerDemo() {
+    var grid = document.getElementById('viewer-grid');
+    var refreshLabel = document.getElementById('refresh-label');
+    var countLabel = document.getElementById('viewer-count');
+    var KINDS = ['emission', 'galaxy', 'wide', 'globular', 'emission', 'cluster', 'planetary', 'galaxy'];
+    var TOTAL = KINDS.length;
+    var tiles = [];
+
+    for (var i = 0; i < TOTAL; i++) {
+      var tile = document.createElement('div');
+      tile.className = 'viewer-tile';
+      var cv = document.createElement('canvas');
+      cv.width = 220; cv.height = 220;
+      cv.dataset.kind = KINDS[i];
+      cv.dataset.seed = String(100 + i * 17);
+      cv.setAttribute('aria-hidden', 'true');
+      renderThumb(cv);
+      var flash = document.createElement('div');
+      flash.className = 'tile-flash';
+      var pending = document.createElement('div');
+      pending.className = 'pending-mark';
+      tile.appendChild(cv);
+      tile.appendChild(flash);
+      tile.appendChild(pending);
+      grid.appendChild(tile);
+      tiles.push(tile);
+    }
+
+    var landed = 0;
+    var sinceUpdate = 0;
+
+    function updateLabels() {
+      countLabel.textContent = landed + ' of ' + TOTAL + ' images';
+      refreshLabel.textContent = 'updated ' + sinceUpdate + 's ago';
+    }
+
+    if (REDUCED) {
+      tiles.forEach(function (t) { t.classList.add('landed'); });
+      landed = TOTAL;
+      sinceUpdate = 4;
+      updateLabels();
+      return;
+    }
+
+    /* land the first three immediately so the grid never looks empty */
+    for (var j = 0; j < 3; j++) { tiles[j].classList.add('landed'); }
+    landed = 3;
+    updateLabels();
+
+    var visible = false;
+    var io = new IntersectionObserver(function (entries) {
+      visible = entries[0].isIntersecting;
+    }, { threshold: 0.2 });
+    io.observe(grid);
+
+    setInterval(function () {
+      if (!visible || document.hidden) return;
+      sinceUpdate++;
+      if (landed < TOTAL && sinceUpdate >= 4) {
+        tiles[landed].classList.add('landed');
+        landed++;
+        sinceUpdate = 0;
+      } else if (landed >= TOTAL && sinceUpdate >= 7) {
+        /* session restarts */
+        tiles.forEach(function (t, idx) { if (idx >= 3) t.classList.remove('landed'); });
+        landed = 3;
+        sinceUpdate = 0;
+      }
+      updateLabels();
+    }, 1000);
+  })();
+
+  /* ── Scroll reveal ─────────────────────────────── */
+  (function () {
+    var els = document.querySelectorAll('.reveal');
+    if (REDUCED) { els.forEach(function (el) { el.classList.add('visible'); }); return; }
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          observer.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.05 });
+    els.forEach(function (el) { observer.observe(el); });
+    // Fallback: .reveal is only hidden while html.js is set, so no-JS
+    // agents already see content. For agents that DO run JS but never
+    // scroll (link unfurlers, prerenderers, screenshotters), reveal
+    // anything still hidden shortly after load so the page is never a
+    // blank rectangle below the hero.
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        els.forEach(function (el) { el.classList.add('visible'); });
+      }, 2500);
+    });
+  })();
+
 })();
 </script>
-
 ${authNavScript()}
 
 </body>
-</html>`;
+</html>
+`;
 }
 
 export { landingRoutes };

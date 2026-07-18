@@ -1,0 +1,1366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Astra Gallery — An observatory of your own</title>
+<meta name="description" content="Catalog every imaging session and publish your astrophotography as beautiful, auto-refreshing galleries. Free software; your data stays yours.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%230a0e1a'/><circle cx='16' cy='12' r='2' fill='%236366f1'/><circle cx='10' cy='20' r='1.5' fill='%238b5cf6'/><circle cx='22' cy='18' r='1.5' fill='%238b5cf6'/><circle cx='14' cy='25' r='1' fill='%23c4b5fd'/><circle cx='24' cy='10' r='1' fill='%23c4b5fd'/><line x1='16' y1='12' x2='10' y2='20' stroke='%236366f180' stroke-width='0.5'/><line x1='16' y1='12' x2='22' y2='18' stroke='%236366f180' stroke-width='0.5'/><line x1='10' y1='20' x2='22' y2='18' stroke='%236366f180' stroke-width='0.5'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --void: #0a0e1a;
+  --deep: #0f1424;
+  --surface: #151b2e;
+  --accent: #6366f1;
+  --violet: #8b5cf6;
+  --glow: #c4b5fd;
+  --teal: #80CBC4;
+  --text: #c8cdd8;
+  --text-body: #8891a4;
+  --text-dim: #6b7280;
+  --text-bright: #e8ecf4;
+  --hairline: rgba(99, 102, 241, 0.1);
+  --hairline-strong: rgba(99, 102, 241, 0.22);
+  --serif: 'Cormorant Garamond', Georgia, serif;
+  --sans: 'DM Sans', -apple-system, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+body { overflow-x: hidden; }
+
+::selection { background: rgba(99, 102, 241, 0.35); color: var(--text-bright); }
+
+a:focus-visible, button:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+#starfield {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.container {
+  position: relative;
+  z-index: 1;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+/* ── Nav ─────────────────────────────────────────── */
+nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+  padding: 1.25rem 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(to bottom, rgba(10,14,26,0.92) 55%, transparent);
+}
+
+nav .wordmark {
+  font-family: var(--serif);
+  font-size: 1.5rem;
+  font-weight: 300;
+  letter-spacing: 0.15em;
+  color: var(--text-bright);
+  text-decoration: none;
+}
+
+nav .wordmark .beta {
+  font-family: var(--sans);
+  font-size: 0.55rem;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  vertical-align: super;
+  margin-left: 0.5rem;
+}
+
+nav .nav-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+  align-items: center;
+}
+
+nav .nav-links a {
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: color 0.3s;
+}
+
+nav .nav-links a:hover { color: var(--glow); }
+
+/* ── Hero ────────────────────────────────────────── */
+.hero {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  padding: 7rem 0 5rem;
+  overflow: hidden;
+}
+
+/* the Milky Way runs through Cygnus — a faint band behind the figure */
+.hero::before {
+  content: '';
+  position: absolute;
+  top: -20%;
+  right: -12%;
+  width: 70%;
+  height: 150%;
+  background: linear-gradient(115deg,
+    transparent 30%,
+    rgba(139, 92, 246, 0.035) 44%,
+    rgba(196, 181, 253, 0.05) 50%,
+    rgba(139, 92, 246, 0.035) 56%,
+    transparent 70%);
+  transform: rotate(8deg);
+  pointer-events: none;
+}
+
+.hero-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 6fr) minmax(0, 6fr);
+  gap: 3rem;
+  align-items: center;
+  width: 100%;
+}
+
+.hero-copy { max-width: 32rem; }
+
+.hero-eyebrow {
+  font-family: var(--serif);
+  font-size: 0.95rem;
+  font-weight: 300;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 2.25rem;
+  opacity: 0;
+  animation: fadeUp 1s 0.15s forwards;
+}
+
+.hero h1 {
+  font-family: var(--serif);
+  font-size: clamp(3.2rem, 6vw, 5.2rem);
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  line-height: 1.03;
+  color: var(--text-bright);
+  margin-bottom: 1.75rem;
+  text-wrap: balance;
+  opacity: 0;
+  animation: fadeUp 1s 0.3s forwards;
+}
+
+.hero h1 em { font-style: italic; color: var(--glow); }
+
+.hero-tagline {
+  font-family: var(--serif);
+  font-size: clamp(1.1rem, 1.7vw, 1.35rem);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.55;
+  color: var(--text);
+  max-width: 26rem;
+  margin-bottom: 2.5rem;
+  opacity: 0;
+  animation: fadeUp 1s 0.45s forwards;
+}
+
+.hero-cta {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  opacity: 0;
+  animation: fadeUp 1s 0.6s forwards;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.8rem 2rem;
+  border-radius: 2px;
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: all 0.3s;
+  cursor: pointer;
+  border: none;
+}
+
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--violet); box-shadow: 0 4px 24px rgba(139, 92, 246, 0.3); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+}
+.btn-ghost:hover { border-color: var(--violet); color: var(--text-bright); }
+
+/* ── The constellation gallery ───────────────────── */
+.constellation-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-width: 620px;
+  margin-left: auto;
+  opacity: 0;
+  animation: fadeIn 1.6s 0.5s forwards;
+}
+
+.constellation {
+  position: absolute;
+  inset: 6% 4%;
+}
+
+.constellation svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.constellation svg line {
+  stroke: rgba(196, 181, 253, 0.22);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  stroke-dasharray: 200;
+  stroke-dashoffset: 200;
+  animation: drawLine 1.8s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes drawLine { to { stroke-dashoffset: 0; } }
+
+.cyg-star {
+  position: absolute;
+  width: 6px; height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #e8ecf4;
+  box-shadow: 0 0 8px 2px rgba(196, 181, 253, 0.55);
+  opacity: 0;
+  animation: starIn 1s forwards, twinkle 7s ease-in-out infinite;
+}
+
+.cyg-star.minor {
+  width: 4px; height: 4px;
+  margin: -2px 0 0 -2px;
+  box-shadow: 0 0 6px 1px rgba(196, 181, 253, 0.4);
+}
+
+@keyframes starIn { to { opacity: 1; } }
+
+@keyframes twinkle {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(0.55); }
+}
+
+/* the North America Nebula sits just east of Deneb —
+   a faint patch of it, for those who know */
+.cyg-neb {
+  position: absolute;
+  width: 110px; height: 110px;
+  margin: -55px 0 0 -55px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(190, 80, 120, 0.13), rgba(140, 80, 160, 0.05) 55%, transparent 75%);
+  filter: blur(2px);
+  pointer-events: none;
+  opacity: 0;
+  animation: starIn 3s 2.4s forwards;
+}
+
+.cyg-label {
+  position: absolute;
+  transform: translate(10px, -4px);
+  font-size: 0.58rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  white-space: nowrap;
+  opacity: 0;
+  animation: starIn 1.4s 1.6s forwards;
+  pointer-events: none;
+}
+
+.cyg-label.flip { transform: translate(calc(-100% - 10px), -4px); }
+
+.cyg-label .bayer {
+  font-family: var(--serif);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0.05em;
+  color: rgba(196, 181, 253, 0.65);
+  margin-right: 0.4em;
+}
+
+/* gallery plates docked to constellation stars.
+   Each node docks in a direction chosen so plates sit
+   clear of the figure's lines (up/down/left/right).
+   Port note: each .cyg-node is one recent gallery —
+   thumbnail + name + @username map to the same KV
+   entries as the grid section below. */
+.cyg-node {
+  --plate: 80px;
+  position: absolute;
+  display: block;
+  width: var(--plate);
+  height: var(--plate);
+  text-decoration: none;
+  transform: var(--dock);
+  opacity: 0;
+  animation: nodeIn 1.1s forwards;
+}
+
+.cyg-node.dock-down  { --dock: translate(-50%, 16px); }
+.cyg-node.dock-up    { --dock: translate(-50%, calc(-1 * var(--plate) - 16px)); }
+.cyg-node.dock-left  { --dock: translate(calc(-1 * var(--plate) - 16px), -38%); }
+.cyg-node.dock-right { --dock: translate(16px, -38%); }
+
+.cyg-node .node-thumb {
+  position: relative;
+  display: block;
+  width: var(--plate); height: var(--plate);
+  border: 1px solid var(--hairline-strong);
+  background: var(--deep);
+  overflow: hidden;
+  transition: border-color 0.35s, transform 0.35s, box-shadow 0.35s;
+}
+
+/* connector tick toward the star, per dock direction */
+.cyg-node .node-thumb::after {
+  content: '';
+  position: absolute;
+}
+.cyg-node.dock-down .node-thumb::after {
+  top: -17px; left: 50%;
+  width: 1px; height: 16px;
+  background: linear-gradient(to bottom, rgba(196,181,253,0), rgba(196,181,253,0.5));
+}
+.cyg-node.dock-up .node-thumb::after {
+  bottom: -17px; left: 50%;
+  width: 1px; height: 16px;
+  background: linear-gradient(to top, rgba(196,181,253,0), rgba(196,181,253,0.5));
+}
+.cyg-node.dock-left .node-thumb::after {
+  right: -17px; top: 38%;
+  width: 16px; height: 1px;
+  background: linear-gradient(to left, rgba(196,181,253,0), rgba(196,181,253,0.5));
+}
+.cyg-node.dock-right .node-thumb::after {
+  left: -17px; top: 38%;
+  width: 16px; height: 1px;
+  background: linear-gradient(to right, rgba(196,181,253,0), rgba(196,181,253,0.5));
+}
+
+.cyg-node canvas { display: block; width: 100%; height: 100%; }
+
+.cyg-node .node-label {
+  /* out of flow so the node box stays plate-sized */
+  position: absolute;
+  top: calc(var(--plate) + 0.5rem);
+  left: 50%;
+  width: 150px;
+  transform: translate(-50%, -4px);
+  text-align: center;
+  opacity: 0;
+  transition: opacity 0.35s, transform 0.35s;
+  pointer-events: none;
+}
+
+.cyg-node .node-name {
+  display: block;
+  font-family: var(--serif);
+  font-size: 0.88rem;
+  color: var(--text-bright);
+  line-height: 1.25;
+}
+
+.cyg-node .node-user {
+  display: block;
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--text-dim);
+  margin-top: 0.15rem;
+}
+
+.cyg-node:hover .node-thumb, .cyg-node:focus-visible .node-thumb {
+  border-color: rgba(196, 181, 253, 0.6);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 28px rgba(99, 102, 241, 0.25);
+}
+
+.cyg-node:hover .node-label, .cyg-node:focus-visible .node-label {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* dock-up plates show their label above, not into the connector */
+.cyg-node.dock-up .node-label { top: auto; bottom: calc(var(--plate) + 0.5rem); }
+
+/* gentle independent drift per plate */
+@keyframes drift1 { 0%,100% { margin-top: 0; } 50% { margin-top: -5px; } }
+@keyframes drift2 { 0%,100% { margin-top: 0; } 50% { margin-top: 4px; } }
+@keyframes drift3 { 0%,100% { margin-top: 0; } 50% { margin-top: -3px; } }
+
+.cyg-node:nth-of-type(3n) .node-thumb { animation: drift1 9s ease-in-out infinite; }
+.cyg-node:nth-of-type(3n+1) .node-thumb { animation: drift2 11s ease-in-out infinite; }
+.cyg-node:nth-of-type(3n+2) .node-thumb { animation: drift3 10s ease-in-out infinite; }
+
+.hero-chart-meta {
+  position: absolute;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 3rem);
+  text-align: center;
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  line-height: 2;
+  opacity: 0;
+  animation: fadeUp 1.2s 2s forwards;
+}
+
+.hero-chart-meta .sep { margin: 0 0.9rem; color: rgba(99,102,241,0.4); }
+
+/* ── Sections ────────────────────────────────────── */
+section { position: relative; z-index: 1; padding: 7.5rem 0; }
+section + section { border-top: 1px solid var(--hairline); }
+
+.section-header { margin-bottom: 3.5rem; }
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1rem;
+}
+
+.section-header h2 {
+  font-family: var(--serif);
+  font-size: clamp(1.9rem, 3.4vw, 2.6rem);
+  font-weight: 300;
+  letter-spacing: 0.02em;
+  color: var(--text-bright);
+  text-wrap: balance;
+}
+
+/* ── Manifesto ───────────────────────────────────── */
+.manifesto {
+  text-align: center;
+  padding: 9rem 0;
+}
+
+.manifesto-rule {
+  width: 1px;
+  height: 56px;
+  margin: 0 auto 3rem;
+  background: linear-gradient(to bottom, transparent, var(--accent));
+}
+
+.manifesto blockquote {
+  font-family: var(--serif);
+  font-size: clamp(1.9rem, 4vw, 3.1rem);
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.25;
+  color: var(--text-bright);
+  max-width: 46rem;
+  margin: 0 auto 2.25rem;
+  text-wrap: balance;
+}
+
+.manifesto blockquote .accent { color: var(--glow); }
+
+.manifesto p {
+  max-width: 34rem;
+  margin: 0 auto;
+  color: var(--text-body);
+  font-size: 0.95rem;
+  line-height: 1.8;
+}
+
+.manifesto .principles {
+  display: flex;
+  justify-content: center;
+  gap: 3.5rem;
+  margin-top: 3.5rem;
+  flex-wrap: wrap;
+}
+
+.manifesto .principles span {
+  font-size: 0.68rem;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ── Features ────────────────────────────────────── */
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+}
+
+.feature {
+  background: var(--void);
+  padding: 2.75rem 2.5rem;
+  transition: background 0.4s;
+}
+
+.feature:hover { background: var(--deep); }
+
+.feature-label {
+  font-size: 0.62rem;
+  font-weight: 500;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1.1rem;
+}
+
+.feature h3 {
+  font-family: var(--serif);
+  font-size: 1.4rem;
+  font-weight: 400;
+  color: var(--text-bright);
+  margin-bottom: 0.7rem;
+  line-height: 1.25;
+}
+
+.feature p {
+  font-size: 0.88rem;
+  color: var(--text-body);
+  line-height: 1.65;
+}
+
+/* ══ RECENT-GALLERIES SLOT ═══════════════════════════
+   At port time this section body is emitted by the
+   worker from KV (see landing.ts recentGalleriesSection).
+   The same six entries also feed the constellation
+   nodes in the hero — one data source, two renderings.
+   ════════════════════════════════════════════════════ */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--hairline);
+  border: 1px solid var(--hairline);
+}
+
+.recent-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--void);
+  text-decoration: none;
+  color: inherit;
+  transition: background 0.3s;
+}
+
+.recent-card:hover { background: var(--deep); }
+
+.recent-card-image {
+  aspect-ratio: 5 / 3;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+}
+
+/* Port note: replace <canvas data-slot="thumbnail">
+   with <img src="${thumbnailUrl}" loading="lazy">. */
+.recent-card-image canvas,
+.recent-card-image img {
+  display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+
+.recent-card:hover .recent-card-image canvas,
+.recent-card:hover .recent-card-image img { transform: scale(1.04); }
+
+.recent-card-content { padding: 1.2rem 1.4rem 1.5rem; }
+
+.recent-card h3 {
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 400;
+  color: var(--text-bright);
+  margin-bottom: 0.35rem;
+  line-height: 1.3;
+}
+
+.recent-card-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.recent-card-user { font-size: 0.8rem; color: var(--text-dim); }
+.recent-card:hover .recent-card-user { color: var(--glow); transition: color 0.3s; }
+
+.recent-card-date {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.explore-all { text-align: center; margin-top: 2.5rem; }
+
+/* ── Open source ─────────────────────────────────── */
+.open-source { text-align: center; }
+
+.open-source-inner {
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  padding: 4rem 3rem;
+  max-width: 640px;
+  margin: 0 auto;
+  position: relative;
+  background: rgba(15, 20, 36, 0.4);
+}
+
+.open-source h2 {
+  font-family: var(--serif);
+  font-size: 1.9rem;
+  font-weight: 300;
+  color: var(--text-bright);
+  margin-bottom: 1.1rem;
+}
+
+.open-source p {
+  color: var(--text-body);
+  font-size: 0.92rem;
+  margin-bottom: 2.25rem;
+  line-height: 1.75;
+}
+
+.open-source .license {
+  display: block;
+  margin-top: 1.75rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--teal);
+}
+
+/* ── Footer ──────────────────────────────────────── */
+footer {
+  position: relative;
+  z-index: 1;
+  padding: 3rem 0;
+  border-top: 1px solid var(--hairline);
+}
+
+footer .footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+footer .footer-wordmark {
+  font-family: var(--serif);
+  font-weight: 300;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  color: var(--text);
+}
+
+footer .footer-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+}
+
+footer a { color: var(--text-dim); text-decoration: none; transition: color 0.3s; }
+footer a:hover { color: var(--glow); }
+
+footer .footer-license { letter-spacing: 0.06em; }
+footer .footer-license a { color: var(--teal); }
+
+/* ── Motion ──────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes nodeIn {
+  from { opacity: 0; transform: var(--dock) translateY(10px); }
+  to { opacity: 1; transform: var(--dock); }
+}
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* reveal styles only apply when JS is running (html.js),
+   so content is never hidden without the observer to show it */
+.js .reveal {
+  opacity: 0;
+  transform: translateY(28px);
+  transition: opacity 0.9s ease, transform 0.9s ease;
+}
+
+.js .reveal.visible { opacity: 1; transform: translateY(0); }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+}
+
+/* ── Responsive ──────────────────────────────────── */
+@media (max-width: 1020px) {
+  .hero { padding-top: 8rem; }
+  .hero-inner { grid-template-columns: 1fr; gap: 4rem; }
+  .hero-copy { max-width: 36rem; }
+  .constellation-wrap { margin: 0 auto; max-width: 560px; }
+}
+
+@media (max-width: 768px) {
+  nav { padding: 1rem 1.25rem; }
+  nav .nav-links { gap: 1.1rem; }
+  nav .nav-links li:nth-child(2), nav .nav-links li:nth-child(3) { display: none; }
+  .container { padding: 0 1.25rem; }
+  section { padding: 5rem 0; }
+  .features-grid { grid-template-columns: 1fr; }
+  .gallery-grid { grid-template-columns: repeat(2, 1fr); }
+  .open-source-inner { padding: 2.75rem 1.75rem; }
+  footer .footer-inner { flex-direction: column; text-align: center; }
+  .cyg-node { --plate: 60px; }
+  .cyg-node .node-label { display: none; }
+  .manifesto { padding: 6rem 0; }
+  .manifesto .principles { gap: 1.75rem; }
+}
+
+@media (max-width: 520px) {
+  .hero-cta { flex-direction: column; width: 100%; max-width: 300px; }
+  .btn { justify-content: center; }
+  .gallery-grid { grid-template-columns: 1fr; }
+  .hero-chart-meta { display: none; }
+  .cyg-label { display: none; }
+  .hero-eyebrow { letter-spacing: 0.26em; }
+}
+</style>
+</head>
+<body>
+
+<canvas id="starfield" aria-hidden="true"></canvas>
+
+<nav>
+  <a href="/" class="wordmark">astra.gallery<span class="beta">beta</span></a>
+  <ul class="nav-links">
+    <li><a href="/explore">Explore</a></li>
+    <li><a href="#features">Features</a></li>
+    <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">Source</a></li>
+    <!-- ══ AUTH-NAV SLOT ══════════════════════════════
+         Port: replace this <li> with authNavItem() and
+         append authNavScript() before </body>. The
+         placeholder below mimics the signed-out state. -->
+    <li id="auth-nav"><a href="/auth/callback?return=%2F">Sign In</a></li>
+    <!-- ══ END AUTH-NAV SLOT ══ -->
+  </ul>
+</nav>
+
+<main>
+
+  <!-- ── Hero: the night sky is the gallery ── -->
+  <section class="hero" aria-label="Introduction">
+    <div class="container hero-inner">
+      <div class="hero-copy">
+        <p class="hero-eyebrow">Astrophotography, shared</p>
+        <h1>An <em>observatory</em> of your own</h1>
+        <p class="hero-tagline">Catalog every imaging session. Publish what the night gave you — as a gallery that keeps itself current.</p>
+        <div class="hero-cta">
+          <a href="https://github.com/astrophotograph/astra/releases" class="btn btn-primary" target="_blank" rel="noopener">Download Astra</a>
+          <a href="/explore" class="btn btn-ghost">Explore galleries</a>
+        </div>
+      </div>
+
+      <!-- Cygnus, plotted from real J2000 positions.
+           The six brightest figure stars carry the six
+           most recent galleries — same data as the grid
+           below. Populated by JS from RECENT_GALLERIES. -->
+      <div class="constellation-wrap" aria-label="Recent galleries, arranged as the constellation Cygnus">
+        <div class="constellation" id="constellation"></div>
+      </div>
+    </div>
+    <p class="hero-chart-meta">Cygnus · The Swan<span class="sep">—</span>overhead at midnight, July<span class="sep">—</span>20ʰ41ᵐ&nbsp;+45°17′</p>
+  </section>
+
+  <!-- ── Manifesto ── -->
+  <section class="manifesto" aria-label="Principles">
+    <div class="container reveal">
+      <div class="manifesto-rule"></div>
+      <blockquote>“Your data should always be <span class="accent">yours</span>.”</blockquote>
+      <p>Astra is a desktop observation log first and a gallery second. Sessions, equipment, and images live on your machine — publishing is something you choose, collection by collection, and can take back just as easily.</p>
+      <div class="principles">
+        <span>Local-first</span>
+        <span>Self-hostable</span>
+        <span>Free software</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Features ── -->
+  <section id="features" aria-label="Features">
+    <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">The instrument</div>
+        <h2>Built around the log, not the likes</h2>
+      </div>
+      <div class="features-grid">
+        <div class="feature">
+          <div class="feature-label">Observe</div>
+          <h3>An honest observation log</h3>
+          <p>Every session catalogued — targets, conditions, integration, notes. FITS metadata read straight from your files.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Equip</div>
+          <h3>Your gear, remembered</h3>
+          <p>Telescopes, mounts, cameras, filters. Seestar owners get presets out of the box — your images arrive already understood.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Publish</div>
+          <h3>One-click galleries</h3>
+          <p>Pick a collection, publish. Thumbnails, lightbox, object data — generated for you, straight from the desktop app.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Live</div>
+          <h3>Auto-refreshing by default</h3>
+          <p>Published galleries poll for new images every thirty seconds. Share the link at dusk; it's still growing at dawn.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Yours</div>
+          <h3>Your data stays yours</h3>
+          <p>Run the whole service on your own hardware if you like. No lock-in, no harvesting — the log lives with you.</p>
+        </div>
+        <div class="feature">
+          <div class="feature-label">Open</div>
+          <h3>Free software, all the way down</h3>
+          <p>Desktop app, gallery service, viewer — every line is AGPL v3. Read it, change it, run your own.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ RECENT-GALLERIES SLOT START ═══════════════════
+       Port: the worker replaces this section's inner
+       markup with real KV-backed cards (thumbnailUrl,
+       collectionName, username, createdAt, slug). The
+       hero constellation nodes read the same entries. -->
+  <section aria-label="Recent galleries">
+    <div class="container reveal">
+      <div class="section-header">
+        <div class="section-label">Community</div>
+        <h2>Recently published</h2>
+      </div>
+      <div class="gallery-grid" id="recent-grid"></div>
+      <div class="explore-all">
+        <a href="/explore" class="btn btn-ghost">Explore all &rarr;</a>
+      </div>
+    </div>
+  </section>
+  <!-- ══ RECENT-GALLERIES SLOT END ══ -->
+
+  <!-- ── Open source ── -->
+  <section class="open-source" aria-label="Open source">
+    <div class="container reveal">
+      <div class="open-source-inner">
+        <h2>Free software, in the old sense</h2>
+        <p>The desktop app, this gallery service, and every line between them are open. Built that way on purpose — because your observation log is a record of your nights under the sky, and your data should always be yours.</p>
+        <a href="https://github.com/astrophotograph/astra" class="btn btn-ghost" target="_blank" rel="noopener">Browse the source</a>
+        <span class="license">Licensed under GNU AGPL v3</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="footer-inner">
+    <span class="footer-wordmark">astra.gallery</span>
+    <ul class="footer-links">
+      <li><a href="/explore">Explore</a></li>
+      <li><a href="https://github.com/astrophotograph/astra" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://github.com/astrophotograph/astra/releases" target="_blank" rel="noopener">Download</a></li>
+    </ul>
+    <span class="footer-license">Free software · <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank" rel="noopener">GNU AGPL v3</a></span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  document.documentElement.classList.add('js');
+
+  var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      var t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function drawStar(ctx, x, y, r, tint, alpha) {
+    var g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+    g.addColorStop(0, 'rgba(' + tint + ',' + alpha + ')');
+    g.addColorStop(0.25, 'rgba(' + tint + ',' + (alpha * 0.35) + ')');
+    g.addColorStop(1, 'rgba(' + tint + ',0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r * 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,' + Math.min(1, alpha + 0.15) + ')';
+    ctx.beginPath(); ctx.arc(x, y, r * 0.55, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function scatterStars(ctx, w, h, rand, count, brightCount) {
+    var tints = ['200,214,240', '228,224,255', '255,240,220', '190,205,235'];
+    for (var i = 0; i < count; i++) {
+      drawStar(ctx, rand() * w, rand() * h, Math.pow(rand(), 2.6) * 1.6 + 0.3,
+        tints[(rand() * tints.length) | 0], 0.25 + rand() * 0.5);
+    }
+    for (var j = 0; j < brightCount; j++) {
+      drawStar(ctx, rand() * w, rand() * h, 1.6 + rand() * 1.3,
+        tints[(rand() * tints.length) | 0], 0.85);
+    }
+  }
+
+  /* ── Layered parallax starfield ────────────────── */
+  (function starfield() {
+    var canvas = document.getElementById('starfield');
+    var ctx = canvas.getContext('2d');
+    var layers = [], w = 0, h = 0, frame = 0, running = true;
+    var px = 0, py = 0;        /* pointer parallax target */
+    var cpx = 0, cpy = 0;      /* current (lerped) */
+
+    var LAYER_SPEC = [
+      { count: 110, factor: 0.16, rMax: 0.9, alpha: 0.32 },
+      { count: 55,  factor: 0.38, rMax: 1.3, alpha: 0.45 },
+      { count: 22,  factor: 0.72, rMax: 1.8, alpha: 0.6 }
+    ];
+
+    function init() {
+      w = canvas.width = window.innerWidth;
+      h = canvas.height = window.innerHeight;
+      var rand = mulberry32(20260716);
+      layers = LAYER_SPEC.map(function (spec) {
+        var stars = [];
+        var count = Math.round(spec.count * Math.min(1.4, w * h / (1440 * 900)));
+        for (var i = 0; i < count; i++) {
+          stars.push({
+            x: rand() * w, y: rand() * h,
+            r: 0.25 + Math.pow(rand(), 2) * spec.rMax,
+            base: 0.08 + rand() * spec.alpha,
+            spd: 0.004 + rand() * 0.012,
+            off: rand() * Math.PI * 2
+          });
+        }
+        return { spec: spec, stars: stars };
+      });
+    }
+
+    function paint(animate) {
+      ctx.clearRect(0, 0, w, h);
+      var scrollShift = window.scrollY;
+      for (var L = 0; L < layers.length; L++) {
+        var layer = layers[L], f = layer.spec.factor;
+        var ox = cpx * 14 * f;
+        var oy = cpy * 10 * f - scrollShift * 0.06 * f;
+        for (var i = 0; i < layer.stars.length; i++) {
+          var s = layer.stars[i];
+          var a = s.base;
+          if (animate) a = Math.max(0.04, s.base + Math.sin(frame * s.spd + s.off) * 0.14);
+          var yy = ((s.y + oy) % h + h) % h;
+          var xx = ((s.x + ox) % w + w) % w;
+          ctx.beginPath();
+          ctx.arc(xx, yy, s.r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(200,210,230,' + a + ')';
+          ctx.fill();
+        }
+      }
+    }
+
+    function loop() {
+      if (!running) return;
+      frame++;
+      cpx += (px - cpx) * 0.04;
+      cpy += (py - cpy) * 0.04;
+      paint(true);
+      requestAnimationFrame(loop);
+    }
+
+    init();
+    if (REDUCED) { paint(false); }
+    else {
+      loop();
+      window.addEventListener('pointermove', function (e) {
+        px = (e.clientX / w - 0.5) * 2;
+        py = (e.clientY / h - 0.5) * 2;
+      }, { passive: true });
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { running = false; }
+        else { running = true; loop(); }
+      });
+    }
+    var resizeTimer;
+    window.addEventListener('resize', function () {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(function () { init(); if (REDUCED) paint(false); }, 150);
+    });
+  })();
+
+  /* ── Procedural thumbnails (stand-ins for real ones) ── */
+  function renderThumb(canvas) {
+    var kind = canvas.dataset.kind || 'emission';
+    var seed = parseInt(canvas.dataset.seed || '1', 10) * 7919 + 13;
+    var w = canvas.width, h = canvas.height;
+    var ctx = canvas.getContext('2d');
+    var rand = mulberry32(seed);
+    var g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, '#070a14');
+    g.addColorStop(1, '#090d18');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+
+    var cx = w * (0.35 + rand() * 0.3), cy = h * (0.35 + rand() * 0.3);
+
+    if (kind === 'emission') {
+      for (var i = 0; i < 14; i++) {
+        var bx = cx + (rand() - 0.5) * w * 0.55;
+        var by = cy + (rand() - 0.5) * h * 0.6;
+        var br = 24 + rand() * 60;
+        var grad = ctx.createRadialGradient(bx, by, 0, bx, by, br);
+        var warm = rand() > 0.4;
+        grad.addColorStop(0, warm ? 'rgba(190,80,120,0.13)' : 'rgba(110,100,200,0.11)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.fill();
+      }
+    } else if (kind === 'galaxy') {
+      ctx.save();
+      ctx.translate(cx + w * 0.12, cy + h * 0.1);
+      ctx.rotate(rand() * Math.PI);
+      ctx.scale(1, 0.5);
+      for (var ring = 5; ring > 0; ring--) {
+        var rr = ring * 15 + 6;
+        var grd = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+        grd.addColorStop(0, 'rgba(230,218,200,' + (0.06 + ring * 0.02) + ')');
+        grd.addColorStop(1, 'rgba(140,135,200,0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.arc(0, 0, rr, 0, Math.PI * 2); ctx.fill();
+      }
+      /* faint spiral arm hints */
+      for (var ai = 0; ai < 260; ai++) {
+        var at = rand() * 2.6 + 0.3;
+        var ar = 10 * Math.exp(0.5 * at);
+        var aang = at + (ai % 2) * Math.PI + (rand() - 0.5) * 0.2;
+        ctx.fillStyle = 'rgba(215,208,235,' + (0.04 + rand() * 0.07) + ')';
+        ctx.beginPath();
+        ctx.arc(Math.cos(aang) * ar, Math.sin(aang) * ar, 0.8 + rand() * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      var core2 = ctx.createRadialGradient(0, 0, 0, 0, 0, 16);
+      core2.addColorStop(0, 'rgba(255,248,230,0.95)');
+      core2.addColorStop(0.4, 'rgba(245,232,205,0.4)');
+      core2.addColorStop(1, 'rgba(255,246,226,0)');
+      ctx.fillStyle = core2;
+      ctx.beginPath(); ctx.arc(0, 0, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    } else if (kind === 'globular') {
+      var glow2 = ctx.createRadialGradient(cx, cy, 0, cx, cy, 55);
+      glow2.addColorStop(0, 'rgba(235,228,255,0.16)');
+      glow2.addColorStop(1, 'rgba(150,140,220,0)');
+      ctx.fillStyle = glow2;
+      ctx.beginPath(); ctx.arc(cx, cy, 55, 0, Math.PI * 2); ctx.fill();
+      for (var s2 = 0; s2 < 420; s2++) {
+        var ang2 = rand() * Math.PI * 2;
+        var rad2 = Math.pow(rand(), 2) * 48;
+        ctx.fillStyle = 'rgba(255,246,228,' + (0.25 + rand() * 0.5) + ')';
+        ctx.fillRect(cx + Math.cos(ang2) * rad2, cy + Math.sin(ang2) * rad2, 1, 1);
+      }
+    } else if (kind === 'planetary') {
+      var pcx = w * 0.5, pcy = h * 0.5;
+      var R = Math.min(w, h) * 0.24;
+      var halo = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, R * 1.9);
+      halo.addColorStop(0, 'rgba(128,203,196,0.10)');
+      halo.addColorStop(0.6, 'rgba(99,102,241,0.05)');
+      halo.addColorStop(1, 'rgba(99,102,241,0)');
+      ctx.fillStyle = halo;
+      ctx.beginPath(); ctx.arc(pcx, pcy, R * 1.9, 0, Math.PI * 2); ctx.fill();
+      var ring2 = ctx.createRadialGradient(pcx, pcy, R * 0.2, pcx, pcy, R);
+      ring2.addColorStop(0, 'rgba(150,220,214,0.06)');
+      ring2.addColorStop(0.62, 'rgba(128,203,196,0.42)');
+      ring2.addColorStop(0.82, 'rgba(110,120,240,0.3)');
+      ring2.addColorStop(1, 'rgba(99,102,241,0)');
+      ctx.fillStyle = ring2;
+      ctx.beginPath(); ctx.arc(pcx, pcy, R, 0, Math.PI * 2); ctx.fill();
+      drawStar(ctx, pcx, pcy, 1.0, '220,240,255', 0.95);
+    } else if (kind === 'cluster') {
+      for (var s3 = 0; s3 < 26; s3++) {
+        var xx = cx + (rand() - 0.5) * w * 0.5;
+        var yy = cy + (rand() - 0.5) * h * 0.5;
+        drawStar(ctx, xx, yy, 0.7 + rand() * 1.5, s3 % 3 ? '170,190,255' : '255,240,220', 0.5 + rand() * 0.4);
+      }
+    } else { /* wide */
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate(-0.5);
+      var band = ctx.createLinearGradient(0, -h * 0.35, 0, h * 0.35);
+      band.addColorStop(0, 'rgba(120,115,190,0)');
+      band.addColorStop(0.5, 'rgba(175,168,220,0.13)');
+      band.addColorStop(1, 'rgba(120,115,190,0)');
+      ctx.fillStyle = band;
+      ctx.fillRect(-w, -h * 0.35, w * 2, h * 0.7);
+      for (var p = 0; p < 300; p++) {
+        var py2 = (rand() + rand() + rand() - 1.5) / 1.5 * h * 0.3;
+        ctx.fillStyle = 'rgba(225,222,245,' + (0.1 + rand() * 0.4) + ')';
+        ctx.fillRect((rand() - 0.5) * w * 2.1, py2, 1, 1);
+      }
+      ctx.restore();
+    }
+    scatterStars(ctx, w, h, rand, 60, 2);
+  }
+
+  /* ── One data source: six recent galleries ───────
+     Port: the worker emits this array from KV — the
+     hero constellation and the grid both render it. */
+  var RECENT_GALLERIES = [
+    { name: 'Summer Nebulae',          user: 'sarahk',        date: 'Jul 12, 2026', kind: 'emission',  seed: 11, href: '/explore' },
+    { name: 'M31 — Andromeda Rising',  user: 'deepskydan',    date: 'Jul 10, 2026', kind: 'galaxy',    seed: 7,  href: '/explore' },
+    { name: 'Cygnus Widefield',        user: 'nightshift',    date: 'Jul 8, 2026',  kind: 'wide',      seed: 23, href: '/explore' },
+    { name: 'Globulars of July',       user: 'astroval',      date: 'Jul 5, 2026',  kind: 'globular',  seed: 42, href: '/explore' },
+    { name: 'First Light — Seestar S50', user: 'newmoon',     date: 'Jul 3, 2026',  kind: 'planetary', seed: 5,  href: '/explore' },
+    { name: 'Rho Ophiuchi Complex',    user: 'southernskies', date: 'Jun 29, 2026', kind: 'cluster',   seed: 31, href: '/explore' }
+  ];
+
+  /* ── Cygnus, from real J2000 coordinates ─────────
+     Gnomonic-ish projection centered on RA 300° Dec +40°:
+     x = -(RA-300)·cos(Dec), y = (40-Dec), normalized. */
+  var CYG_STARS = [
+    { id: 'deneb',   u: 34.8, v: 31.9, label: 'Deneb',   bayer: 'α Cyg', mag: 1.25, node: 0, dock: 'up' },
+    { id: 'sadr',    u: 47.5, v: 51.6, label: 'Sadr',    bayer: 'γ Cyg', mag: 2.2,  node: null },
+    { id: 'gienah',  u: 25.4, v: 76.4, label: null,      bayer: 'ε',     mag: 2.5,  node: 3, dock: 'left' },
+    { id: 'delta',   u: 75.8, v: 32.7, label: null,      bayer: 'δ',     mag: 2.9,  node: 1, dock: 'up' },
+    { id: 'albireo', u: 91.4, v: 100,  label: 'Albireo', bayer: 'β Cyg', mag: 3.1,  node: 5, dock: 'right' },
+    { id: 'eta',     u: 67.6, v: 72.0, label: null,      bayer: 'η',     mag: 3.9,  node: 2, dock: 'right' },
+    { id: 'iota',    u: 99.2, v: 6.7,  label: null,      bayer: 'ι',     mag: 3.8,  node: null },
+    { id: 'kappa',   u: 100,  v: 0,    label: null,      bayer: 'κ',     mag: 3.8,  node: null },
+    { id: 'zeta',    u: 0,    v: 91.3, label: null,      bayer: 'ζ',     mag: 3.2,  node: 4, dock: 'down' }
+  ];
+
+  var CYG_LINES = [
+    ['deneb', 'sadr'], ['sadr', 'eta'], ['eta', 'albireo'],
+    ['sadr', 'gienah'], ['gienah', 'zeta'],
+    ['sadr', 'delta'], ['delta', 'iota'], ['iota', 'kappa']
+  ];
+
+  (function buildConstellation() {
+    var host = document.getElementById('constellation');
+    if (!host) return;
+    var byId = {};
+    CYG_STARS.forEach(function (s) { byId[s.id] = s; });
+
+    /* squeeze the figure into the box with padding so
+       plates at the extremes stay inside the wrap */
+    function X(u) { return 8 + u * 0.80; }
+    function Y(v) { return 4 + v * 0.80; }
+
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 100 100');
+    svg.setAttribute('preserveAspectRatio', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+    CYG_LINES.forEach(function (pair, i) {
+      var a = byId[pair[0]], b = byId[pair[1]];
+      var line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', X(a.u)); line.setAttribute('y1', Y(a.v));
+      line.setAttribute('x2', X(b.u)); line.setAttribute('y2', Y(b.v));
+      line.style.animationDelay = (0.9 + i * 0.14) + 's';
+      svg.appendChild(line);
+    });
+    host.appendChild(svg);
+
+    /* faint North America Nebula beside Deneb */
+    var neb = document.createElement('span');
+    neb.className = 'cyg-neb';
+    neb.style.left = X(42) + '%';
+    neb.style.top = Y(38) + '%';
+    neb.setAttribute('aria-hidden', 'true');
+    host.appendChild(neb);
+
+    CYG_STARS.forEach(function (s, i) {
+      var dot = document.createElement('span');
+      dot.className = 'cyg-star' + (s.mag > 3 ? ' minor' : '');
+      dot.style.left = X(s.u) + '%';
+      dot.style.top = Y(s.v) + '%';
+      /* stagger the fade-in; desynchronize the twinkle */
+      dot.style.animationDelay = (0.4 + i * 0.08) + 's, ' + (i * 0.9) + 's';
+      dot.style.animationDuration = '1s, ' + (5.5 + (i % 4) * 1.4) + 's';
+      dot.setAttribute('aria-hidden', 'true');
+      host.appendChild(dot);
+
+      if (s.label) {
+        var lab = document.createElement('span');
+        lab.className = 'cyg-label' + (s.dock === 'right' ? ' flip' : '');
+        lab.style.left = X(s.u) + '%';
+        lab.style.top = Y(s.v) + '%';
+        lab.innerHTML = '<span class="bayer">' + s.bayer + '</span>' + s.label;
+        lab.setAttribute('aria-hidden', 'true');
+        host.appendChild(lab);
+      }
+
+      if (s.node !== null && RECENT_GALLERIES[s.node]) {
+        var gal = RECENT_GALLERIES[s.node];
+        var node = document.createElement('a');
+        node.className = 'cyg-node dock-' + (s.dock || 'down');
+        node.href = gal.href;
+        node.style.left = X(s.u) + '%';
+        node.style.top = Y(s.v) + '%';
+        node.style.animationDelay = (1.7 + s.node * 0.18) + 's';
+        node.setAttribute('aria-label', gal.name + ' by @' + gal.user);
+        var thumb = document.createElement('span');
+        thumb.className = 'node-thumb';
+        var cv = document.createElement('canvas');
+        cv.width = 160; cv.height = 160;
+        cv.dataset.kind = gal.kind;
+        cv.dataset.seed = String(gal.seed);
+        cv.setAttribute('aria-hidden', 'true');
+        renderThumb(cv);
+        thumb.appendChild(cv);
+        var label = document.createElement('span');
+        label.className = 'node-label';
+        label.innerHTML = '<span class="node-name">' + gal.name + '</span><span class="node-user">@' + gal.user + '</span>';
+        node.appendChild(thumb);
+        node.appendChild(label);
+        host.appendChild(node);
+      }
+    });
+
+    /* subtle pointer parallax on the whole figure */
+    if (!REDUCED && window.matchMedia('(pointer: fine)').matches) {
+      var wrap = host.parentElement;
+      var tx = 0, ty = 0, cx2 = 0, cy2 = 0, rafId = null;
+      function tickP() {
+        cx2 += (tx - cx2) * 0.06;
+        cy2 += (ty - cy2) * 0.06;
+        host.style.transform = 'translate(' + cx2.toFixed(2) + 'px,' + cy2.toFixed(2) + 'px)';
+        if (Math.abs(tx - cx2) > 0.05 || Math.abs(ty - cy2) > 0.05) {
+          rafId = requestAnimationFrame(tickP);
+        } else { rafId = null; }
+      }
+      window.addEventListener('pointermove', function (e) {
+        var r = wrap.getBoundingClientRect();
+        if (r.bottom < 0 || r.top > window.innerHeight) return;
+        tx = (e.clientX / window.innerWidth - 0.5) * -10;
+        ty = (e.clientY / window.innerHeight - 0.5) * -7;
+        if (!rafId) rafId = requestAnimationFrame(tickP);
+      }, { passive: true });
+    }
+  })();
+
+  /* ── Recent galleries grid (same data source) ──── */
+  (function buildGrid() {
+    var grid = document.getElementById('recent-grid');
+    if (!grid) return;
+    RECENT_GALLERIES.forEach(function (gal) {
+      var a = document.createElement('a');
+      a.className = 'recent-card';
+      a.href = gal.href;
+      a.setAttribute('data-slot', 'gallery-card');
+      var img = document.createElement('div');
+      img.className = 'recent-card-image';
+      var cv = document.createElement('canvas');
+      cv.width = 400; cv.height = 240;
+      cv.dataset.kind = gal.kind;
+      cv.dataset.seed = String(gal.seed);
+      cv.dataset.slot = 'thumbnail';
+      cv.setAttribute('aria-hidden', 'true');
+      renderThumb(cv);
+      img.appendChild(cv);
+      var content = document.createElement('div');
+      content.className = 'recent-card-content';
+      content.innerHTML =
+        '<h3></h3>' +
+        '<div class="recent-card-meta"><span class="recent-card-user"></span><span class="recent-card-date"></span></div>';
+      content.querySelector('h3').textContent = gal.name;
+      content.querySelector('.recent-card-user').textContent = '@' + gal.user;
+      content.querySelector('.recent-card-date').textContent = gal.date;
+      a.appendChild(img);
+      a.appendChild(content);
+      grid.appendChild(a);
+    });
+  })();
+
+  /* ── Scroll reveal ─────────────────────────────── */
+  (function () {
+    var els = document.querySelectorAll('.reveal');
+    if (REDUCED) { els.forEach(function (el) { el.classList.add('visible'); }); return; }
+    var observer = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) {
+          e.target.classList.add('visible');
+          observer.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.05 });
+    els.forEach(function (el) { observer.observe(el); });
+  })();
+
+})();
+</script>
+
+</body>
+</html>
