@@ -56,7 +56,7 @@ axum = "0.8"
 getrandom = "0.3"
 
 # OIDC JWT validation (Zitadel sessions)
-jsonwebtoken = "9"
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 
 # Content hashing for push ingest (matches HoardFS blob ids)
 blake3 = "1"
@@ -99,7 +99,7 @@ hoardfs-backend = { path = "../../hoardfs/crates/hoardfs-backend" }
 hoardfs-fuse = { path = "../../hoardfs/crates/hoardfs-fuse", optional = true }
 
 # Python integration
-pyo3 = { version = "0.27", features = ["auto-initialize"] }
+pyo3 = { version = "0.29", features = ["auto-initialize"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -89,7 +89,7 @@ pub fn process_image(
     params: &ProcessingParams,
     object_name: Option<&str>,
 ) -> Result<ProcessingResult, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -132,7 +132,7 @@ pub fn process_image(
 
         // Convert Python dict to Rust struct
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         // Extract fields
@@ -185,11 +185,11 @@ pub fn process_image(
             .and_then(|v| {
                 // Convert Python dict to HashMap, then to serde_json::Value
                 let params_map: HashMap<String, serde_json::Value> = v
-                    .extract::<HashMap<String, PyObject>>()
+                    .extract::<HashMap<String, Py<PyAny>>>()
                     .ok()?
                     .into_iter()
                     .filter_map(|(k, v)| {
-                        Python::with_gil(|py| {
+                        Python::attach(|py| {
                             let py_obj = v.bind(py);
                             if let Ok(s) = py_obj.extract::<String>() {
                                 Some((k, serde_json::Value::String(s)))
@@ -234,7 +234,7 @@ pub fn process_image_with_progress(
     object_name: Option<&str>,
     progress_tx: ProgressSender,
 ) -> Result<ProcessingResult, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -297,7 +297,7 @@ pub fn process_image_with_progress(
 
         // Convert Python dict to Rust struct (same as process_image)
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         let success: bool = dict
@@ -347,11 +347,11 @@ pub fn process_image_with_progress(
             .flatten()
             .and_then(|v| {
                 let params_map: HashMap<String, serde_json::Value> = v
-                    .extract::<HashMap<String, PyObject>>()
+                    .extract::<HashMap<String, Py<PyAny>>>()
                     .ok()?
                     .into_iter()
                     .filter_map(|(k, v)| {
-                        Python::with_gil(|py| {
+                        Python::attach(|py| {
                             let py_obj = v.bind(py);
                             if let Ok(s) = py_obj.extract::<String>() {
                                 Some((k, serde_json::Value::String(s)))
@@ -390,7 +390,7 @@ pub fn process_image_with_progress(
 
 /// Classify a target from its object name
 pub fn classify_target(object_name: &str) -> Result<TargetInfo, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -403,7 +403,7 @@ pub fn classify_target(object_name: &str) -> Result<TargetInfo, String> {
 
         // Convert Python dict to Rust struct
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         // Extract fields
@@ -450,7 +450,7 @@ pub fn quick_preview(
     bg_percent: Option<f64>,
     sigma: Option<f64>,
 ) -> Result<String, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let astra_astro = py
             .import("astra_astro")
             .map_err(|e| format!("Failed to import astra_astro: {}", e))?;
@@ -472,7 +472,7 @@ pub fn quick_preview(
             .map_err(|e| format!("Quick preview failed: {}", e))?;
 
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         let success: bool = dict

@@ -47,9 +47,9 @@ preview:
 deploy:
     pnpm deploy
 
-# Sync Python dependencies via uv
+# Sync Python dependencies via uv (dev extra keeps pytest/ruff for test-py)
 py-sync:
-    cd python && uv sync
+    cd python && uv sync --extra dev
 
 # Cargo check (frontend dist required by tauri::generate_context)
 check:

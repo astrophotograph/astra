@@ -46,7 +46,7 @@ pub fn calculate_altitude(
     dec_deg: f64,
     location: &ObserverLocation,
 ) -> Result<AltitudePoint, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let astra_astro = py.import("astra_astro")
             .map_err(|e| format!("Failed to import astra_astro: {}", e))?;
 
@@ -71,7 +71,7 @@ pub fn calculate_altitude(
             .map_err(|e| format!("Altitude calculation failed: {}", e))?;
 
         // Extract result
-        let dict: &Bound<'_, PyDict> = result.downcast()
+        let dict: &Bound<'_, PyDict> = result.cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         Ok(AltitudePoint {
@@ -107,7 +107,7 @@ pub fn calculate_altitude_data(
     duration_hours: Option<f64>,
     interval_minutes: Option<i32>,
 ) -> Result<Vec<AltitudePoint>, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let altitude_module = py.import("astra_astro.altitude")
             .map_err(|e| format!("Failed to import altitude module: {}", e))?;
 
@@ -144,12 +144,12 @@ pub fn calculate_altitude_data(
             .map_err(|e| format!("Altitude data calculation failed: {}", e))?;
 
         // Extract result list
-        let list: &Bound<'_, PyList> = result.downcast()
+        let list: &Bound<'_, PyList> = result.cast()
             .map_err(|e| format!("Expected list result: {}", e))?;
 
         let mut points = Vec::new();
         for item in list.iter() {
-            let dict: &Bound<'_, PyDict> = item.downcast()
+            let dict: &Bound<'_, PyDict> = item.cast()
                 .map_err(|e| format!("Expected dict item: {}", e))?;
 
             points.push(AltitudePoint {
@@ -182,7 +182,7 @@ pub fn calculate_altitude_data(
 
 /// Get sunrise, sunset, and twilight times for a location
 pub fn get_sun_times(location: &ObserverLocation) -> Result<SunTimes, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let altitude_module = py.import("astra_astro.altitude")
             .map_err(|e| format!("Failed to import altitude module: {}", e))?;
 
@@ -204,7 +204,7 @@ pub fn get_sun_times(location: &ObserverLocation) -> Result<SunTimes, String> {
             .map_err(|e| format!("Sun times calculation failed: {}", e))?;
 
         // Extract result
-        let dict: &Bound<'_, PyDict> = result.downcast()
+        let dict: &Bound<'_, PyDict> = result.cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         Ok(SunTimes {

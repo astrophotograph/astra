@@ -43,7 +43,7 @@ pub struct DistanceInfo {
 
 /// Look up an astronomical object in SIMBAD
 pub fn lookup_object(object_name: &str) -> Result<Option<SimbadObject>, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py.import("astra_astro")
             .map_err(|e| format!("Failed to import astra_astro: {}", e))?;
@@ -59,7 +59,7 @@ pub fn lookup_object(object_name: &str) -> Result<Option<SimbadObject>, String> 
         }
 
         // Convert Python dict to Rust struct
-        let dict: &Bound<'_, PyDict> = result.downcast()
+        let dict: &Bound<'_, PyDict> = result.cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         // Extract fields
@@ -132,7 +132,7 @@ pub fn lookup_object(object_name: &str) -> Result<Option<SimbadObject>, String> 
             .ok()
             .flatten()
             .and_then(|d| {
-                let d_dict: &Bound<'_, PyDict> = d.downcast().ok()?;
+                let d_dict: &Bound<'_, PyDict> = d.cast().ok()?;
                 let parsecs: f64 = d_dict.get_item("parsecs").ok()??.extract().ok()?;
                 let light_years: f64 = d_dict.get_item("lightYears").ok()??.extract().ok()?;
                 Some(DistanceInfo { parsecs, light_years })

@@ -26,7 +26,7 @@ pub fn generate_skymap(
     image_width: Option<f64>,
     image_height: Option<f64>,
 ) -> Result<SkymapResult, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -72,7 +72,7 @@ pub fn generate_skymap(
 
         // Convert Python dict to Rust struct
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         let success: bool = dict
@@ -104,7 +104,7 @@ pub fn generate_skymap(
 
 /// Generate a wide-field skymap showing position on the full sky
 pub fn generate_wide_skymap(center_ra: f64, center_dec: f64) -> Result<SkymapResult, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -126,7 +126,7 @@ pub fn generate_wide_skymap(center_ra: f64, center_dec: f64) -> Result<SkymapRes
 
         // Convert Python dict to Rust struct
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         let success: bool = dict

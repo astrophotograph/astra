@@ -9,7 +9,7 @@ dependencies = [
     "skyfield>=1.52",
     "numpy>=1.26",
     "starplot",
-    "pillow>=12.1.0",
+    "pillow>=12.2.0",
     "scipy>=1.16.3",
     "processinator>=0.5.0",
 ]

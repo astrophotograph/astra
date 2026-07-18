@@ -18,10 +18,10 @@ static PYTHON_INITIALIZED: OnceLock<bool> = OnceLock::new();
 /// Initialize the Python interpreter and add the astra_astro module to the path
 pub fn init_python(python_path: Option<PathBuf>) -> PyResult<()> {
     PYTHON_INITIALIZED.get_or_init(|| {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Add our Python module to the path
             let sys = py.import("sys")?;
-            let path: Bound<'_, pyo3::types::PyList> = sys.getattr("path")?.downcast_into()?;
+            let path: Bound<'_, pyo3::types::PyList> = sys.getattr("path")?.cast_into()?;
 
             if let Some(ref p) = python_path {
                 // Add the module path

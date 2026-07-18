@@ -66,7 +66,7 @@ pub fn solve_image(
     hint_dec: Option<f64>,
     hint_radius: Option<f64>,
 ) -> Result<PlateSolveResult, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -137,7 +137,7 @@ pub fn solve_image(
 
         // Convert Python dict to Rust struct
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict result: {}", e))?;
 
         // Extract required fields
@@ -293,7 +293,7 @@ pub struct SolveHints {
 
 /// Detect which plate solvers are installed
 pub fn detect_solvers() -> Result<std::collections::HashMap<String, SolverInfo>, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let plate_solve = py
             .import("astra_astro.plate_solve")
             .map_err(|e| format!("Failed to import astra_astro.plate_solve: {}", e))?;
@@ -303,14 +303,14 @@ pub fn detect_solvers() -> Result<std::collections::HashMap<String, SolverInfo>,
             .map_err(|e| format!("detect_solvers failed: {}", e))?;
 
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict: {}", e))?;
 
         let mut solvers = std::collections::HashMap::new();
         for (key, value) in dict.iter() {
             let name: String = key.extract().map_err(|e| format!("Invalid key: {}", e))?;
             let info_dict: &Bound<'_, PyDict> = value
-                .downcast()
+                .cast()
                 .map_err(|e| format!("Expected dict for solver info: {}", e))?;
 
             let available: bool = info_dict
@@ -334,7 +334,7 @@ pub fn detect_solvers() -> Result<std::collections::HashMap<String, SolverInfo>,
 
 /// Extract plate solving hints from a FITS file
 pub fn extract_solve_hints(image_path: &str) -> Result<SolveHints, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let plate_solve = py
             .import("astra_astro.plate_solve")
             .map_err(|e| format!("Failed to import astra_astro.plate_solve: {}", e))?;
@@ -344,7 +344,7 @@ pub fn extract_solve_hints(image_path: &str) -> Result<SolveHints, String> {
             .map_err(|e| format!("extract_solve_hints failed: {}", e))?;
 
         let dict: &Bound<'_, PyDict> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected dict: {}", e))?;
 
         Ok(SolveHints {
@@ -373,7 +373,7 @@ pub fn query_objects_in_fov(
     fits_path: Option<&str>,
     solve_result: Option<&PlateSolveResult>,
 ) -> Result<Vec<CatalogObject>, String> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         // Import our module
         let astra_astro = py
             .import("astra_astro")
@@ -453,13 +453,13 @@ pub fn query_objects_in_fov(
 
         // Convert Python list of dicts to Rust Vec
         let list: &Bound<'_, PyList> = result
-            .downcast()
+            .cast()
             .map_err(|e| format!("Expected list result: {}", e))?;
 
         let mut objects = Vec::new();
         for item in list.iter() {
             let dict: &Bound<'_, PyDict> = item
-                .downcast()
+                .cast()
                 .map_err(|e| format!("Expected dict in list: {}", e))?;
 
             let name: String = dict
