@@ -637,8 +637,9 @@ export default function ImageViewerPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <p className="text-muted-foreground">Loading image...</p>
+      <div className="flex flex-col items-center justify-center gap-3 min-h-[400px]">
+        <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+        <p className="font-serif text-lg text-slate-300">Loading image…</p>
       </div>
     );
   }
@@ -701,7 +702,9 @@ export default function ImageViewerPage() {
               </Button>
             </div>
           )}
-          <h1 className="text-2xl font-bold">{image.summary || image.filename}</h1>
+          <h1 className="font-serif text-2xl font-light tracking-wide text-slate-100 truncate">
+            {image.summary || image.filename}
+          </h1>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -712,7 +715,7 @@ export default function ImageViewerPage() {
           >
             <Star
               className={`w-5 h-5 ${
-                image.favorite ? "text-yellow-500 fill-yellow-500" : ""
+                image.favorite ? "text-amber-400 fill-amber-400" : ""
               }`}
             />
           </Button>
@@ -830,20 +833,20 @@ export default function ImageViewerPage() {
               {zoom > 1 && (
                 <button
                   onClick={resetZoom}
-                  className="bg-black/60 hover:bg-black/80 text-white text-xs px-2 h-7 rounded"
+                  className="bg-slate-900/80 border border-border hover:bg-slate-700/80 text-slate-100 text-xs px-2 h-7 rounded"
                 >
                   {Math.round(zoom * 100)}% — Reset
                 </button>
               )}
               <button
                 onClick={() => setZoom((z) => { const nz = z / 1.25; if (nz <= 1.05) { setPan({ x: 0, y: 0 }); return 1; } return nz; })}
-                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                className="bg-slate-900/80 border border-border hover:bg-slate-700/80 text-slate-100 text-xs w-7 h-7 rounded flex items-center justify-center"
                 title="Zoom out"
                 disabled={zoom <= 1}
               >−</button>
               <button
                 onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
-                className="bg-black/60 hover:bg-black/80 text-white text-xs w-7 h-7 rounded flex items-center justify-center"
+                className="bg-slate-900/80 border border-border hover:bg-slate-700/80 text-slate-100 text-xs w-7 h-7 rounded flex items-center justify-center"
                 title="Zoom in"
               >+</button>
             </div>
@@ -1004,9 +1007,11 @@ export default function ImageViewerPage() {
 
         {/* Metadata Panel */}
         {detailsPanelOpen && <div className="space-y-6">
-          <Card>
+          <Card className="bg-slate-800/50">
             <CardHeader>
-              <CardTitle className="text-lg">Details</CardTitle>
+              <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100">
+                Details
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {isEditing ? (
@@ -1320,8 +1325,8 @@ export default function ImageViewerPage() {
                   {plateSolveInfo && (
                     <div className="pt-4 border-t">
                       <div className="flex items-center gap-2 mb-3">
-                        <Sparkles className="w-4 h-4 text-teal-500" />
-                        <Label className="text-teal-500">Plate Solve Results</Label>
+                        <Sparkles className="w-4 h-4 text-teal-400" />
+                        <Label className="text-teal-400">Plate Solve Results</Label>
                       </div>
                       <div className="space-y-3 text-sm">
                         {/* RA in HMS and decimal */}
@@ -1347,23 +1352,23 @@ export default function ImageViewerPage() {
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <span className="text-muted-foreground">Scale:</span>
-                            <span className="ml-2">{plateSolveInfo.pixel_scale?.toFixed(2)}″/px</span>
+                            <span className="ml-2 font-mono text-xs">{plateSolveInfo.pixel_scale?.toFixed(2)}″/px</span>
                           </div>
                           <div>
                             <span className="text-muted-foreground">Rotation:</span>
-                            <span className="ml-2">{plateSolveInfo.rotation?.toFixed(1)}°</span>
+                            <span className="ml-2 font-mono text-xs">{plateSolveInfo.rotation?.toFixed(1)}°</span>
                           </div>
                         </div>
                         <div>
                           <span className="text-muted-foreground">FOV:</span>
-                          <span className="ml-2">
+                          <span className="ml-2 font-mono text-xs">
                             {(plateSolveInfo.width_deg * 60)?.toFixed(1)}′ × {(plateSolveInfo.height_deg * 60)?.toFixed(1)}′
                           </span>
                         </div>
                         {calculatedFocalLength && (
                           <div>
                             <span className="text-muted-foreground">Est. Focal Length:</span>
-                            <span className="ml-2">{calculatedFocalLength.toFixed(0)}mm</span>
+                            <span className="ml-2 font-mono text-xs">{calculatedFocalLength.toFixed(0)}mm</span>
                             <span className="text-xs text-muted-foreground ml-1">(from pixel scale)</span>
                           </div>
                         )}

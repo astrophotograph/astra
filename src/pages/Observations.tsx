@@ -8,14 +8,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -375,18 +367,18 @@ export default function ObservationsPage() {
   };
 
   return (
-    <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
+    <div className="space-y-0">
       {/* Full-screen Scanning Overlay - z-[100] to appear above Dialog (z-50) */}
       {isScanning && (
         <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center">
           <div className="bg-slate-800 rounded-lg p-8 max-w-md w-full mx-4 shadow-2xl border border-slate-700">
-            <h2 className="text-xl font-semibold text-white mb-4 text-center">
+            <h2 className="text-xl font-semibold text-slate-100 mb-4 text-center">
               {isCancelling ? "Cancelling..." : "Importing Images..."}
             </h2>
 
             {/* Progress bar */}
             <div className="mb-4">
-              <div className="flex justify-between text-sm text-gray-400 mb-2">
+              <div className="flex justify-between text-sm text-slate-400 mb-2">
                 <span>
                   {scanProgress
                     ? scanProgress.total > 0
@@ -409,7 +401,7 @@ export default function ObservationsPage() {
                 ) : (
                   <div
                     className={`h-full rounded-full transition-all duration-300 ease-out ${
-                      isCancelling ? "bg-yellow-500" : "bg-teal-500"
+                      isCancelling ? "bg-amber-500" : "bg-teal-500"
                     }`}
                     style={{ width: `${scanProgress?.percent ?? 0}%` }}
                   />
@@ -419,20 +411,20 @@ export default function ObservationsPage() {
 
             {/* Current file / status message */}
             {scanProgress && (
-              <p className="text-gray-400 text-sm text-center truncate">
+              <p className="text-slate-400 text-sm text-center truncate">
                 {scanProgress.currentFile}
               </p>
             )}
 
             {/* Skipped count */}
             {scanProgress?.skipped !== undefined && scanProgress.skipped > 0 && (
-              <p className="text-yellow-400 text-sm text-center mt-2">
+              <p className="text-amber-400 text-sm text-center mt-2">
                 {scanProgress.skipped} duplicate{scanProgress.skipped !== 1 ? "s" : ""} skipped
               </p>
             )}
 
             {!scanProgress && (
-              <p className="text-gray-400 text-sm text-center">
+              <p className="text-slate-400 text-sm text-center">
                 Initializing...
               </p>
             )}
@@ -443,7 +435,7 @@ export default function ObservationsPage() {
                 variant="outline"
                 onClick={handleCancelScan}
                 disabled={isCancelling}
-                className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+                className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
               >
                 {isCancelling ? "Cancelling..." : "Cancel Import"}
               </Button>
@@ -452,38 +444,22 @@ export default function ObservationsPage() {
         </div>
       )}
 
-      {/* Breadcrumb */}
-      <Breadcrumb className="mb-6">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link to="/" className="text-gray-400 hover:text-white">
-                Home
-              </Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator className="text-gray-600" />
-          <BreadcrumbItem>
-            <span className="text-gray-400">Default User</span>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator className="text-gray-600" />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="text-gray-300">Astro Log</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
       {/* Header */}
-      <div className="flex justify-between items-start mb-4">
-        <h1 className="text-3xl font-bold text-white">
-          {showArchived ? "Archived Observations" : "Observation Log"}
-        </h1>
+      <div className="flex flex-wrap justify-between items-end gap-4 mb-4">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Session history
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
+            {showArchived ? "Archived Observations" : "Observation Log"}
+          </h1>
+        </div>
         <div className="flex gap-2">
           {/* Needs Plate Solving Filter */}
           <Button
             variant={showNeedsPlateSolving ? "default" : "outline"}
             onClick={() => setShowNeedsPlateSolving(!showNeedsPlateSolving)}
-            className={showNeedsPlateSolving ? "" : "bg-transparent border-gray-600 text-white hover:bg-gray-800"}
+            className={showNeedsPlateSolving ? "" : "bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"}
           >
             <Compass className="w-4 h-4 mr-2" />
             {showNeedsPlateSolving ? "Show All" : "Needs Solving"}
@@ -493,7 +469,7 @@ export default function ObservationsPage() {
             <Button
               variant="outline"
               onClick={() => setSkyMapOpen(true)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               <Map className="w-4 h-4 mr-2" />
               Sky Coverage
@@ -504,7 +480,7 @@ export default function ObservationsPage() {
             <Button
               variant={showArchived ? "default" : "outline"}
               onClick={() => setShowArchived(!showArchived)}
-              className={showArchived ? "" : "bg-transparent border-gray-600 text-white hover:bg-gray-800"}
+              className={showArchived ? "" : "bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"}
             >
               {showArchived ? "Show Active" : `Archived (${archivedCount})`}
             </Button>
@@ -518,15 +494,15 @@ export default function ObservationsPage() {
             }}
           >
             <DialogTrigger asChild>
-              <Button variant="outline" className="bg-transparent border-gray-600 text-white hover:bg-gray-800">
+              <Button variant="outline" className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40">
                 <FolderSearch className="w-4 h-4 mr-2" />
                 Scan Directory
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-slate-800 border-slate-700 text-white sm:max-w-[525px]">
+            <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 sm:max-w-[525px]">
               <DialogHeader>
                 <DialogTitle>Bulk Scan Directory</DialogTitle>
-                <DialogDescription className="text-gray-400">
+                <DialogDescription className="text-slate-400">
                   Scan a directory for stacked astronomy images and import them into collections.
                 </DialogDescription>
               </DialogHeader>
@@ -563,7 +539,7 @@ export default function ObservationsPage() {
                     placeholder="galaxy, deep-sky, widefield"
                     className="bg-slate-700 border-slate-600"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-slate-500">
                     Optional. Tags will be applied to all imported images.
                   </p>
                 </div>
@@ -582,7 +558,7 @@ export default function ObservationsPage() {
 
                 {/* Max Files Limit */}
                 <div className="space-y-2">
-                  <Label htmlFor="max-files" className="text-sm text-gray-300">
+                  <Label htmlFor="max-files" className="text-sm text-slate-300">
                     Maximum Files (optional)
                   </Label>
                   <Input
@@ -597,7 +573,7 @@ export default function ObservationsPage() {
                     placeholder="No limit"
                     className="bg-slate-700 border-slate-600 w-32"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-slate-500">
                     Limit imports for large directories (e.g., 100 images at a time)
                   </p>
                 </div>
@@ -606,8 +582,8 @@ export default function ObservationsPage() {
                 {isScanning && (
                   <div className="bg-slate-900 rounded-lg p-6 text-center">
                     <Loader2 className="w-10 h-10 mx-auto mb-3 animate-spin text-teal-400" />
-                    <h4 className="font-medium text-white mb-2">Importing Images...</h4>
-                    <p className="text-gray-400 text-sm">
+                    <h4 className="font-medium text-slate-100 mb-2">Importing Images...</h4>
+                    <p className="text-slate-400 text-sm">
                       This may take a while depending on the number of images.
                       <br />
                       Generating thumbnails and extracting FITS metadata.
@@ -618,25 +594,25 @@ export default function ObservationsPage() {
                 {/* Preview Results */}
                 {scanPreview && !scanResult && !isScanning && (
                   <div className="bg-slate-900 rounded-lg p-4 space-y-2">
-                    <h4 className="font-medium text-white">Preview Results</h4>
+                    <h4 className="font-medium text-slate-100">Preview Results</h4>
                     <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-400">Total images found:</span>
-                      <span className="text-white">{scanPreview.total_images}</span>
-                      <span className="text-gray-400">Stacked images:</span>
-                      <span className="text-white">{scanPreview.stacked_images}</span>
-                      <span className="text-gray-400">Raw subframes:</span>
-                      <span className="text-white">{scanPreview.raw_subframes}</span>
-                      <span className="text-gray-400">With FITS data:</span>
-                      <span className="text-white">{scanPreview.with_fits}</span>
-                      <span className="text-gray-400">With JPEG:</span>
-                      <span className="text-white">{scanPreview.with_jpeg}</span>
+                      <span className="text-slate-400">Total images found:</span>
+                      <span className="text-slate-100">{scanPreview.total_images}</span>
+                      <span className="text-slate-400">Stacked images:</span>
+                      <span className="text-slate-100">{scanPreview.stacked_images}</span>
+                      <span className="text-slate-400">Raw subframes:</span>
+                      <span className="text-slate-100">{scanPreview.raw_subframes}</span>
+                      <span className="text-slate-400">With FITS data:</span>
+                      <span className="text-slate-100">{scanPreview.with_fits}</span>
+                      <span className="text-slate-400">With JPEG:</span>
+                      <span className="text-slate-100">{scanPreview.with_jpeg}</span>
                     </div>
                     {scanPreview.sample_files.length > 0 && (
                       <div className="mt-3">
-                        <p className="text-gray-400 text-xs mb-1">Sample files:</p>
+                        <p className="text-slate-400 text-xs mb-1">Sample files:</p>
                         <div className="max-h-24 overflow-y-auto">
                           {scanPreview.sample_files.slice(0, 5).map((file, idx) => (
-                            <p key={idx} className="text-xs text-gray-300 truncate">
+                            <p key={idx} className="text-xs text-slate-300 truncate">
                               {file.name}
                               {file.is_stacked && (
                                 <span className="text-teal-400 ml-1">(stacked)</span>
@@ -652,14 +628,14 @@ export default function ObservationsPage() {
                 {/* Scan Results */}
                 {scanResult && (
                   <div className="bg-slate-900 rounded-lg p-4 space-y-2">
-                    <h4 className="font-medium text-white">Import Complete</h4>
+                    <h4 className="font-medium text-slate-100">Import Complete</h4>
                     <div className="grid grid-cols-2 gap-2 text-sm">
-                      <span className="text-gray-400">Images imported:</span>
-                      <span className="text-green-400">{scanResult.images_imported}</span>
-                      <span className="text-gray-400">Collections created:</span>
-                      <span className="text-green-400">{scanResult.collections_created}</span>
-                      <span className="text-gray-400">Images skipped:</span>
-                      <span className="text-yellow-400">{scanResult.images_skipped}</span>
+                      <span className="text-slate-400">Images imported:</span>
+                      <span className="text-teal-400">{scanResult.images_imported}</span>
+                      <span className="text-slate-400">Collections created:</span>
+                      <span className="text-teal-400">{scanResult.collections_created}</span>
+                      <span className="text-slate-400">Images skipped:</span>
+                      <span className="text-amber-400">{scanResult.images_skipped}</span>
                     </div>
                     {scanResult.errors.length > 0 && (
                       <div className="mt-3">
@@ -682,7 +658,7 @@ export default function ObservationsPage() {
                 <Button
                   variant="outline"
                   onClick={() => setIsScanDialogOpen(false)}
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                 >
                   {scanResult ? "Close" : "Cancel"}
                 </Button>
@@ -725,15 +701,15 @@ export default function ObservationsPage() {
           {/* New Collection Dialog */}
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button variant="outline" className="bg-transparent border-gray-600 text-white hover:bg-gray-800">
+            <Button variant="outline" className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40">
               <Plus className="w-4 h-4 mr-2" />
               New Collection
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-slate-800 border-slate-700 text-white sm:max-w-[425px]">
+          <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 sm:max-w-[425px]">
             <DialogHeader>
               <DialogTitle>Create New Collection</DialogTitle>
-              <DialogDescription className="text-gray-400">
+              <DialogDescription className="text-slate-400">
                 Create a new collection to organize your astronomy observations and photos.
               </DialogDescription>
             </DialogHeader>
@@ -757,7 +733,7 @@ export default function ObservationsPage() {
                   placeholder="Add a description of your observation session..."
                   className="bg-slate-700 border-slate-600 resize-none"
                 />
-                <p className="text-xs text-gray-500">Optional. Supports markdown formatting.</p>
+                <p className="text-xs text-slate-500">Optional. Supports markdown formatting.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="session_date">Session Date</Label>
@@ -768,7 +744,7 @@ export default function ObservationsPage() {
                   onChange={(e) => setNewCollectionSessionDate(e.target.value)}
                   className="bg-slate-700 border-slate-600"
                 />
-                <p className="text-xs text-gray-500">Date of your observation session</p>
+                <p className="text-xs text-slate-500">Date of your observation session</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="template">Collection Type</Label>
@@ -784,7 +760,7 @@ export default function ObservationsPage() {
                     <SelectItem value="ngc">NGC Catalog</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-gray-500">Choose the type of collection to organize your content</p>
+                <p className="text-xs text-slate-500">Choose the type of collection to organize your content</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="visibility">Visibility</Label>
@@ -797,7 +773,7 @@ export default function ObservationsPage() {
                     <SelectItem value="public">Public</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-gray-500">Private collections are only visible to you</p>
+                <p className="text-xs text-slate-500">Private collections are only visible to you</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tags">Tags</Label>
@@ -808,14 +784,14 @@ export default function ObservationsPage() {
                   placeholder="galaxy, deep-sky, widefield"
                   className="bg-slate-700 border-slate-600"
                 />
-                <p className="text-xs text-gray-500">Optional. Enter comma-separated tags to categorize your collection.</p>
+                <p className="text-xs text-slate-500">Optional. Enter comma-separated tags to categorize your collection.</p>
               </div>
             </div>
             <DialogFooter>
               <Button
                 variant="outline"
                 onClick={() => setIsDialogOpen(false)}
-                className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+                className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
               >
                 Cancel
               </Button>
@@ -832,7 +808,7 @@ export default function ObservationsPage() {
       </div>
 
       {/* Description */}
-      <p className="text-gray-300 mb-4 max-w-4xl">
+      <p className="text-slate-300 mb-4 max-w-4xl">
         Daily observation logs. Photos and some commentary. Most of these include just the raw,
         out-of-scope photos without any formal processing. At times, it may include a combination
         of out-of-scope and post-processed photos. But they will always be clearly marked.
@@ -842,19 +818,19 @@ export default function ObservationsPage() {
       {!isLoadingCollectionData && totalStats.imageCount > 0 && (
         <div className="flex flex-wrap gap-4 mb-6 text-sm">
           <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
-            <span className="text-gray-400">Total Images:</span>
-            <span className="text-white font-medium">{totalStats.imageCount}</span>
+            <span className="text-slate-400">Total Images:</span>
+            <span className="text-slate-100 font-medium">{totalStats.imageCount}</span>
           </div>
           <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
             <Clock className="w-4 h-4 text-teal-400" />
-            <span className="text-gray-400">Total Imaging Time:</span>
-            <span className="text-white font-medium">{formatDuration(totalStats.totalExposureSeconds)}</span>
+            <span className="text-slate-400">Total Imaging Time:</span>
+            <span className="text-slate-100 font-medium">{formatDuration(totalStats.totalExposureSeconds)}</span>
           </div>
           {totalStats.plateSolvedCount > 0 && (
             <div className="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg">
               <Compass className="w-4 h-4 text-teal-400" />
-              <span className="text-gray-400">Plate Solved:</span>
-              <span className="text-white font-medium">{totalStats.plateSolvedCount}</span>
+              <span className="text-slate-400">Plate Solved:</span>
+              <span className="text-slate-100 font-medium">{totalStats.plateSolvedCount}</span>
             </div>
           )}
         </div>
@@ -864,15 +840,15 @@ export default function ObservationsPage() {
       {allTags.length > 0 && (
         <div className="mb-8">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-gray-400 text-sm mr-2">Filter by tag:</span>
+            <span className="text-slate-400 text-sm mr-2">Filter by tag:</span>
             {allTags.map((tag) => (
               <button
                 key={tag}
                 onClick={() => toggleTag(tag)}
                 className={`px-3 py-1 rounded-full text-sm transition-colors ${
                   selectedTags.includes(tag)
-                    ? "bg-teal-600 text-white"
-                    : "bg-slate-700 text-gray-300 hover:bg-slate-600"
+                    ? "bg-teal-600 text-slate-100"
+                    : "bg-slate-700 text-slate-300 hover:bg-slate-600"
                 }`}
               >
                 {tag}
@@ -881,14 +857,14 @@ export default function ObservationsPage() {
             {selectedTags.length > 0 && (
               <button
                 onClick={clearTagFilters}
-                className="px-3 py-1 rounded-full text-sm bg-slate-800 text-gray-400 hover:bg-slate-700 hover:text-white transition-colors"
+                className="px-3 py-1 rounded-full text-sm bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-100 transition-colors"
               >
                 Clear filters
               </button>
             )}
           </div>
           {selectedTags.length > 0 && (
-            <p className="text-gray-500 text-sm mt-2">
+            <p className="text-slate-500 text-sm mt-2">
               Showing {filteredCollections.length} collection{filteredCollections.length !== 1 ? "s" : ""} with tag{selectedTags.length > 1 ? "s" : ""}: {selectedTags.join(", ")}
             </p>
           )}
@@ -900,7 +876,7 @@ export default function ObservationsPage() {
         <div className="space-y-8">
           {/* Skeleton for monthly group */}
           <div>
-            <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
+            <div className="sticky top-14 z-10 bg-slate-900/95 backdrop-blur border-b border-border py-2.5 mb-4">
               <Skeleton className="h-6 w-40" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -912,9 +888,9 @@ export default function ObservationsPage() {
         </div>
       ) : observationCollections.length === 0 ? (
         <div className="text-center py-12 rounded-lg bg-slate-800/50">
-          <FolderOpen className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-          <p className="text-gray-400 mb-2">No observation logs yet</p>
-          <p className="text-sm text-gray-500">
+          <FolderOpen className="w-12 h-12 mx-auto mb-4 text-slate-500" />
+          <p className="text-slate-400 mb-2">No observation logs yet</p>
+          <p className="text-sm text-slate-500">
             Create a new observation or scan a directory to import images.
           </p>
         </div>
@@ -923,8 +899,8 @@ export default function ObservationsPage() {
           {/* Favorites section - shown at the top */}
           {favoriteCollections.length > 0 && (
             <div>
-              <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
-                <h2 className="text-lg font-semibold text-yellow-400 flex items-center gap-2">
+              <div className="sticky top-14 z-10 bg-slate-900/95 backdrop-blur border-b border-border py-2.5 mb-4">
+                <h2 className="font-serif text-xl font-light tracking-wide text-amber-300 flex items-center gap-2">
                   <svg className="w-5 h-5 fill-current" viewBox="0 0 20 20">
                     <path d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z" />
                   </svg>
@@ -951,8 +927,8 @@ export default function ObservationsPage() {
           {Object.entries(groupedCollections).map(([monthYear, monthCollections]) => (
             <div key={monthYear}>
               {/* Month header - sticky below the main header (h-14 = 3.5rem) */}
-              <div className="sticky top-14 z-10 bg-slate-800 py-3 mb-4 -mx-4 md:-mx-8 px-4 md:px-8 shadow-md">
-                <h2 className="text-lg font-semibold text-white">{monthYear}</h2>
+              <div className="sticky top-14 z-10 bg-slate-900/95 backdrop-blur border-b border-border py-2.5 mb-4">
+                <h2 className="font-serif text-xl font-light tracking-wide text-slate-100">{monthYear}</h2>
               </div>
 
               {/* Collection cards grid */}
@@ -1109,7 +1085,7 @@ function CollectionCard({
 
   return (
     <div>
-      <div className="overflow-hidden rounded-lg transition-transform hover:scale-[1.02] cursor-pointer relative">
+      <div className="overflow-hidden rounded-xl border border-border transition-all hover:scale-[1.01] hover:border-indigo-500/40 cursor-pointer relative">
         {/* Clickable area - the entire card except the menu */}
         <Link to={`/collections/${collection.id}`} className="block">
           {/* Image area */}
@@ -1125,7 +1101,7 @@ function CollectionCard({
 
             {/* Favorite indicator */}
             {collection.favorite && (
-              <div className="absolute top-2 right-12 text-yellow-400">
+              <div className="absolute top-2 right-12 text-amber-400">
                 <svg className="w-5 h-5 fill-current" viewBox="0 0 20 20">
                   <path d="M10 15l-5.878 3.09 1.123-6.545L.489 6.91l6.572-.955L10 0l2.939 5.955 6.572.955-4.756 4.635 1.123 6.545z" />
                 </svg>
@@ -1134,13 +1110,13 @@ function CollectionCard({
 
             {/* Collection title overlay */}
             <div className="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/60 to-transparent">
-              <h3 className="font-semibold text-white pr-8">{collection.name}</h3>
+              <h3 className="font-semibold text-slate-100 pr-8">{collection.name}</h3>
             </div>
 
             {/* Empty collection placeholder */}
             {imageCount === 0 && (
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-gray-400 text-lg">Empty collection</span>
+                <span className="text-slate-400 text-lg">Empty collection</span>
               </div>
             )}
 
@@ -1148,12 +1124,12 @@ function CollectionCard({
             <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/60 to-transparent flex items-end justify-between">
               {/* Photo count, exposure time, and plate-solved count */}
               <div className="flex gap-2 flex-wrap">
-                <span className="bg-slate-800/90 text-white text-sm px-2 py-1 rounded">
+                <span className="bg-slate-800/90 text-slate-100 text-sm px-2 py-1 rounded">
                   {imageCount} photo{imageCount !== 1 ? "s" : ""}
                 </span>
                 {totalExposure > 0 && (
                   <span
-                    className="bg-slate-800/90 text-white text-sm px-2 py-1 rounded flex items-center gap-1"
+                    className="bg-slate-800/90 text-slate-100 text-sm px-2 py-1 rounded flex items-center gap-1"
                     title="Total imaging time"
                   >
                     <Clock className="w-3.5 h-3.5 text-teal-400" />
@@ -1162,7 +1138,7 @@ function CollectionCard({
                 )}
                 {plateSolvedCount > 0 && (
                   <span
-                    className="bg-teal-600/90 text-white text-sm px-2 py-1 rounded flex items-center gap-1"
+                    className="bg-teal-600/90 text-slate-100 text-sm px-2 py-1 rounded flex items-center gap-1"
                     title={`${plateSolvedCount} plate solved`}
                   >
                     <Compass className="w-3.5 h-3.5" />
@@ -1177,7 +1153,7 @@ function CollectionCard({
                   {tags.slice(0, 2).map((tag) => (
                     <span
                       key={tag}
-                      className="bg-teal-600/80 text-white text-xs px-2 py-1 rounded"
+                      className="bg-teal-600/80 text-slate-100 text-xs px-2 py-1 rounded"
                     >
                       {tag}
                     </span>
@@ -1193,14 +1169,14 @@ function CollectionCard({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="p-1 rounded hover:bg-white/20 transition-colors bg-black/30">
-                <MoreHorizontal className="h-5 w-5 text-white" />
+                <MoreHorizontal className="h-5 w-5 text-slate-100" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700">
-              <DropdownMenuItem onClick={handleToggleFavorite} className="text-white hover:bg-slate-700">
+              <DropdownMenuItem onClick={handleToggleFavorite} className="text-slate-100 hover:bg-slate-700">
                 {collection.favorite ? "Remove from Favorites" : "Add to Favorites"}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleToggleArchived} className="text-white hover:bg-slate-700">
+              <DropdownMenuItem onClick={handleToggleArchived} className="text-slate-100 hover:bg-slate-700">
                 {collection.archived ? "Unarchive" : "Archive"}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDelete} className="text-red-400 hover:bg-slate-700">
@@ -1211,7 +1187,7 @@ function CollectionCard({
         </div>
       </div>
       {/* Date below the card */}
-      <p className="text-center text-gray-400 text-sm mt-2">{formattedDate}</p>
+      <p className="text-center text-slate-400 text-sm mt-2">{formattedDate}</p>
     </div>
   );
 }

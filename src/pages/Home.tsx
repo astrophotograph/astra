@@ -40,6 +40,9 @@ export default function Home() {
   return (
     <div className="min-h-full py-16 px-4">
       <div className="mb-12 text-center">
+        <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400 mb-2">
+          Astra
+        </p>
         <h1 className="font-serif text-5xl font-light tracking-wide text-slate-100">
           Welcome to Your Observatory
         </h1>
@@ -48,7 +51,7 @@ export default function Home() {
       <div className="mx-auto grid max-w-6xl gap-6 px-4 sm:grid-cols-2 lg:grid-cols-4">
         {navItems.map((item) => (
           <Link key={item.href} to={item.href} className="group">
-            <div className="overflow-hidden rounded-xl transition-transform hover:scale-105">
+            <div className="overflow-hidden rounded-xl border border-border transition-all hover:scale-[1.03] hover:border-indigo-500/40">
               {/* Gradient icon section */}
               <div
                 className={`flex h-40 items-center justify-center bg-gradient-to-br ${item.gradient}`}
@@ -57,10 +60,10 @@ export default function Home() {
               </div>
               {/* Dark content section */}
               <div className="bg-slate-800/90 p-5">
-                <h2 className="mb-2 text-lg font-semibold text-white">
+                <h2 className="mb-2 font-serif text-xl font-light tracking-wide text-slate-100">
                   {item.title}
                 </h2>
-                <p className="text-sm leading-relaxed text-gray-400">
+                <p className="text-sm leading-relaxed text-slate-400">
                   {item.description}
                 </p>
               </div>

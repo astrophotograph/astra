@@ -5,14 +5,6 @@
 import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -63,36 +55,24 @@ export default function TargetsPage() {
   };
 
   return (
-    <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
-      {/* Breadcrumb */}
-      <Breadcrumb className="mb-6">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link to="/" className="text-gray-400 hover:text-white">
-                Home
-              </Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator className="text-gray-600" />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="text-gray-300">Targets</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
+    <div className="space-y-0">
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-white">Target Browser</h1>
-          <p className="text-gray-400 mt-1">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Objects you've imaged
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
+            Target Browser
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
             Browse all {totalTargets} unique targets across {totalImages} images
           </p>
         </div>
 
         {/* Search */}
         <div className="relative max-w-sm w-full">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
             placeholder="Search targets... (e.g., M42, NGC 7000)"
             value={searchQuery}
@@ -104,7 +84,7 @@ export default function TargetsPage() {
 
       {/* Search results info */}
       {searchQuery && (
-        <p className="text-gray-400 text-sm mb-4">
+        <p className="text-slate-400 text-sm mb-4">
           Found {filteredTargets.length} target{filteredTargets.length !== 1 ? "s" : ""} matching "{searchQuery}"
         </p>
       )}
@@ -117,19 +97,19 @@ export default function TargetsPage() {
           ))}
         </div>
       ) : filteredTargets.length === 0 ? (
-        <div className="text-center py-12 rounded-lg bg-slate-800/50">
-          <Star className="w-12 h-12 mx-auto mb-4 text-gray-500" />
+        <div className="text-center py-12 rounded-xl border border-border bg-slate-800/50">
+          <Star className="w-12 h-12 mx-auto mb-4 text-slate-500" />
           {searchQuery ? (
             <>
-              <p className="text-gray-400 mb-2">No targets found</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-slate-400 mb-2">No targets found</p>
+              <p className="text-sm text-slate-500">
                 Try a different search term, like "M31" or "Orion"
               </p>
             </>
           ) : (
             <>
-              <p className="text-gray-400 mb-2">No targets yet</p>
-              <p className="text-sm text-gray-500">
+              <p className="text-slate-400 mb-2">No targets yet</p>
+              <p className="text-sm text-slate-500">
                 Import some images to see targets here
               </p>
             </>
@@ -151,10 +131,10 @@ export default function TargetsPage() {
       <Dialog open={!!selectedTarget} onOpenChange={(open) => !open && handleCloseDialog()}>
         <DialogContent className="max-w-4xl max-h-[85vh] bg-slate-800 border-slate-700">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-white">
-              <Star className="w-5 h-5 text-yellow-400" />
+            <DialogTitle className="flex items-center gap-2 text-slate-100">
+              <Star className="w-5 h-5 text-amber-400" />
               {selectedTarget}
-              <span className="text-gray-400 font-normal text-base ml-2">
+              <span className="text-slate-400 font-normal text-base ml-2">
                 ({targetImages.length} image{targetImages.length !== 1 ? "s" : ""})
               </span>
             </DialogTitle>
@@ -168,8 +148,8 @@ export default function TargetsPage() {
             </div>
           ) : targetImages.length === 0 ? (
             <div className="text-center py-8">
-              <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-              <p className="text-gray-400">No images found for this target</p>
+              <ImageIcon className="w-12 h-12 mx-auto mb-4 text-slate-500" />
+              <p className="text-slate-400">No images found for this target</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 overflow-y-auto max-h-[60vh] p-4">
@@ -186,7 +166,7 @@ export default function TargetsPage() {
 
 function TargetCardSkeleton() {
   return (
-    <div className="rounded-lg overflow-hidden bg-slate-800">
+    <div className="rounded-xl border border-border overflow-hidden bg-slate-800">
       <Skeleton className="aspect-square w-full" />
       <div className="p-3">
         <Skeleton className="h-5 w-3/4 mb-2" />
@@ -206,7 +186,7 @@ function TargetCard({
   return (
     <button
       onClick={onClick}
-      className="group rounded-lg overflow-hidden bg-slate-800 hover:bg-slate-700 transition-colors text-left"
+      className="group rounded-xl border border-border overflow-hidden bg-slate-800 hover:bg-slate-700/60 transition-colors text-left"
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-slate-700 relative overflow-hidden">
@@ -218,12 +198,12 @@ function TargetCard({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <Star className="w-8 h-8 text-gray-600" />
+            <Star className="w-8 h-8 text-slate-600" />
           </div>
         )}
 
         {/* Image count badge */}
-        <div className="absolute bottom-2 right-2 bg-black/70 text-white text-xs px-2 py-1 rounded-full">
+        <div className="absolute bottom-2 right-2 bg-black/70 text-slate-100 text-xs px-2 py-1 rounded-full">
           {target.imageCount}
         </div>
       </div>
@@ -231,12 +211,12 @@ function TargetCard({
       {/* Target name */}
       <div className="p-3 flex items-center justify-between">
         <div className="min-w-0 flex-1">
-          <h3 className="font-medium text-white truncate">{target.name}</h3>
-          <p className="text-xs text-gray-400">
+          <h3 className="font-medium text-slate-100 truncate">{target.name}</h3>
+          <p className="text-xs text-slate-400">
             {target.imageCount} image{target.imageCount !== 1 ? "s" : ""}
           </p>
         </div>
-        <ChevronRight className="w-4 h-4 text-gray-500 group-hover:text-white transition-colors flex-shrink-0" />
+        <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-slate-100 transition-colors flex-shrink-0" />
       </div>
     </button>
   );
@@ -269,7 +249,7 @@ function ImageCard({ image }: { image: Image }) {
   return (
     <Link
       to={`/i/${image.id}`}
-      className="group rounded-lg overflow-hidden bg-slate-700 hover:ring-2 hover:ring-teal-500 transition-all"
+      className="group rounded-xl border border-border overflow-hidden bg-slate-700 hover:ring-2 hover:ring-indigo-500/50 transition-all"
     >
       {/* Thumbnail */}
       <div className="aspect-square bg-slate-600 relative overflow-hidden">
@@ -281,14 +261,14 @@ function ImageCard({ image }: { image: Image }) {
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <ImageIcon className="w-8 h-8 text-gray-500" />
+            <ImageIcon className="w-8 h-8 text-slate-500" />
           </div>
         )}
       </div>
 
       {/* Image info */}
       <div className="p-2">
-        <p className="text-xs text-gray-400 truncate">{observationDate}</p>
+        <p className="text-xs text-slate-400 truncate">{observationDate}</p>
       </div>
     </Link>
   );

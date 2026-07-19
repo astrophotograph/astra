@@ -187,7 +187,7 @@ export default function CollectFilesDialog({
                   ) : (
                     <div
                       className={`h-full rounded-full transition-all duration-300 ease-out ${
-                        isCancelling ? "bg-yellow-500" : "bg-teal-500"
+                        isCancelling ? "bg-amber-500" : "bg-teal-500"
                       }`}
                       style={{ width: `${progress?.percent ?? 0}%` }}
                     />

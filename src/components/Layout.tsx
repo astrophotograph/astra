@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
-import { listen } from "@/lib/tauri/commands";
+import { isTauri, listen } from "@/lib/tauri/commands";
 import { Loader2, MapPin, Search } from "lucide-react";
 import {
   DropdownMenu,
@@ -11,6 +11,18 @@ import {
 import { Button } from "@/components/ui/button";
 import { useLocations } from "@/contexts/LocationContext";
 import SearchDialog from "./SearchDialog";
+import { cn } from "@/lib/utils";
+
+const NAV_LINKS: Array<{ to: string; label: string; also?: string[] }> = [
+  { to: "/", label: "Home" },
+  { to: "/observations", label: "Observations" },
+  { to: "/collections", label: "Collections" },
+  { to: "/images", label: "Images", also: ["/i/"] },
+  { to: "/targets", label: "Targets" },
+  { to: "/todo", label: "Todo" },
+  { to: "/plan", label: "Planning" },
+  { to: "/settings", label: "Settings" },
+];
 
 export default function Layout() {
   const location = useLocation();
@@ -82,61 +94,34 @@ export default function Layout() {
               Astra
             </span>
           </Link>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Home
-            </Link>
-            <Link
-              to="/observations"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Observations
-            </Link>
-            <Link
-              to="/collections"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Collections
-            </Link>
-            <Link
-              to="/images"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Images
-            </Link>
-            <Link
-              to="/targets"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Targets
-            </Link>
-            <Link
-              to="/todo"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Todo
-            </Link>
-            <Link
-              to="/plan"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Planning
-            </Link>
-            <Link
-              to="/settings"
-              className="text-sm text-gray-300 hover:text-white transition-colors"
-            >
-              Settings
-            </Link>
+          <div className="flex items-center gap-1">
+            {NAV_LINKS.filter((link) => link.to !== "/" || isTauri()).map((link) => {
+              const active =
+                link.to === "/"
+                  ? location.pathname === "/"
+                  : location.pathname.startsWith(link.to) ||
+                    (link.also?.some((p) => location.pathname.startsWith(p)) ?? false);
+              return (
+                <Link
+                  key={link.to}
+                  to={link.to}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-sm transition-colors",
+                    active
+                      ? "bg-indigo-500/15 text-slate-100"
+                      : "text-slate-400 hover:text-slate-100",
+                  )}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
 
             {/* Location Switcher - only show if multiple locations */}
             {locations.length > 1 && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="text-gray-300 hover:text-white gap-2">
+                  <Button variant="ghost" size="sm" className="ml-2 text-slate-300 hover:text-slate-100 gap-2">
                     <MapPin className="h-4 w-4" />
                     <span className="max-w-[120px] truncate">
                       {activeLocation?.name || "No Location"}
@@ -160,7 +145,7 @@ export default function Layout() {
 
             {/* Single location indicator */}
             {locations.length === 1 && activeLocation && (
-              <div className="flex items-center gap-1 text-sm text-gray-400">
+              <div className="ml-2 flex items-center gap-1 text-sm text-slate-400">
                 <MapPin className="h-3 w-3" />
                 <span className="max-w-[120px] truncate">{activeLocation.name}</span>
               </div>
@@ -170,12 +155,12 @@ export default function Layout() {
               onClick={() => setSearchOpen(true)}
               className="relative"
             >
-              <div className="flex items-center gap-2 rounded-md bg-slate-800/80 px-3 py-1.5 text-sm text-gray-400 hover:bg-slate-700/80 transition-colors cursor-pointer">
+              <div className="ml-2 flex items-center gap-2 rounded-md border border-border bg-slate-800/80 px-3 py-1.5 text-sm text-slate-400 hover:bg-slate-700/60 transition-colors cursor-pointer">
                 <Search className="h-4 w-4" />
                 <span>Search...</span>
                 <div className="flex items-center gap-0.5 ml-4">
-                  <kbd className="rounded bg-slate-700 px-1.5 py-0.5 text-xs">⌘</kbd>
-                  <kbd className="rounded bg-slate-700 px-1.5 py-0.5 text-xs">K</kbd>
+                  <kbd className="rounded border border-border bg-slate-700 px-1.5 py-0.5 text-xs">⌘</kbd>
+                  <kbd className="rounded border border-border bg-slate-700 px-1.5 py-0.5 text-xs">K</kbd>
                 </div>
               </div>
             </button>
@@ -196,10 +181,10 @@ export default function Layout() {
             {importProgress.step !== "done" ? (
               <Loader2 className="w-4 h-4 animate-spin text-indigo-400 shrink-0" />
             ) : (
-              <div className="w-4 h-4 rounded-full bg-emerald-500 shrink-0" />
+              <div className="w-4 h-4 rounded-full bg-teal-400 shrink-0" />
             )}
             <div className="min-w-0">
-              <p className="text-sm text-white font-medium truncate">
+              <p className="text-sm text-slate-100 font-medium truncate">
                 {importProgress.step === "scanning" && "Scanning..."}
                 {importProgress.step === "skipped" && "Source unavailable"}
                 {importProgress.step === "found" && "New image found"}

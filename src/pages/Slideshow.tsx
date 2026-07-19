@@ -271,7 +271,7 @@ export default function Slideshow() {
         <p className="text-white text-lg">No images found in selected collections.</p>
         <button
           onClick={handleExit}
-          className="px-4 py-2 bg-slate-700 text-white rounded hover:bg-slate-600"
+          className="px-4 py-2 bg-indigo-500 text-white rounded-md hover:bg-violet-500 transition-colors"
         >
           Go Back
         </button>
@@ -324,7 +324,7 @@ export default function Slideshow() {
         {/* Loading indicator while full image loads */}
         {isImageLoading && currentImage?.thumbnail && (
           <div className="absolute bottom-20 left-1/2 -translate-x-1/2">
-            <div className="px-3 py-1.5 bg-black/60 rounded-full text-xs text-gray-300">
+            <div className="px-3 py-1.5 bg-black/60 rounded-full text-xs text-slate-300">
               Loading full resolution...
             </div>
           </div>
@@ -334,19 +334,19 @@ export default function Slideshow() {
       {/* Info overlay (top-left, always visible when enabled) */}
       {theme !== "nothing" && currentImage && (
         <div className="absolute top-6 left-6">
-          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-4 py-3 max-w-sm">
-            <p className="text-white font-medium text-lg">
+          <div className="bg-black/60 backdrop-blur-sm rounded-xl border border-white/10 px-4 py-3 max-w-sm">
+            <p className="font-serif text-white text-xl font-light tracking-wide">
               {currentImage.summary || currentImage.filename}
             </p>
             {theme === "nameDetails" && (
-              <div className="mt-1 space-y-0.5 text-sm text-gray-300">
+              <div className="mt-1 space-y-0.5 text-sm text-slate-300">
                 {plateSolve && (
                   <p>
                     RA: {formatRA(plateSolve.centerRa)} / Dec: {formatDec(plateSolve.centerDec)}
                   </p>
                 )}
                 {currentImage.description && (
-                  <p className="text-gray-400">{currentImage.description}</p>
+                  <p className="text-slate-400">{currentImage.description}</p>
                 )}
               </div>
             )}
@@ -361,11 +361,11 @@ export default function Slideshow() {
             controlsVisible ? "opacity-100" : "opacity-0"
           }`}
         >
-          <div className="bg-black/60 backdrop-blur-sm rounded-lg px-4 py-2">
+          <div className="bg-black/60 backdrop-blur-sm rounded-xl border border-white/10 px-4 py-2">
             <p className="text-white font-medium">
               {currentImage.summary || currentImage.filename}
             </p>
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-slate-400">
               {new Date(currentImage.created_at).toLocaleDateString()}
             </p>
           </div>
@@ -384,7 +384,7 @@ export default function Slideshow() {
           if (match) {
             return (
               <div className="absolute top-6 right-6">
-                <span className="text-white/80 text-2xl font-light tracking-wide">
+                <span className="font-serif text-white/80 text-2xl font-light tracking-wide">
                   {match.name.replace(/\s+/g, "")}
                 </span>
               </div>

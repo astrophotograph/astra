@@ -11,14 +11,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -268,27 +260,17 @@ export default function Images() {
   const isProcessing = processingIds.size > 0;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-950 p-6 space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb>
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link to="/">Home</Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          <BreadcrumbItem>
-            <BreadcrumbPage>Images</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
-
+    <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">All Images</h1>
-          <p className="text-sm text-gray-400 mt-1">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Image library
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
+            All Images
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
             {allImages.length} total image{allImages.length !== 1 ? "s" : ""}
             {search && ` — ${filtered.length} matching`}
           </p>
@@ -314,7 +296,7 @@ export default function Images() {
 
       {/* Selection toolbar */}
       {selectMode && (
-        <div className="flex items-center gap-3 bg-slate-800/95 backdrop-blur rounded-lg px-4 py-2.5 sticky top-2 z-30">
+        <div className="flex items-center gap-3 bg-slate-800/95 backdrop-blur rounded-xl border border-border px-4 py-2.5 sticky top-16 z-30">
           <span className="text-sm text-slate-300">
             {selectedCount} selected
           </span>
@@ -376,32 +358,15 @@ export default function Images() {
             placeholder="Search images..."
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
-            className="pl-9 bg-slate-800 border-slate-600 text-white placeholder:text-slate-400"
+            className="pl-9 bg-slate-800 border-border text-slate-100 placeholder:text-slate-400"
           />
         </div>
 
         {totalPages > 1 && (
-          <div className="flex items-center gap-2 ml-auto">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-            <span className="text-sm text-slate-400">
-              Page {page + 1} of {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={page >= totalPages - 1}
-            >
-              <ChevronRight className="w-4 h-4" />
-            </Button>
-          </div>
+          <span className="ml-auto text-sm text-slate-400 tabular-nums">
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} of{" "}
+            {filtered.length}
+          </span>
         )}
       </div>
 
@@ -413,12 +378,12 @@ export default function Images() {
           ))}
         </div>
       ) : pageImages.length === 0 ? (
-        <div className="text-center py-12 bg-slate-800/50 rounded-lg">
-          <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-          <p className="text-white">
+        <div className="text-center py-12 rounded-xl border border-border bg-slate-800/50">
+          <ImageIcon className="w-12 h-12 mx-auto mb-4 text-slate-500 opacity-60" />
+          <p className="font-serif text-lg text-slate-300">
             {search ? "No images match your search" : "No images yet"}
           </p>
-          <p className="text-gray-400 text-sm mt-1">
+          <p className="text-muted-foreground text-sm mt-1">
             {search
               ? "Try a different search term"
               : isTauri()
@@ -514,7 +479,7 @@ function ImageCard({
     <Link
       to={selectMode ? "#" : `/i/${image.id}`}
       onClick={handleClick}
-      className={`group relative aspect-square rounded-lg overflow-hidden bg-slate-800 transition-all ${
+      className={`group relative aspect-square rounded-xl border border-border overflow-hidden bg-slate-800 transition-all ${
         selected
           ? "ring-2 ring-indigo-500"
           : "hover:ring-2 hover:ring-indigo-500/50"

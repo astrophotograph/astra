@@ -208,14 +208,17 @@ export default function CollectionsPage() {
   }, [collections, showArchived]);
 
   return (
-    <div className="container py-8 space-y-8">
+    <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-end gap-4">
         <div>
-          <h1 className="text-2xl font-bold">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Your library, organized
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
             {showArchived ? "Archived Collections" : "Collections"}
           </h1>
-          <p className="text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-1">
             Organize your astronomical observations
           </p>
         </div>
@@ -334,8 +337,8 @@ export default function CollectionsPage() {
           className={cn(
             "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
             selectedType === "all"
-              ? "bg-white/10 text-white border-white/20"
-              : "bg-transparent text-gray-400 border-transparent hover:text-white hover:bg-white/5"
+              ? "bg-slate-700/60 text-slate-100 border-border"
+              : "bg-transparent text-slate-400 border-transparent hover:text-slate-100 hover:bg-slate-700/40"
           )}
         >
           All ({typeCounts.all})
@@ -346,7 +349,7 @@ export default function CollectionsPage() {
             "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
             selectedType === "observation"
               ? COLLECTION_TYPE_COLORS.observation
-              : "bg-transparent text-gray-400 border-transparent hover:text-violet-300 hover:bg-violet-500/10"
+              : "bg-transparent text-slate-400 border-transparent hover:text-violet-300 hover:bg-violet-500/10"
           )}
         >
           Observations ({typeCounts.observation})
@@ -357,7 +360,7 @@ export default function CollectionsPage() {
             "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
             selectedType === "catalog"
               ? COLLECTION_TYPE_COLORS.catalog
-              : "bg-transparent text-gray-400 border-transparent hover:text-indigo-300 hover:bg-indigo-500/10"
+              : "bg-transparent text-slate-400 border-transparent hover:text-indigo-300 hover:bg-indigo-500/10"
           )}
         >
           Catalogs ({typeCounts.catalog})
@@ -368,7 +371,7 @@ export default function CollectionsPage() {
             "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
             selectedType === "custom"
               ? COLLECTION_TYPE_COLORS.custom
-              : "bg-transparent text-gray-400 border-transparent hover:text-emerald-300 hover:bg-emerald-500/10"
+              : "bg-transparent text-slate-400 border-transparent hover:text-emerald-300 hover:bg-emerald-500/10"
           )}
         >
           Custom ({typeCounts.custom})
@@ -376,11 +379,11 @@ export default function CollectionsPage() {
       </div>
 
       {isLoading ? (
-        <div className="text-center py-12 border rounded-lg bg-muted/30">
+        <div className="text-center py-12 rounded-xl border border-border bg-slate-800/50">
           <p className="text-muted-foreground">Loading collections...</p>
         </div>
       ) : collections.length === 0 ? (
-        <div className="text-center py-12 border rounded-lg bg-muted/30">
+        <div className="text-center py-12 rounded-xl border border-border bg-slate-800/50">
           <p className="text-muted-foreground mb-4">
             No collections yet. Create one to organize your observations!
           </p>
@@ -391,7 +394,7 @@ export default function CollectionsPage() {
           {/* Favorites Section */}
           {favoriteCollections.length > 0 && (
             <div className="space-y-4">
-              <h2 className="text-lg font-semibold">Favorites</h2>
+              <h2 className="font-serif text-xl font-light tracking-wide text-slate-100">Favorites</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {favoriteCollections.map((collection) => (
                   <CollectionCard
@@ -409,7 +412,7 @@ export default function CollectionsPage() {
 
           {/* All Collections */}
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold">
+            <h2 className="font-serif text-xl font-light tracking-wide text-slate-100">
               {favoriteCollections.length > 0 ? "All Collections" : "Collections"}
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -533,7 +536,7 @@ function CollectionCard({
   })();
 
   return (
-    <Card className={cn("hover:shadow-md transition-shadow")}>
+    <Card className={cn("transition-colors hover:border-indigo-500/40")}>
       <CardHeader className="pb-2">
         <div className="flex justify-between items-start">
           <div className="flex-1">
@@ -545,7 +548,7 @@ function CollectionCard({
                 {collectionType.charAt(0).toUpperCase() + collectionType.slice(1)}
               </Badge>
               {isPublished && (
-                <Badge variant="outline" className="text-xs border-emerald-600 text-emerald-400">
+                <Badge variant="outline" className="text-xs border-teal-500/50 text-teal-300">
                   <Globe className="w-3 h-3 mr-1" />
                   Published
                 </Badge>
@@ -605,7 +608,7 @@ function CollectionCard({
             className={cn(
               "text-xs",
               collection.visibility === "public"
-                ? "border-green-500"
+                ? "border-teal-500/60 text-teal-300"
                 : "border-slate-500"
             )}
           >

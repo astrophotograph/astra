@@ -14,14 +14,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { MoonImage } from "@/components/MoonImage";
 import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -37,9 +29,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  ArrowLeft,
   Check,
   CheckSquare,
   Compass,
+  Edit3,
   ExternalLink,
   FolderDown,
   FolderInput,
@@ -119,7 +113,7 @@ export default function CollectionDetailPage() {
 
   const queryClient = useQueryClient();
   const { data: collection, isLoading, error } = useCollection(id || "");
-  const { data: collectionImages = [], error: imagesError, isLoading: imagesLoading } = useCollectionImages(id || "");
+  const { data: collectionImages = [] } = useCollectionImages(id || "");
   const { data: allImages = [] } = useImages();
   const { data: allCollections = [] } = useCollections();
   const updateCollection = useUpdateCollection();
@@ -354,15 +348,6 @@ export default function CollectionDetailPage() {
       toast.error("Unpublish failed: " + e);
     }
   };
-
-  // Debug logging
-  console.log("CollectionDetail debug:", {
-    id,
-    collectionImages,
-    imagesError,
-    imagesLoading,
-    collectionImagesLength: collectionImages.length,
-  });
 
   // Images not in this collection (filter out ones already in collection)
   const collectionImageIds = new Set(collectionImages.map((img) => img.id));
@@ -704,23 +689,23 @@ export default function CollectionDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
-        <p className="text-gray-400">Loading collection...</p>
+      <div className="space-y-0">
+        <p className="text-slate-400">Loading collection...</p>
       </div>
     );
   }
 
   if (error || !collection) {
     return (
-      <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
+      <div className="space-y-0">
         <div className="text-center py-12">
-          <FolderOpen className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-          <h2 className="text-xl font-semibold mb-2 text-white">Collection not found</h2>
-          <p className="text-gray-400 mb-4">
+          <FolderOpen className="w-12 h-12 mx-auto mb-4 text-slate-500" />
+          <h2 className="text-xl font-semibold mb-2 text-slate-100">Collection not found</h2>
+          <p className="text-slate-400 mb-4">
             The requested collection could not be found.
           </p>
           <Link to="/collections">
-            <Button variant="outline" className="bg-transparent border-gray-600 text-white hover:bg-gray-800">
+            <Button variant="outline" className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40">
               Back to Collections
             </Button>
           </Link>
@@ -730,51 +715,46 @@ export default function CollectionDetailPage() {
   }
 
   return (
-    <div className="min-h-full bg-slate-900 py-6 px-4 md:px-8">
-      {/* Breadcrumb */}
-      <Breadcrumb className="mb-6">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink asChild>
-              <Link to="/" className="text-gray-400 hover:text-white">
-                Home
-              </Link>
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator className="text-gray-600" />
-          <BreadcrumbItem>
-            <span className="text-gray-400">Default User</span>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator className="text-gray-600" />
-          <BreadcrumbItem>
-            <BreadcrumbPage className="text-gray-300">{collection.name}</BreadcrumbPage>
-          </BreadcrumbItem>
-        </BreadcrumbList>
-      </Breadcrumb>
+    <div className="space-y-0">
+      {/* Back to the collection's parent list */}
+      <Link
+        to={collection.template === "astrolog" ? "/observations" : "/collections"}
+        className="inline-flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-100 transition-colors mb-4"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        {collection.template === "astrolog" ? "Observations" : "Collections"}
+      </Link>
 
       {/* Header */}
-      <div className="flex justify-between items-start mb-2">
-        <h1 className="text-3xl font-bold text-white">{collection.name}</h1>
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap justify-between items-end gap-4 mb-2">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            {isCatalogCollection ? "Catalog collection" : "Observation collection"}
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
+            {collection.name}
+          </h1>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
           {selectionMode ? (
             <>
               {/* Selection mode buttons */}
               <Button
                 variant="outline"
-                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                 onClick={selectAllForRemoval}
               >
                 <CheckSquare className="w-4 h-4 mr-2" />
                 Select All
               </Button>
               {selectedForRemoval.length > 0 && (
-                <span className="px-2 py-1 bg-slate-700 rounded text-sm text-white">
+                <span className="px-2 py-1 bg-slate-700 rounded text-sm text-slate-100">
                   {selectedForRemoval.length} selected
                 </span>
               )}
               <Button
                 variant="outline"
-                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                 onClick={clearSelection}
               >
                 <X className="w-4 h-4 mr-2" />
@@ -791,38 +771,11 @@ export default function CollectionDetailPage() {
             </>
           ) : (
             <>
-              {/* Normal mode buttons */}
-              {isTauri() && stackedPaths.length > 0 && !isCatalogCollection && (
-                <Button
-                  variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                  onClick={() => setCollectDialogOpen(true)}
-                  title="Collect raw subframe files"
-                >
-                  <FolderDown className="w-4 h-4 mr-2" />
-                  Collect Files
-                </Button>
-              )}
-              {isTauri() && !isCatalogCollection && collectionImages.length > 0 && (
-                <Button
-                  variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                  onClick={() => setBatchPlateSolveDialogOpen(true)}
-                  disabled={isBatchPlateSolving}
-                  title="Plate solve all unsolved images"
-                >
-                  {isBatchPlateSolving ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <Compass className="w-4 h-4 mr-2" />
-                  )}
-                  {isBatchPlateSolving ? "Solving..." : "Batch Plate Solve"}
-                </Button>
-              )}
+              {/* Normal mode: primary actions inline, the rest in More */}
               {!isCatalogCollection && skyMapFootprints.length > 0 && (
                 <Button
                   variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                   onClick={() => setSkyMapOpen(true)}
                   title="View sky coverage map"
                 >
@@ -830,39 +783,37 @@ export default function CollectionDetailPage() {
                   Sky Map
                 </Button>
               )}
-              {collectionImages.length > 0 && (
-                <>
-                  <Button
-                    variant="outline"
-                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                    onClick={() => {
-                      const catalogPrefix = collection.template === "messier" ? "M"
-                        : collection.template === "caldwell" ? "C" : "";
-                      navigate(`/slideshow?collections=${collection.id}&mode=gallery${catalogPrefix ? `&catalogPrefix=${catalogPrefix}` : ""}`);
-                    }}
-                    title="Fullscreen gallery view"
-                  >
-                    <Maximize2 className="w-4 h-4 mr-2" />
-                    Gallery
-                  </Button>
-                  {!isCatalogCollection && (
-                    <Button
-                      variant="outline"
-                      className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                      onClick={() => setSlideshowDialogOpen(true)}
-                      title="Present images as a slideshow"
-                    >
-                      <Play className="w-4 h-4 mr-2" />
-                      Slideshow
-                    </Button>
-                  )}
-                </>
+              {collectionImages.length > 0 && !isCatalogCollection && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
+                  onClick={() => setSlideshowDialogOpen(true)}
+                  title="Present images as a slideshow"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Slideshow
+                </Button>
+              )}
+              {collectionImages.length > 0 && isCatalogCollection && (
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
+                  onClick={() => {
+                    const catalogPrefix = collection.template === "messier" ? "M"
+                      : collection.template === "caldwell" ? "C" : "";
+                    navigate(`/slideshow?collections=${collection.id}&mode=gallery${catalogPrefix ? `&catalogPrefix=${catalogPrefix}` : ""}`);
+                  }}
+                  title="Fullscreen gallery view"
+                >
+                  <Maximize2 className="w-4 h-4 mr-2" />
+                  Gallery
+                </Button>
               )}
               {/* Publish / Sync buttons */}
               {collectionImages.length > 0 && !publishStatus && (
                 <Button
                   variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                   onClick={handlePublish}
                   disabled={isPublishing}
                   title="Publish collection to astra.gallery"
@@ -881,7 +832,7 @@ export default function CollectionDetailPage() {
                     href={publishStatus.publicUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md border border-emerald-600 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded-md border border-teal-500/50 bg-teal-500/10 text-teal-300 hover:bg-teal-500/20 transition-colors"
                     title={publishStatus.publicUrl}
                   >
                     <Globe className="w-4 h-4" />
@@ -890,7 +841,7 @@ export default function CollectionDetailPage() {
                   </a>
                   <Button
                     variant="outline"
-                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                    className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                     onClick={handleSync}
                     disabled={isSyncing}
                     title="Sync new images to gallery"
@@ -904,7 +855,7 @@ export default function CollectionDetailPage() {
                   </Button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="outline" size="icon" className="bg-transparent border-gray-600 text-white hover:bg-gray-800 w-8 h-8">
+                      <Button variant="outline" size="icon" className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40 w-8 h-8">
                         <MoreHorizontal className="w-4 h-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -923,7 +874,7 @@ export default function CollectionDetailPage() {
               {!isCatalogCollection && collectionImages.length > 0 && (
                 <Button
                   variant="outline"
-                  className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
                   onClick={() => setSelectionMode(true)}
                   title="Select images to remove"
                 >
@@ -932,35 +883,74 @@ export default function CollectionDetailPage() {
                 </Button>
               )}
               {!isCatalogCollection && (
-                <>
+                <Button
+                  variant="outline"
+                  className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
+                  onClick={() => setAddImagesDialogOpen(true)}
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Add Image
+                </Button>
+              )}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
                   <Button
                     variant="outline"
-                    className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                    onClick={() => setAddImagesDialogOpen(true)}
+                    className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
+                    title="More actions"
                   >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Image
+                    <MoreHorizontal className="w-4 h-4 mr-2" />
+                    More
                   </Button>
-                  {isTauri() && (
-                    <Button
-                      variant="outline"
-                      className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                      onClick={handleImportDirectory}
-                      disabled={isImportingDir}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onClick={handleStartEdit}>
+                    <Edit3 className="w-4 h-4 mr-2" />
+                    Edit collection
+                  </DropdownMenuItem>
+                  {collectionImages.length > 0 && !isCatalogCollection && (
+                    <DropdownMenuItem
+                      onClick={() => {
+                        navigate(`/slideshow?collections=${collection.id}&mode=gallery`);
+                      }}
                     >
-                      <FolderInput className="w-4 h-4 mr-2" />
-                      {isImportingDir ? "Importing..." : "Import Directory"}
-                    </Button>
+                      <Maximize2 className="w-4 h-4 mr-2" />
+                      Fullscreen gallery
+                    </DropdownMenuItem>
                   )}
-                </>
-              )}
-              <Button
-                variant="outline"
-                className="bg-transparent border-gray-600 text-white hover:bg-gray-800"
-                onClick={handleStartEdit}
-              >
-                Edit
-              </Button>
+                  {isTauri() && !isCatalogCollection && (
+                    <>
+                      <DropdownMenuSeparator />
+                      {stackedPaths.length > 0 && (
+                        <DropdownMenuItem onClick={() => setCollectDialogOpen(true)}>
+                          <FolderDown className="w-4 h-4 mr-2" />
+                          Collect raw files
+                        </DropdownMenuItem>
+                      )}
+                      {collectionImages.length > 0 && (
+                        <DropdownMenuItem
+                          disabled={isBatchPlateSolving}
+                          onClick={() => setBatchPlateSolveDialogOpen(true)}
+                        >
+                          {isBatchPlateSolving ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <Compass className="w-4 h-4 mr-2" />
+                          )}
+                          {isBatchPlateSolving ? "Solving..." : "Batch plate solve"}
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        disabled={isImportingDir}
+                        onClick={handleImportDirectory}
+                      >
+                        <FolderInput className="w-4 h-4 mr-2" />
+                        {isImportingDir ? "Importing..." : "Import directory"}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           )}
         </div>
@@ -971,23 +961,23 @@ export default function CollectionDetailPage() {
         {/* Left side - Description */}
         <div className="flex-1">
           {collection.description && (
-            <p className="text-gray-300">{collection.description}</p>
+            <p className="text-slate-300">{collection.description}</p>
           )}
         </div>
 
         {/* Right side - Moon Phase Widget */}
         {moonData && (
           <div className="flex-shrink-0">
-            <div className="bg-black rounded-lg p-4 flex flex-col items-center border border-slate-700">
+            <div className="rounded-xl border border-border bg-slate-800/50 p-4 flex flex-col items-center">
               <MoonImage
                 illumination={moonData.fraction}
                 waxing={moonData.isWaxing}
                 diameter={100}
               />
-              <div className="text-white mt-3">
+              <div className="text-slate-100 mt-3">
                 Phase: {moonData.illuminationPercent}%
               </div>
-              <div className="text-sm text-gray-400 mt-1">
+              <div className="text-sm text-slate-400 mt-1">
                 Phase of moon on {moonData.dateFormatted}
               </div>
             </div>
@@ -997,10 +987,10 @@ export default function CollectionDetailPage() {
 
       {/* Edit Dialog */}
       <Dialog open={isEditing} onOpenChange={setIsEditing}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white sm:max-w-[425px]">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Edit Collection</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-slate-400">
               Update the collection details.
             </DialogDescription>
           </DialogHeader>
@@ -1052,7 +1042,7 @@ export default function CollectionDetailPage() {
             <Button
               variant="outline"
               onClick={() => setIsEditing(false)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               Cancel
             </Button>
@@ -1094,9 +1084,9 @@ export default function CollectionDetailPage() {
         />
       ) : collectionImages.length === 0 ? (
         <div className="text-center py-12 bg-slate-800 rounded-lg">
-          <ImageIcon className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-          <p className="text-white">No images yet</p>
-          <p className="text-gray-400 text-sm mt-1">
+          <ImageIcon className="w-12 h-12 mx-auto mb-4 text-slate-500" />
+          <p className="text-slate-100">No images yet</p>
+          <p className="text-slate-400 text-sm mt-1">
             Add images to this collection
           </p>
         </div>
@@ -1161,11 +1151,11 @@ export default function CollectionDetailPage() {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Delete Collection</DialogTitle>
           </DialogHeader>
-          <p className="text-gray-400">
+          <p className="text-slate-400">
             Are you sure you want to delete &quot;{collection.name}&quot;? This will not
             delete the images, but they will be removed from this collection.
           </p>
@@ -1173,7 +1163,7 @@ export default function CollectionDetailPage() {
             <Button
               variant="outline"
               onClick={() => setDeleteDialogOpen(false)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               Cancel
             </Button>
@@ -1190,21 +1180,21 @@ export default function CollectionDetailPage() {
 
       {/* Remove Images Confirmation Dialog */}
       <Dialog open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Remove Images from Collection</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-slate-400">
               Are you sure you want to remove {selectedForRemoval.length} image{selectedForRemoval.length !== 1 ? "s" : ""} from this collection?
             </DialogDescription>
           </DialogHeader>
-          <p className="text-gray-400">
+          <p className="text-slate-400">
             The images will not be deleted from your library, only removed from &quot;{collection.name}&quot;.
           </p>
           <DialogFooter>
             <Button
               variant="outline"
               onClick={() => setRemoveConfirmOpen(false)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               Cancel
             </Button>
@@ -1231,16 +1221,16 @@ export default function CollectionDetailPage() {
 
       {/* Add Images Dialog */}
       <Dialog open={addImagesDialogOpen} onOpenChange={setAddImagesDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-2xl">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-2xl">
           <DialogHeader>
             <DialogTitle>Add Images to Collection</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-slate-400">
               Select images to add to &quot;{collection.name}&quot;
             </DialogDescription>
           </DialogHeader>
           <div className="max-h-[400px] overflow-y-auto">
             {availableImages.length === 0 ? (
-              <p className="text-center text-gray-400 py-8">
+              <p className="text-center text-slate-400 py-8">
                 No available images to add
               </p>
             ) : (
@@ -1264,14 +1254,14 @@ export default function CollectionDetailPage() {
                         />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
-                          <ImageIcon className="w-8 h-8 text-gray-500" />
+                          <ImageIcon className="w-8 h-8 text-slate-500" />
                         </div>
                       )}
                     </div>
-                    <p className="text-xs p-1 truncate text-gray-300">{image.filename}</p>
+                    <p className="text-xs p-1 truncate text-slate-300">{image.filename}</p>
                     {selectedImages.includes(image.id) && (
                       <div className="absolute top-1 right-1 w-5 h-5 bg-teal-500 rounded-full flex items-center justify-center">
-                        <span className="text-xs text-white">✓</span>
+                        <span className="text-xs text-slate-100">✓</span>
                       </div>
                     )}
                   </div>
@@ -1283,7 +1273,7 @@ export default function CollectionDetailPage() {
             <Button
               variant="outline"
               onClick={() => setAddImagesDialogOpen(false)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               Cancel
             </Button>
@@ -1301,10 +1291,10 @@ export default function CollectionDetailPage() {
 
       {/* Batch Plate Solve Dialog */}
       <Dialog open={batchPlateSolveDialogOpen} onOpenChange={setBatchPlateSolveDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white sm:max-w-[500px]">
+        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 sm:max-w-[500px]">
           <DialogHeader>
             <DialogTitle>Batch Plate Solve</DialogTitle>
-            <DialogDescription className="text-gray-400">
+            <DialogDescription className="text-slate-400">
               Plate solve all images in this collection that haven't been solved yet.
             </DialogDescription>
           </DialogHeader>
@@ -1312,20 +1302,20 @@ export default function CollectionDetailPage() {
             {/* Stats */}
             <div className="bg-slate-900 rounded-lg p-4 space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Total images:</span>
-                <span className="text-white font-medium">{plateSolveStats.totalCount}</span>
+                <span className="text-slate-400">Total images:</span>
+                <span className="text-slate-100 font-medium">{plateSolveStats.totalCount}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Already solved:</span>
+                <span className="text-slate-400">Already solved:</span>
                 <span className="text-teal-400 font-medium">{plateSolveStats.solvedCount}</span>
               </div>
               <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Ready to solve:</span>
+                <span className="text-slate-400">Ready to solve:</span>
                 <span className="text-amber-400 font-medium">{plateSolveStats.solvableCount}</span>
               </div>
               {plateSolveStats.skippedCount > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-gray-400">Previously failed (skipped):</span>
+                  <span className="text-slate-400">Previously failed (skipped):</span>
                   <span className="text-red-400 font-medium">{plateSolveStats.skippedCount}</span>
                 </div>
               )}
@@ -1350,7 +1340,7 @@ export default function CollectionDetailPage() {
                     placeholder="Enter your API key"
                     className="bg-slate-700 border-slate-600"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-slate-500">
                     Get your free API key at{" "}
                     <a
                       href="https://nova.astrometry.net/api_help"
@@ -1375,7 +1365,7 @@ export default function CollectionDetailPage() {
                     onChange={(e) => setBatchPlateSolveParallel(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
                     className="bg-slate-700 border-slate-600 w-24"
                   />
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-slate-500">
                     Number of images to solve simultaneously (1-10). Higher values are faster but use more API quota.
                   </p>
                 </div>
@@ -1392,7 +1382,7 @@ export default function CollectionDetailPage() {
             <Button
               variant="outline"
               onClick={() => setBatchPlateSolveDialogOpen(false)}
-              className="bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               Cancel
             </Button>
@@ -1416,10 +1406,10 @@ export default function CollectionDetailPage() {
             <div className="flex items-center gap-3">
               <Loader2 className="w-6 h-6 text-teal-500 animate-spin" />
               <div>
-                <h3 className="text-white font-medium">
+                <h3 className="text-slate-100 font-medium">
                   {batchPlateSolveCancelRef.current ? "Cancelling..." : "Plate Solving..."}
                 </h3>
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-slate-400">
                   {batchPlateSolveProgress.current} of {batchPlateSolveProgress.total} completed
                 </p>
               </div>
@@ -1429,7 +1419,7 @@ export default function CollectionDetailPage() {
               className="h-2"
             />
             {batchPlateSolveProgress.currentFilename && (
-              <p className="text-xs text-gray-500 truncate">
+              <p className="text-xs text-slate-500 truncate">
                 Processing: {batchPlateSolveProgress.currentFilename}
               </p>
             )}
@@ -1438,7 +1428,7 @@ export default function CollectionDetailPage() {
                 {batchPlateSolveProgress.successCount} solved
               </span>
               {batchPlateSolveProgress.avgSolveTime > 0 && (
-                <span className="text-gray-400">
+                <span className="text-slate-400">
                   Avg: {batchPlateSolveProgress.avgSolveTime.toFixed(1)}s
                 </span>
               )}
@@ -1452,7 +1442,7 @@ export default function CollectionDetailPage() {
               variant="outline"
               onClick={handleCancelBatchPlateSolve}
               disabled={batchPlateSolveCancelRef.current}
-              className="w-full bg-transparent border-gray-600 text-white hover:bg-gray-700"
+              className="w-full bg-transparent border-slate-600 text-slate-100 hover:bg-slate-700/40"
             >
               {batchPlateSolveCancelRef.current ? "Cancelling..." : "Cancel"}
             </Button>
@@ -1601,7 +1591,7 @@ function ImageCard({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            <ImageIcon className="w-10 h-10 text-gray-500" />
+            <ImageIcon className="w-10 h-10 text-slate-500" />
           </div>
         )}
         {/* Bottom-left badges: plate solve + object count */}
@@ -1611,12 +1601,12 @@ function ImageCard({
               className="w-6 h-6 bg-teal-500/90 rounded-full flex items-center justify-center"
               title="Plate solved"
             >
-              <Compass className="w-3.5 h-3.5 text-white" />
+              <Compass className="w-3.5 h-3.5 text-slate-100" />
             </div>
           )}
           {objectCount > 0 && (
             <div
-              className="bg-indigo-600/90 text-white text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none"
+              className="bg-indigo-600/90 text-slate-100 text-[10px] font-medium px-1.5 py-0.5 rounded-full leading-none"
               title={`${objectCount} objects identified`}
             >
               {objectCount}
@@ -1625,14 +1615,14 @@ function ImageCard({
         </div>
         {/* Bottom-right: integration time */}
         {integrationStr && (
-          <div className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] font-medium px-1.5 py-0.5 rounded leading-none">
+          <div className="absolute bottom-2 right-2 bg-black/70 text-slate-100 text-[10px] font-medium px-1.5 py-0.5 rounded leading-none">
             {integrationStr}
           </div>
         )}
         {/* Top-right: duplicate stack count */}
         {duplicateCount && duplicateCount > 1 && (
           <div
-            className="absolute top-2 right-2 bg-slate-600/90 text-white text-[10px] font-medium px-1.5 py-0.5 rounded leading-none flex items-center gap-1"
+            className="absolute top-2 right-2 bg-slate-600/90 text-slate-100 text-[10px] font-medium px-1.5 py-0.5 rounded leading-none flex items-center gap-1"
             title={`${duplicateCount} versions of this target`}
           >
             <span className="opacity-70">&#x25A0;&#x25A0;</span> {duplicateCount}
@@ -1644,8 +1634,8 @@ function ImageCard({
             <div
               className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
                 isSelected
-                  ? "bg-teal-500 text-white"
-                  : "bg-black/50 text-white border border-white/50"
+                  ? "bg-teal-500 text-slate-100"
+                  : "bg-black/50 text-slate-100 border border-white/50"
               }`}
             >
               {isSelected ? (
@@ -1658,9 +1648,9 @@ function ImageCard({
         )}
       </div>
       <div className="p-2">
-        <p className="font-medium truncate text-sm text-white">{image.summary || image.filename}</p>
+        <p className="font-medium truncate text-sm text-slate-100">{image.summary || image.filename}</p>
         {image.favorite && (
-          <Star className="w-4 h-4 text-yellow-500 fill-yellow-500 inline" />
+          <Star className="w-4 h-4 text-amber-400 fill-amber-400 inline" />
         )}
       </div>
     </>
@@ -1668,8 +1658,8 @@ function ImageCard({
 
   return (
     <div
-      className={`group relative rounded-lg overflow-hidden bg-slate-800 border transition-colors ${
-        isSelected ? "border-teal-500 ring-2 ring-teal-500/50" : "border-slate-700"
+      className={`group relative rounded-xl overflow-hidden bg-slate-800 border transition-colors ${
+        isSelected ? "border-teal-500 ring-2 ring-teal-500/50" : "border-border hover:border-indigo-500/40"
       } ${selectionMode ? "cursor-pointer" : ""}`}
       onClick={handleClick}
     >
@@ -1691,7 +1681,7 @@ function ImageCard({
                 e.stopPropagation();
               }}
             >
-              <MoreHorizontal className="h-4 w-4 text-white" />
+              <MoreHorizontal className="h-4 w-4 text-slate-100" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="bg-slate-800 border-slate-700">
@@ -1701,14 +1691,14 @@ function ImageCard({
                 e.stopPropagation();
                 onToggleFavorite();
               }}
-              className="text-white hover:bg-slate-700 cursor-pointer"
+              className="text-slate-100 hover:bg-slate-700 cursor-pointer"
             >
-              <Star className={`w-4 h-4 mr-2 ${image.favorite ? "text-yellow-500 fill-yellow-500" : ""}`} />
+              <Star className={`w-4 h-4 mr-2 ${image.favorite ? "text-amber-400 fill-amber-400" : ""}`} />
               {image.favorite ? "Remove from Favorites" : "Add to Favorites"}
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={handlePlateSolve}
-              className="text-white hover:bg-slate-700 cursor-pointer"
+              className="text-slate-100 hover:bg-slate-700 cursor-pointer"
             >
               <Compass className={`w-4 h-4 mr-2 ${plateSolved ? "text-teal-500" : ""}`} />
               {plateSolved ? "Re-solve Plate" : "Plate Solve"}

@@ -1371,8 +1371,15 @@ export default function AdminPage() {
       {/* Sidebar */}
       <div className="w-56 flex-shrink-0">
         <div className="flex items-center gap-3 mb-6">
-          <Settings className="w-6 h-6" />
-          <h1 className="text-xl font-bold">Settings</h1>
+          <Settings className="w-6 h-6 text-slate-400" />
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+              Observatory
+            </p>
+            <h1 className="font-serif text-2xl font-light tracking-wide text-slate-100">
+              Settings
+            </h1>
+          </div>
         </div>
         <nav className="space-y-1">
           {SETTINGS_SECTIONS.filter((s) => {
@@ -1384,8 +1391,8 @@ export default function AdminPage() {
               onClick={() => setActiveSection(section.id)}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 activeSection === section.id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  ? "bg-indigo-500/15 text-slate-100"
+                  : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
               }`}
             >
               {section.icon}
@@ -1401,7 +1408,7 @@ export default function AdminPage() {
         {activeSection === "account" && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                 <Info className="w-5 h-5" />
                 Account
               </CardTitle>
@@ -1445,7 +1452,7 @@ export default function AdminPage() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="flex items-center gap-2">
+                    <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                       <MapPin className="w-5 h-5" />
                       Observer Locations
                     </CardTitle>
@@ -1476,7 +1483,7 @@ export default function AdminPage() {
                       return (
                         <div
                           key={loc.id}
-                          className={`p-4 border rounded-lg ${isActive ? "border-primary bg-primary/5" : "border-border"}`}
+                          className={`p-4 border rounded-xl ${isActive ? "border-indigo-500/50 bg-indigo-500/5" : "border-border"}`}
                         >
                           <div className="flex items-start justify-between mb-3">
                             <div>
@@ -1580,7 +1587,7 @@ export default function AdminPage() {
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle className="flex items-center gap-2">
+                    <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                       <Telescope className="w-5 h-5" />
                       Equipment Sets
                     </CardTitle>
@@ -1612,7 +1619,7 @@ export default function AdminPage() {
                       return (
                         <div
                           key={eq.id}
-                          className="p-4 border rounded-lg border-border"
+                          className="p-4 border rounded-xl border-border"
                         >
                           <div className="flex items-start justify-between mb-3">
                             <div>
@@ -1711,7 +1718,7 @@ export default function AdminPage() {
             {/* App Info */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <Info className="w-5 h-5" />
                   Application Info
                 </CardTitle>
@@ -1754,7 +1761,7 @@ export default function AdminPage() {
         {activeSection === "developer" && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                 <Code className="w-5 h-5" />
                 Developer Mode
               </CardTitle>
@@ -1801,7 +1808,7 @@ export default function AdminPage() {
         {activeSection === "plate-solving" && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+              <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                 <Compass className="w-5 h-5" />
                 Plate Solving
               </CardTitle>
@@ -2039,7 +2046,7 @@ export default function AdminPage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <Upload className="w-5 h-5" />
                   Gallery Daemon
                 </CardTitle>
@@ -2130,7 +2137,7 @@ export default function AdminPage() {
           <div className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <FolderSearch className="w-5 h-5" />
                   Auto-Import
                 </CardTitle>
@@ -2416,7 +2423,7 @@ export default function AdminPage() {
             {/* Database Info */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <Database className="w-5 h-5" />
                   Database
                 </CardTitle>
@@ -2441,7 +2448,7 @@ export default function AdminPage() {
             {/* Backup & Restore */}
             <Card className="md:col-span-2">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <HardDrive className="w-5 h-5" />
                   Backup & Restore
                 </CardTitle>
@@ -2534,7 +2541,7 @@ export default function AdminPage() {
             {/* Unimported Files Scanner */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <FolderSearch className="w-5 h-5" />
                   Find Unimported Images
                 </CardTitle>
@@ -2693,7 +2700,7 @@ export default function AdminPage() {
             {/* Path Remapping */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <MapPin className="w-5 h-5" />
                   Remap Image Paths
                 </CardTitle>
@@ -2787,7 +2794,7 @@ export default function AdminPage() {
             {/* Database Maintenance */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
                   <Wrench className="w-5 h-5" />
                   Database Maintenance
                 </CardTitle>
