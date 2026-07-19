@@ -20,6 +20,8 @@ import {
   type HorizonProfile,
 } from "@/lib/astronomy-utils";
 import { calculateVisibilityWindow } from "@/lib/recommendations";
+// Type-only in the other direction, so no runtime cycle.
+import { getNightBounds } from "@/lib/imaging-order";
 
 export interface TodoVisibility {
   raDeg: number | null;
@@ -64,20 +66,6 @@ const EMPTY: TodoVisibility = {
 const REFRESH_MS = 5 * 60 * 1000;
 const MIN_ALTITUDE = 20;
 
-/** Nominal full night: 18:00 today (anchored via noon) → 06:00 tomorrow. */
-function nominalNight(now: Date): { start: Date; end: Date } {
-  const start = new Date(now);
-  // Anchor on noon so an after-midnight "now" still maps to the same night.
-  if (now.getHours() < 12) {
-    start.setDate(start.getDate() - 1);
-  }
-  start.setHours(18, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 1);
-  end.setHours(6, 0, 0, 0);
-  return { start, end };
-}
-
 export function useTodoVisibility(
   todos: AstronomyTodo[],
   location: { latitude: number; longitude: number },
@@ -91,7 +79,9 @@ export function useTodoVisibility(
   useEffect(() => {
     const compute = () => {
       const now = new Date();
-      const night = nominalNight(now);
+      // Sample over the real night (dusk→dawn), so windows never start at a
+      // daylight hour and stay fixed as the night progresses.
+      const night = getNightBounds(now, location.latitude, location.longitude);
       const moonPos = getMoonPosition(location);
       const map = new Map<string, TodoVisibility>();
 
@@ -155,8 +145,8 @@ export function useTodoVisibility(
           location.longitude,
           MIN_ALTITUDE,
           horizon ?? undefined,
-          night.start,
-          night.end,
+          night.dusk,
+          night.dawn,
         );
         const window =
           vis.visibilityStart && vis.visibilityEnd

@@ -162,7 +162,7 @@ export function AltitudeChart({
           .attr("y", 0)
           .attr("width", xScale(range.end) - xScale(range.start))
           .attr("height", innerHeight)
-          .attr("fill", "rgba(34, 197, 94, 0.1)")
+          .attr("fill", "rgba(128, 203, 196, 0.08)")
           .attr("stroke", "none");
       });
     }
@@ -173,14 +173,14 @@ export function AltitudeChart({
       .attr("y1", yScale(idealThreshold))
       .attr("x2", innerWidth)
       .attr("y2", yScale(idealThreshold))
-      .attr("stroke", "rgba(34, 197, 94, 0.5)")
+      .attr("stroke", "rgba(128, 203, 196, 0.5)")
       .attr("stroke-width", 1)
       .attr("stroke-dasharray", "4");
 
     g.append("text")
       .attr("x", 5)
       .attr("y", yScale(idealThreshold) - 5)
-      .attr("fill", "rgba(34, 197, 94, 0.8)")
+      .attr("fill", "rgba(128, 203, 196, 0.9)")
       .attr("font-size", "10px")
       .text(`Ideal (${idealThreshold}°)`);
 
@@ -200,8 +200,8 @@ export function AltitudeChart({
         const blockWidth = xScale(new Date(blockEnd)) - x;
 
         // Draw the block rectangle with dashed border
-        const blockColor = block.isNew ? "rgba(99, 102, 241, 0.15)" : "rgba(239, 68, 68, 0.12)";
-        const borderColor = block.isNew ? "rgba(99, 102, 241, 0.6)" : "rgba(239, 68, 68, 0.5)";
+        const blockColor = block.isNew ? "rgba(99, 102, 241, 0.15)" : "rgba(251, 191, 36, 0.10)";
+        const borderColor = block.isNew ? "rgba(99, 102, 241, 0.6)" : "rgba(251, 191, 36, 0.5)";
 
         g.append("rect")
           .attr("x", x)
@@ -214,7 +214,7 @@ export function AltitudeChart({
           .attr("stroke-dasharray", "4,2");
 
         // Add label at top of block
-        const labelColor = block.isNew ? "rgb(99, 102, 241)" : "rgb(239, 68, 68)";
+        const labelColor = block.isNew ? "rgb(99, 102, 241)" : "rgb(251, 191, 36)";
         const labelX = x + blockWidth / 2;
 
         // Truncate name if too long
@@ -253,16 +253,17 @@ export function AltitudeChart({
         .y1((d) => yScale(d.altitude))
         .curve(d3.curveMonotoneX);
 
+      // The obstruction is terrain — shade it like ground, not an alarm.
       g.append("path")
         .datum(horizonData)
-        .attr("fill", "rgba(239, 68, 68, 0.1)")
+        .attr("fill", "rgba(6, 9, 18, 0.55)")
         .attr("d", horizonArea);
 
       // Draw horizon line
       g.append("path")
         .datum(horizonData)
         .attr("fill", "none")
-        .attr("stroke", "rgba(239, 68, 68, 0.6)")
+        .attr("stroke", "rgba(136, 145, 164, 0.7)")
         .attr("stroke-width", 2)
         .attr("stroke-dasharray", "6,3")
         .attr("d", horizonLine);
@@ -273,7 +274,7 @@ export function AltitudeChart({
         .attr("x", innerWidth - 5)
         .attr("y", yScale(lastHorizonPoint.altitude) - 5)
         .attr("text-anchor", "end")
-        .attr("fill", "rgba(239, 68, 68, 0.8)")
+        .attr("fill", "rgba(136, 145, 164, 0.9)")
         .attr("font-size", "10px")
         .text("Horizon");
     }
@@ -330,7 +331,7 @@ export function AltitudeChart({
           .attr("y1", 0)
           .attr("x2", xScale(now))
           .attr("y2", innerHeight)
-          .attr("stroke", "rgb(239, 68, 68)")
+          .attr("stroke", "rgb(167, 139, 250)")
           .attr("stroke-width", 2)
           .attr("stroke-dasharray", "5,5");
 
@@ -346,13 +347,13 @@ export function AltitudeChart({
           .attr("cx", xScale(now))
           .attr("cy", yScale(currentAltitude.altitude))
           .attr("r", 5)
-          .attr("fill", "rgb(239, 68, 68)");
+          .attr("fill", "rgb(167, 139, 250)");
 
         // Current altitude label
         g.append("text")
           .attr("x", xScale(now) + 8)
           .attr("y", yScale(currentAltitude.altitude) + 4)
-          .attr("fill", "rgb(239, 68, 68)")
+          .attr("fill", "rgb(167, 139, 250)")
           .attr("font-size", "11px")
           .attr("font-weight", "bold")
           .text(`${currentAltitude.altitude.toFixed(1)}°`);

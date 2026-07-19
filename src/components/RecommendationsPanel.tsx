@@ -4,7 +4,6 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { format } from "date-fns";
-import SunCalc from "suncalc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,7 +30,6 @@ import {
   Eye,
   ImageIcon,
   MapPin,
-  Moon,
   Plus,
   RefreshCw,
   Sparkles,
@@ -42,6 +40,8 @@ import { Input } from "@/components/ui/input";
 import { getHorizonAltitude } from "@/lib/astronomy-utils";
 import { cn } from "@/lib/utils";
 import { useLocations } from "@/contexts/LocationContext";
+import { useMoonData } from "@/hooks/use-moon-data";
+import { MoonImage } from "@/components/MoonImage";
 import { useTargetObservations } from "@/hooks/use-target-observations";
 import { getObjectTypeInfo } from "@/lib/objectTypeMap";
 import {
@@ -149,32 +149,7 @@ export function RecommendationsPanel({
     loadCatalogs();
   }, []);
 
-  // Calculate moon data
-  const moonData = useMemo(() => {
-    if (!activeLocation) return null;
-
-    const now = new Date();
-    const moonIllum = SunCalc.getMoonIllumination(now);
-    const moonPos = SunCalc.getMoonPosition(now, activeLocation.latitude, activeLocation.longitude);
-
-    const getPhaseName = (phase: number): string => {
-      if (phase < 0.03) return "New Moon";
-      if (phase < 0.22) return "Waxing Crescent";
-      if (phase < 0.28) return "First Quarter";
-      if (phase < 0.47) return "Waxing Gibbous";
-      if (phase < 0.53) return "Full Moon";
-      if (phase < 0.72) return "Waning Gibbous";
-      if (phase < 0.78) return "Last Quarter";
-      if (phase < 0.97) return "Waning Crescent";
-      return "New Moon";
-    };
-
-    return {
-      illumination: Math.round(moonIllum.fraction * 100),
-      phase: getPhaseName(moonIllum.phase),
-      altitude: (moonPos.altitude * 180) / Math.PI,
-    };
-  }, [activeLocation]);
+  const moonData = useMoonData();
 
   // Generate altitude data for a target over the night
   const generateAltitudeData = useCallback((target: RecommendedTarget): {
@@ -286,9 +261,9 @@ export function RecommendationsPanel({
       const context: RecommendationContext = {
         location: activeLocation,
         time: new Date(),
-        moonIllumination: moonData?.illumination || 0,
-        moonPhase: moonData?.phase || "Unknown",
-        moonAltitude: moonData?.altitude || -90,
+        moonIllumination: moonData?.illuminationPercent || 0,
+        moonPhase: moonData?.phaseName || "Unknown",
+        moonAltitude: moonData?.altitude ?? -90,
       };
 
       // Build options
@@ -322,10 +297,10 @@ export function RecommendationsPanel({
     }
   }, [activeLocation, catalogsLoaded, typeFilter]);
 
-  const getScoreBadgeVariant = (score: number): "default" | "secondary" | "destructive" => {
-    if (score >= 70) return "default";
-    if (score >= 40) return "secondary";
-    return "destructive";
+  const getScoreBadgeClass = (score: number): string => {
+    if (score >= 70) return "border-teal-500/50 bg-teal-500/10 text-teal-300";
+    if (score >= 40) return "border-border bg-slate-700/60 text-slate-300";
+    return "border-amber-500/40 bg-amber-500/10 text-amber-300";
   };
 
   if (!activeLocation) {
@@ -368,22 +343,35 @@ export function RecommendationsPanel({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Location and conditions info */}
-        <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
-          <div className="flex items-center gap-1">
-            <MapPin className="w-4 h-4" />
-            <span>{activeLocation.name}</span>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="space-y-1 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <MapPin className="w-4 h-4" />
+              <span>{activeLocation.name}</span>
+            </div>
+            <p>Currently visible objects above 20° altitude • Click to view details</p>
           </div>
           {moonData && (
-            <div className="flex items-center gap-1">
-              <Moon className="w-4 h-4" />
-              <span>{moonData.phase} ({moonData.illumination}%)</span>
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-slate-800/70 px-3 py-2 ml-auto">
+              <MoonImage
+                illumination={moonData.fraction}
+                waxing={moonData.waxing}
+                diameter={56}
+                minWidthRatio={1}
+              />
+              <div className="space-y-0.5">
+                <div className="text-sm font-medium text-slate-100">{moonData.phaseName}</div>
+                <div className="text-xs text-muted-foreground">
+                  {moonData.illuminationPercent}% illuminated
+                </div>
+                <div className="text-xs text-muted-foreground font-mono">
+                  Rise {moonData.rise ? format(moonData.rise, "HH:mm") : "—"} · Set{" "}
+                  {moonData.set ? format(moonData.set, "HH:mm") : "—"}
+                </div>
+              </div>
             </div>
           )}
         </div>
-
-        <p className="text-sm text-muted-foreground">
-          Currently visible objects above 20° altitude • Click to view details
-        </p>
 
         {/* Filter */}
         <div className="flex items-center gap-4">
@@ -438,7 +426,7 @@ export function RecommendationsPanel({
                   key={target.id}
                   className={cn(
                     "p-4 border rounded-lg hover:bg-muted/50 transition-colors cursor-pointer",
-                    isScheduled && "border-green-500/50 bg-green-500/5"
+                    isScheduled && "border-teal-500/50 bg-teal-500/5"
                   )}
                   onClick={() => handleTargetClick(target)}
                 >
@@ -446,7 +434,7 @@ export function RecommendationsPanel({
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
                         {isScheduled && (
-                          <CalendarCheck className="w-4 h-4 text-green-500 flex-shrink-0" />
+                          <CalendarCheck className="w-4 h-4 text-teal-400 flex-shrink-0" />
                         )}
                         <h3 className="font-semibold">
                           {target.name}
@@ -460,7 +448,7 @@ export function RecommendationsPanel({
                           {typeInfo.label}
                         </Badge>
                         {isScheduled && (
-                          <Badge variant="default" className="text-xs bg-green-600">
+                          <Badge variant="default" className="text-xs bg-teal-600">
                             Scheduled
                           </Badge>
                         )}
@@ -517,7 +505,7 @@ export function RecommendationsPanel({
                     </div>
 
                     <div className="flex flex-col items-end gap-2 ml-4">
-                      <Badge variant={getScoreBadgeVariant(target.score)}>
+                      <Badge variant="outline" className={getScoreBadgeClass(target.score)}>
                         Score: {target.score}
                       </Badge>
                       <Button
@@ -651,12 +639,12 @@ export function RecommendationsPanel({
                   />
                   <div className="flex flex-wrap gap-3 text-xs text-muted-foreground mt-2">
                     <div className="flex items-center gap-1">
-                      <div className="w-3 h-3 bg-green-500/20 rounded-sm" />
+                      <div className="w-3 h-3 bg-teal-400/20 rounded-sm" />
                       <span>Good (20°+)</span>
                     </div>
                     {existingScheduleBlocks.length > 0 && (
                       <div className="flex items-center gap-1">
-                        <div className="w-3 h-3 bg-red-500/20 border border-red-500/50 border-dashed rounded-sm" />
+                        <div className="w-3 h-3 bg-amber-400/15 border border-amber-400/50 border-dashed rounded-sm" />
                         <span>Scheduled</span>
                       </div>
                     )}
@@ -765,7 +753,7 @@ export function RecommendationsPanel({
               <DialogFooter>
                 {onAddToSchedule && (
                   scheduledObjectNames.includes(selectedTarget.name) ? (
-                    <Button variant="outline" disabled className="text-green-600">
+                    <Button variant="outline" disabled className="text-teal-400">
                       <CalendarCheck className="w-4 h-4 mr-2" />
                       Already Scheduled
                     </Button>

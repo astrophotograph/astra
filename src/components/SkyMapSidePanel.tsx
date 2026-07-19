@@ -4,7 +4,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { format, addHours, startOfDay } from "date-fns";
-import SunCalc from "suncalc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,6 +23,7 @@ import { MoonImage } from "@/components/MoonImage";
 import { AltitudeChart, type AltitudeDataPoint, type HorizonDataPoint } from "@/components/AltitudeChart";
 import { cn } from "@/lib/utils";
 import { getHorizonAltitude, type HorizonProfile } from "@/lib/astronomy-utils";
+import { getMoonData } from "@/lib/moon";
 import { useLocations } from "@/contexts/LocationContext";
 import type { TargetInfo } from "@/components/AladinLite";
 
@@ -331,26 +331,11 @@ export function SkyMapSidePanel({
     }
   }, [coordinates]);
 
-  // Calculate moon data
+  // Moon data via the shared lib (coordinates already track the active location)
   const moonData = useMemo(() => {
     if (!coordinates) return null;
 
-    const now = new Date();
-    const moonIllumination = SunCalc.getMoonIllumination(now);
-    const moonTimes = SunCalc.getMoonTimes(now, coordinates.latitude, coordinates.longitude);
-    const moonPosition = SunCalc.getMoonPosition(now, coordinates.latitude, coordinates.longitude);
-
-    const getPhaseName = (phase: number): string => {
-      if (phase < 0.03) return "New Moon";
-      if (phase < 0.22) return "Waxing Crescent";
-      if (phase < 0.28) return "First Quarter";
-      if (phase < 0.47) return "Waxing Gibbous";
-      if (phase < 0.53) return "Full Moon";
-      if (phase < 0.72) return "Waning Gibbous";
-      if (phase < 0.78) return "Last Quarter";
-      if (phase < 0.97) return "Waning Crescent";
-      return "New Moon";
-    };
+    const moon = getMoonData(new Date(), coordinates.latitude, coordinates.longitude);
 
     const getLightPollutionLevel = (illumination: number): { label: string; variant: "default" | "secondary" | "destructive" } => {
       if (illumination < 25) return { label: "Minimal", variant: "default" };
@@ -358,19 +343,17 @@ export function SkyMapSidePanel({
       return { label: "High", variant: "destructive" };
     };
 
-    const illuminationPercent = moonIllumination.fraction * 100;
-
     return {
-      phase: getPhaseName(moonIllumination.phase),
-      illumination: illuminationPercent,
-      fraction: moonIllumination.fraction,
-      age: moonIllumination.phase * 29.53,
-      rise: moonTimes.rise ? format(moonTimes.rise, "HH:mm") : "N/A",
-      set: moonTimes.set ? format(moonTimes.set, "HH:mm") : "N/A",
-      altitude: (moonPosition.altitude * 180) / Math.PI,
-      isVisible: moonPosition.altitude > 0,
-      isWaxing: moonIllumination.phase <= 0.5,
-      pollutionLevel: getLightPollutionLevel(illuminationPercent),
+      phase: moon.phaseName,
+      illumination: moon.fraction * 100,
+      fraction: moon.fraction,
+      age: moon.ageDays,
+      rise: moon.rise ? format(moon.rise, "HH:mm") : "N/A",
+      set: moon.set ? format(moon.set, "HH:mm") : "N/A",
+      altitude: moon.altitude,
+      isVisible: moon.altitude > 0,
+      isWaxing: moon.waxing,
+      pollutionLevel: getLightPollutionLevel(moon.fraction * 100),
     };
   }, [coordinates]);
 

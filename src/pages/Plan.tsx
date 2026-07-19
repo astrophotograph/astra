@@ -189,7 +189,14 @@ export default function PlanPage() {
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Telescope className="w-8 h-8 text-indigo-400" />
-        <h1 className="text-2xl font-bold">Observation Planning</h1>
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.2em] text-slate-400">
+            Plan the night
+          </p>
+          <h1 className="font-serif text-3xl font-light tracking-wide text-slate-100">
+            Observation Planning
+          </h1>
+        </div>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -350,9 +357,12 @@ export default function PlanPage() {
             </CardHeader>
             <CardContent>
               {schedules.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                  <p>No schedules yet. Create one to get started!</p>
+                <div className="text-center py-10">
+                  <Calendar className="w-12 h-12 mx-auto mb-4 opacity-40 text-slate-400" />
+                  <p className="font-serif text-lg text-slate-300">No schedules yet</p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Create one, then add targets from Recommendations or your todo list.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -407,28 +417,31 @@ export default function PlanPage() {
 
                       {scheduleItems.length === 0 ? (
                         <p className="text-sm text-muted-foreground py-4">
-                          No objects scheduled. Search for objects to add them here.
+                          No objects scheduled. Add targets from Recommendations or your todo list.
                         </p>
                       ) : (
                         <div className="space-y-2">
                           {scheduleItems.map((item) => (
                             <div
                               key={item.id}
-                              className="flex justify-between items-center p-3 border rounded-lg"
+                              className="group flex justify-between items-center p-3 border border-border rounded-lg hover:bg-slate-700/30 transition-colors"
                             >
-                              <div>
-                                <h4 className="font-medium">{item.object_name}</h4>
+                              <div className="min-w-0">
+                                <h4 className="font-medium text-slate-100 truncate">
+                                  {item.object_name}
+                                </h4>
                                 <div className="text-sm text-muted-foreground flex items-center gap-3">
-                                  <span className="flex items-center gap-1">
+                                  <span className="flex items-center gap-1 font-mono text-xs bg-slate-700/60 rounded px-1.5 py-0.5">
                                     <Clock className="w-3 h-3" />
-                                    {formatTime(item.start_time)} - {formatTime(item.end_time)}
+                                    {formatTime(item.start_time)}–{formatTime(item.end_time)}
                                   </span>
-                                  {item.notes && <span>{item.notes}</span>}
+                                  {item.notes && <span className="truncate">{item.notes}</span>}
                                 </div>
                               </div>
                               <Button
                                 variant="ghost"
                                 size="sm"
+                                className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-destructive hover:text-destructive"
                                 onClick={() => handleRemoveItem(item.id)}
                               >
                                 <Trash2 className="w-4 h-4" />

@@ -20,6 +20,7 @@ interface MoonImageProps {
   waxing: boolean; // true = shadow on left, false = shadow on right
   showImage?: boolean; // whether to overlay the moon texture
   diameter?: number; // size in pixels
+  minWidthRatio?: number; // container min-width as a multiple of diameter
 }
 
 function calcInner(outerDiameter: number, semiPhase: number) {
@@ -143,7 +144,8 @@ export function MoonImage({
   illumination,
   waxing,
   showImage = true,
-  diameter = 100
+  diameter = 100,
+  minWidthRatio = 1.5
 }: MoonImageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -166,7 +168,7 @@ export function MoonImage({
   return (
     <div
       className="relative grid place-items-center"
-      style={{ height: diameter, minWidth: diameter * 1.5 }}
+      style={{ height: diameter, minWidth: diameter * minWidthRatio }}
     >
       {showImage && (
         <img

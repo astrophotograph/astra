@@ -275,9 +275,9 @@ export function ObjectAltitudeDialog({
     const effectiveHorizon = horizonAlt ?? 0;
     const effectiveThreshold = Math.max(20, effectiveHorizon);
 
-    if (alt > effectiveThreshold) return { color: "text-green-400", text: "Ideal for observation" };
-    if (alt > effectiveHorizon) return { color: "text-yellow-400", text: "Visible but below ideal threshold" };
-    if (alt > 0) return { color: "text-orange-400", text: "Below local horizon" };
+    if (alt > effectiveThreshold) return { color: "text-teal-400", text: "Ideal for observation" };
+    if (alt > effectiveHorizon) return { color: "text-amber-400", text: "Visible but below ideal threshold" };
+    if (alt > 0) return { color: "text-amber-400/80", text: "Below local horizon" };
     return { color: "text-red-400", text: "Below horizon - not visible" };
   };
 
@@ -468,7 +468,7 @@ export function ObjectAltitudeDialog({
                 )}
               </h4>
               {isScheduled ? (
-                <div className="flex items-center gap-2 text-green-400">
+                <div className="flex items-center gap-2 text-teal-400">
                   <CalendarCheck className="w-4 h-4" />
                   <span>Already scheduled</span>
                 </div>
@@ -528,7 +528,7 @@ export function ObjectAltitudeDialog({
                     {observations.totalImages} image{observations.totalImages !== 1 ? "s" : ""} of this target
                   </span>
                   {observations.totalExposureSeconds > 0 && (
-                    <div className="flex items-center gap-1 text-green-400">
+                    <div className="flex items-center gap-1 text-teal-400">
                       <Timer className="w-4 h-4" />
                       <span className="font-medium">{formatDuration(observations.totalExposureSeconds)}</span>
                       <span className="text-muted-foreground">total</span>
@@ -553,7 +553,7 @@ export function ObjectAltitudeDialog({
                             {group.imageCount} image{group.imageCount !== 1 ? "s" : ""}
                           </span>
                           {group.totalExposureSeconds > 0 && (
-                            <span className="text-green-400 font-medium">
+                            <span className="text-teal-400 font-medium">
                               {formatDuration(group.totalExposureSeconds)}
                             </span>
                           )}
