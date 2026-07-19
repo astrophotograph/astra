@@ -12,7 +12,21 @@ export default defineConfig(({ mode }) => {
   // base-pathed assets, dist-web/ output, and no Cloudflare worker plugin
   // (that belongs to the astra.gallery worker, not the app).
   const web = mode === "web";
-  const plugins: PluginOption[] = web ? [react()] : [react(), cloudflare()];
+  // Plausible only in the hosted browser bundle — the desktop app must not
+  // phone home. landing.html carries its own copy of this tag.
+  const plausible: PluginOption = {
+    name: "astra:plausible",
+    transformIndexHtml(html) {
+      if (!web) return html;
+      return html.replace(
+        "</head>",
+        '  <script defer data-domain="astra.gallery" src="https://pulse.steve.net/js/script.js"></script>\n  </head>',
+      );
+    },
+  };
+  const plugins: PluginOption[] = web
+    ? [react(), plausible]
+    : [react(), cloudflare()];
   const desktopTarget =
     process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13";
 

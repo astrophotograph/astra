@@ -10,6 +10,10 @@ import {
   fetchMe,
   type SessionUser,
 } from "./lib/auth-web";
+// Brand typefaces, bundled locally so the desktop app works offline.
+import "@fontsource-variable/dm-sans";
+import "@fontsource/cormorant-garamond/300.css";
+import "@fontsource/cormorant-garamond/400.css";
 import "./index.css";
 
 const queryClient = new QueryClient({
@@ -46,7 +50,7 @@ function AuthCallback() {
         <div className="max-w-md space-y-4 rounded-lg border border-zinc-800 p-8 text-center">
           <h1 className="text-lg font-semibold">Sign-in failed</h1>
           <p className="text-sm text-zinc-400">{error}</p>
-          <a className="inline-block text-sm text-sky-400 hover:underline" href="/app">
+          <a className="inline-block text-sm text-indigo-400 hover:underline" href="/app">
             Back to sign-in
           </a>
         </div>
@@ -63,13 +67,15 @@ function SignIn() {
 
   return (
     <Shell>
-      <div className="max-w-md space-y-6 rounded-lg border border-zinc-800 p-10 text-center">
+      <div className="max-w-md space-y-6 rounded-lg border border-indigo-500/15 bg-slate-800/60 p-10 text-center">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Astra</h1>
+          <h1 className="font-serif text-3xl font-light tracking-[0.15em] text-slate-100">
+            Astra
+          </h1>
           <p className="text-sm text-zinc-400">Observation log &amp; gallery</p>
         </div>
         <button
-          className="w-full rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-50"
+          className="w-full rounded-md bg-indigo-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:opacity-50 transition-colors"
           disabled={busy}
           onClick={() => {
             setBusy(true);

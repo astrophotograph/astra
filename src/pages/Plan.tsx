@@ -188,7 +188,7 @@ export default function PlanPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <Telescope className="w-8 h-8 text-blue-400" />
+        <Telescope className="w-8 h-8 text-indigo-400" />
         <h1 className="text-2xl font-bold">Observation Planning</h1>
       </div>
 

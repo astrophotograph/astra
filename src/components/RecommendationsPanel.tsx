@@ -675,7 +675,7 @@ export function RecommendationsPanel({
                     {activeScheduleName && (
                       <div className="text-sm">
                         <span className="text-muted-foreground">Adding to: </span>
-                        <span className="font-medium text-blue-500">{activeScheduleName}</span>
+                        <span className="font-medium text-indigo-400">{activeScheduleName}</span>
                       </div>
                     )}
                     <div className="grid grid-cols-2 gap-3">

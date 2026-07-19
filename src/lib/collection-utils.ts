@@ -28,7 +28,7 @@ export function getCollectionTypeLabel(template: string | null): string {
  */
 export const COLLECTION_TYPE_COLORS: Record<CollectionType, string> = {
   observation: "bg-violet-500/20 text-violet-300 border-violet-500/30",
-  catalog: "bg-blue-500/20 text-blue-300 border-blue-500/30",
+  catalog: "bg-indigo-500/20 text-indigo-300 border-indigo-500/30",
   custom: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
 };
 

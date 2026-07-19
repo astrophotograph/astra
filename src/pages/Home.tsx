@@ -9,7 +9,7 @@ export default function Home() {
         "Track and document your daily observations, insights, and discoveries. Keep a record of important moments and patterns you notice.",
       href: "/observations",
       icon: Target,
-      gradient: "from-violet-500 to-purple-600",
+      gradient: "from-indigo-500 to-violet-600",
     },
     {
       title: "Todo",
@@ -17,7 +17,7 @@ export default function Home() {
         "Manage your astronomical observing targets. Track celestial object visibility and mark observations complete when finished.",
       href: "/todo",
       icon: ClipboardCheck,
-      gradient: "from-emerald-400 to-teal-500",
+      gradient: "from-teal-400 to-teal-600",
     },
     {
       title: "Plan",
@@ -25,7 +25,7 @@ export default function Home() {
         "Plan your observing sessions with optimal timing data. Calculate object altitudes, set goal times, and schedule your astronomical adventures.",
       href: "/plan",
       icon: BarChart3,
-      gradient: "from-teal-500 to-green-600",
+      gradient: "from-violet-500 to-indigo-600",
     },
     {
       title: "Settings",
@@ -33,14 +33,14 @@ export default function Home() {
         "Configure observer locations, manage backups, and customize your observatory settings.",
       href: "/settings",
       icon: Settings,
-      gradient: "from-orange-500 to-red-500",
+      gradient: "from-slate-600 to-slate-500",
     },
   ];
 
   return (
-    <div className="min-h-full bg-gradient-to-br from-purple-900 via-violet-900 to-slate-900 py-16 px-4">
+    <div className="min-h-full py-16 px-4">
       <div className="mb-12 text-center">
-        <h1 className="text-4xl font-bold tracking-tight text-white">
+        <h1 className="font-serif text-5xl font-light tracking-wide text-slate-100">
           Welcome to Your Observatory
         </h1>
       </div>

@@ -357,7 +357,7 @@ export default function CollectionsPage() {
             "px-3 py-1.5 rounded-full text-sm font-medium transition-colors border",
             selectedType === "catalog"
               ? COLLECTION_TYPE_COLORS.catalog
-              : "bg-transparent text-gray-400 border-transparent hover:text-blue-300 hover:bg-blue-500/10"
+              : "bg-transparent text-gray-400 border-transparent hover:text-indigo-300 hover:bg-indigo-500/10"
           )}
         >
           Catalogs ({typeCounts.catalog})

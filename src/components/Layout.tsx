@@ -74,10 +74,13 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-slate-900/95 backdrop-blur">
+      <header className="sticky top-0 z-50 w-full border-b border-indigo-500/15 bg-slate-900/95 backdrop-blur">
         <div className="flex h-14 w-full items-center justify-between px-4 md:px-6 lg:px-8">
-          <Link to="/" className="flex items-center">
-            <span className="text-lg font-bold text-white">Astra</span>
+          <Link to="/" className="flex items-center gap-2">
+            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-6 w-6" />
+            <span className="font-serif text-xl font-light tracking-[0.15em] text-slate-100">
+              Astra
+            </span>
           </Link>
           <div className="flex items-center gap-4">
             <Link
