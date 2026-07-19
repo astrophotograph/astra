@@ -198,7 +198,12 @@ export function findMaxAltitude(
 }
 
 /**
- * Calculate visibility window - when target is above minimum altitude tonight
+ * Calculate visibility window - when target is above minimum altitude tonight.
+ *
+ * Without explicit bounds, the window is sampled from 6 PM today (or now,
+ * if later) until 6 AM tomorrow. Pass `windowStart`/`windowEnd` to sample a
+ * fixed range instead — e.g. the whole night regardless of the current time,
+ * so a window doesn't shrink as the night progresses.
  */
 export function calculateVisibilityWindow(
   raHours: number,
@@ -206,7 +211,9 @@ export function calculateVisibilityWindow(
   lat: number,
   lon: number,
   minAltitude: number,
-  horizon?: HorizonProfile
+  horizon?: HorizonProfile,
+  windowStart?: Date,
+  windowEnd?: Date
 ): {
   visibilityStart: Date | undefined;
   visibilityEnd: Date | undefined;
@@ -217,15 +224,17 @@ export function calculateVisibilityWindow(
   const now = new Date();
 
   // Start from 6 PM today (or now if after 6 PM)
-  let startTime = new Date(now);
-  if (now.getHours() < 18) {
+  let startTime = windowStart ? new Date(windowStart) : new Date(now);
+  if (!windowStart && now.getHours() < 18) {
     startTime.setHours(18, 0, 0, 0);
   }
 
   // End at 6 AM next day
-  const endTime = new Date(startTime);
-  endTime.setDate(endTime.getDate() + 1);
-  endTime.setHours(6, 0, 0, 0);
+  const endTime = windowEnd ? new Date(windowEnd) : new Date(startTime);
+  if (!windowEnd) {
+    endTime.setDate(endTime.getDate() + 1);
+    endTime.setHours(6, 0, 0, 0);
+  }
 
   let visibilityStart: Date | undefined;
   let visibilityEnd: Date | undefined;
