@@ -1,32 +1,49 @@
-# Hosting: staging.astra.gallery
+# Self-hosting the Astra daemon
 
 The hosted Astra service is the desktop backend running as a daemon
 (`astra_daemon`, an axum HTTP server over the same SQLite + HoardFS stack),
-exposed through a dedicated Cloudflare Tunnel.
+typically exposed through a Cloudflare Tunnel so no inbound ports are
+opened. This doc describes the generic shape; operator-specific
+configuration (real unit files, hostnames, network layout) belongs in your
+own private infrastructure repo, not here.
 
 ## Topology
 
 ```
-browser ──► Cloudflare edge (staging.astra.gallery, proxied CNAME)
+browser ──► Cloudflare edge (your domain, proxied CNAME)
                 │
                 ▼
-        cloudflared "astra-staging" tunnel      (astra-tunnel.service)
-                │  ~/.cloudflared/astra-staging.yml
+        cloudflared tunnel                       (astra-tunnel.service)
+                │  /etc/cloudflared/config.yml
                 ▼
         astra_daemon on 127.0.0.1:27872          (astra-daemon.service)
                 │
                 ▼
-        ~/.local/share/com.erewhon.astra/  (astra.db + hoardfs/)
+        $ASTRA_DATA_DIR  (astra.db + hoardfs/ + web/)
 ```
 
-- Both services are **user** systemd units (lingering is enabled, so they
-  start at boot without a login).
-- The tunnel is deliberately **separate** from the production
-  `/etc/cloudflared/config.yml` ingress (bcc.sh services) running on the
-  same host — astra staging can restart or break without touching that.
-- The desktop app and the daemon share `astra.db` safely: every connection
-  runs WAL with a busy timeout (see `src-tauri/src/daemon/mod.rs` docs for
-  the one-writer convention).
+Run both as **system units under dedicated non-login users** (`astra`,
+`cloudflared`) — never as your login user for an internet-facing service.
+The templates in `deploy/` carry a full systemd hardening block
+(ProtectSystem=strict, NoNewPrivileges, syscall filter, empty capability
+set); start from those. For extra isolation, run the whole pair inside a
+dedicated VM with egress filtering so a compromise can't move laterally.
+
+## Daemon requirements
+
+- The binary is nearly static (libc/libm/libgcc only — the Python bridge
+  is desktop-only and links out), so building on a glibc-compatible host
+  and copying the binary works.
+- `ASTRA_DATA_DIR` must be writable by the `astra` user; the web bundle
+  is served from `$ASTRA_DATA_DIR/web` and must exist **at startup** for
+  the `/` and `/app` routes to mount.
+- If your library references original files by absolute path (external
+  refs), those paths must resolve wherever the daemon runs — mount them
+  read-only.
+- OIDC (`ASTRA_OIDC_ISSUER` + `ASTRA_OIDC_CLIENT_ID`, a public PKCE SPA
+  client) enables browser sessions; without it only personal access
+  tokens (`astra_daemon --mint-token`) authenticate. JWT validation needs
+  a sane clock — enable systemd-timesyncd in minimal VM images.
 
 ## Public surface
 
@@ -36,39 +53,17 @@ browser ──► Cloudflare edge (staging.astra.gallery, proxied CNAME)
 | `/@user`, `/@user/slug`, assets | none | published collections only |
 | `/api/*` | bearer (PAT or OIDC JWT) | default-deny |
 
-## Operations
+## Deploying
+
+`just deploy-staging` builds the release daemon + web bundle and pushes
+them into the maintainer's staging VM (Incus), swapping the binary via
+push-to-temp + rename (overwriting a running binary in place fails with
+"text file busy"). Unit files are pushed from `$ASTRA_DEPLOY_DIR`
+(default `deploy/`), so real, environment-specific units can live outside
+the repo — set it in a gitignored `.env`.
 
 ```bash
-just deploy-staging   # rebuild release daemon, install + restart both units
-just daemon-status    # systemctl --user status for daemon + tunnel
+just deploy-staging   # build → push binary/web/units → restart → healthz
+just daemon-status    # unit status inside the VM
 just daemon-logs      # follow both journals
-
-systemctl --user restart astra-daemon astra-tunnel
-journalctl --user -u astra-daemon -n 100   # daemon log
-journalctl --user -u astra-tunnel -n 100   # tunnel log
 ```
-
-## Pieces and where they live
-
-| Piece | Location |
-|---|---|
-| Unit files (source of truth) | `deploy/*.service` in this repo |
-| Installed units | `~/.config/systemd/user/` |
-| Tunnel config | `~/.cloudflared/astra-staging.yml` |
-| Tunnel credentials | `~/.cloudflared/35f84ad7-….json`; backup: `ho secret get astra/tunnel-credentials` |
-| Tunnel id | `35f84ad7-9821-4c5d-8f04-d56fb8246a70` (`cloudflared tunnel list`) |
-| DNS | `staging.astra.gallery` proxied CNAME → `<tunnel-id>.cfargotunnel.com` (astra.gallery zone) |
-| Daemon data | the desktop app's data dir (`~/.local/share/com.erewhon.astra`) |
-
-## Gotchas
-
-- The `cloudflared` cert (`~/.cloudflared/cert.pem`) is scoped to
-  middlefork.org, so `cloudflared tunnel route dns` lands in the wrong
-  zone — manage the astra.gallery DNS record via the Cloudflare API
-  (`ho secret get cloudflare/provisioning-token`) instead.
-- The daemon binary links libpython (PyO3); the unit sets
-  `LD_LIBRARY_PATH` to the Linuxbrew `opt/python@3.12/lib` symlink. Use
-  `opt/`, never a `Cellar/<version>` path.
-- OIDC session auth is off until the Zitadel app exists — the commented
-  `ASTRA_OIDC_*` lines in `deploy/astra-daemon.service` turn it on. PATs
-  (`astra_daemon --mint-token`) work regardless.

@@ -1,20 +1,52 @@
-# Astra daemon — hosted astra.gallery service (staging).
-# Install: just deploy-staging   (copies to ~/.config/systemd/user/)
+# Astra daemon — hardened systemd unit template for self-hosting.
+#
+# Assumes a dedicated non-login `astra` user, the binary at
+# /opt/astra/bin/astra_daemon, and data under /var/lib/astra/data.
+# Adjust paths and the OIDC settings for your deployment; see
+# docs/hosting.md. Operator-specific unit files can live out of tree —
+# `just deploy-staging` reads them from $ASTRA_DEPLOY_DIR (default:
+# this directory).
 [Unit]
-Description=Astra daemon (hosted astra.gallery service)
+Description=Astra daemon (hosted gallery service)
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-# PyO3 links libpython; the daemon needs it on the runtime path.
-Environment=LD_LIBRARY_PATH=/home/linuxbrew/.linuxbrew/opt/python@3.12/lib
-# OIDC sessions — Zitadel app "astra-gallery" in the astra project.
-# The client id is public (PKCE SPA client, no secret); also recorded in
-# `ho secret get astra/oidc-client-id`.
-Environment=ASTRA_OIDC_ISSUER=https://auth.bcc.sh
-Environment=ASTRA_OIDC_CLIENT_ID=380388911693692932
-ExecStart=%h/Projects/erewhon/astra/src-tauri/target/release/astra_daemon
+User=astra
+Group=astra
+Environment=ASTRA_DATA_DIR=/var/lib/astra/data
+# OIDC sessions (optional): point at your issuer and a public PKCE
+# SPA client id. Unset, only personal access tokens authenticate.
+#Environment=ASTRA_OIDC_ISSUER=https://auth.example.com
+#Environment=ASTRA_OIDC_CLIENT_ID=<client-id>
+ExecStart=/opt/astra/bin/astra_daemon
 Restart=on-failure
 RestartSec=5
 
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+# read-only (not `true`) in case legacy data paths resolve under /home
+ProtectHome=read-only
+ReadWritePaths=/var/lib/astra/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

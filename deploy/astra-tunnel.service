@@ -1,17 +1,42 @@
-# Cloudflare tunnel for staging.astra.gallery — dedicated tunnel
-# (astra-staging), isolated from the production /etc/cloudflared ingress.
-# Config lives at ~/.cloudflared/astra-staging.yml; credentials JSON is
-# backed up in `ho secret get astra/tunnel-credentials`, never committed.
-# Install: just deploy-staging   (copies to ~/.config/systemd/user/)
+# Cloudflare tunnel for the Astra daemon — hardened unit template.
+#
+# Assumes a dedicated non-login `cloudflared` user and a tunnel config at
+# /etc/cloudflared/config.yml whose ingress points at the daemon's bind
+# address (default 127.0.0.1:27872). See docs/hosting.md.
 [Unit]
-Description=Cloudflare tunnel for staging.astra.gallery
-After=network-online.target astra-daemon.service
-Wants=astra-daemon.service
+Description=Cloudflare tunnel for the Astra daemon
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel --config %h/.cloudflared/astra-staging.yml run
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate tunnel --config /etc/cloudflared/config.yml run
 Restart=on-failure
 RestartSec=5
 
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

@@ -11,6 +11,12 @@ export PKG_CONFIG_PATH := "/usr/lib/x86_64-linux-gnu/pkgconfig:" + env_var_or_de
 export WAYLAND_DISPLAY := env_var_or_default("WAYLAND_DISPLAY", "wayland-0")
 export XDG_RUNTIME_DIR := env_var_or_default("XDG_RUNTIME_DIR", "/run/user/" + `id -u`)
 
+# Deployment unit files: deploy/ holds sanitized templates; point this at a
+# private directory (e.g. via the gitignored .env) for real units.
+set dotenv-load := true
+
+deploy_dir := env_var_or_default("ASTRA_DEPLOY_DIR", "deploy")
+
 # List recipes
 default:
     @just --list
@@ -68,25 +74,28 @@ verify-variants *ARGS:
 daemon *ARGS:
     cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
 
-# Rebuild the release daemon + web bundle and (re)install + restart the staging units
+# Rebuild the release daemon + web bundle and deploy into the `astra` Incus VM
+# (hekaton). Build happens here (glibc-compatible Debian 13 on both ends);
+# the VM never needs a toolchain.
 deploy-staging:
     cd src-tauri && cargo build --release --bin astra_daemon
     pnpm build:web
-    rm -rf ~/.local/share/com.erewhon.astra/web
-    cp -r dist-web ~/.local/share/com.erewhon.astra/web
-    mkdir -p ~/.config/systemd/user
-    cp deploy/astra-daemon.service deploy/astra-tunnel.service ~/.config/systemd/user/
-    systemctl --user daemon-reload
-    systemctl --user enable --now astra-daemon astra-tunnel
-    systemctl --user restart astra-daemon astra-tunnel
+    incus file push src-tauri/target/release/astra_daemon astra/opt/astra/bin/astra_daemon.new --mode 0755
+    incus exec astra -- mv /opt/astra/bin/astra_daemon.new /opt/astra/bin/astra_daemon
+    incus exec astra -- rm -rf /var/lib/astra/data/dist-web
+    incus file push -r --quiet dist-web astra/var/lib/astra/data/
+    incus exec astra -- sh -c 'rm -rf /var/lib/astra/data/web && mv /var/lib/astra/data/dist-web /var/lib/astra/data/web && chown -R astra:astra /var/lib/astra/data/web'
+    incus file push {{deploy_dir}}/astra-daemon.service {{deploy_dir}}/astra-tunnel.service astra/etc/systemd/system/ --mode 0644
+    incus exec astra -- sh -c 'systemctl daemon-reload && systemctl enable astra-daemon astra-tunnel >/dev/null 2>&1; systemctl restart astra-daemon astra-tunnel'
+    sleep 3 && curl -sf https://staging.astra.gallery/healthz && echo
 
 # Status of the staging daemon + tunnel units
 daemon-status:
-    systemctl --user status astra-daemon astra-tunnel --no-pager || true
+    incus exec astra -- systemctl status astra-daemon astra-tunnel --no-pager || true
 
 # Follow the staging daemon + tunnel journals
 daemon-logs:
-    journalctl --user -u astra-daemon -u astra-tunnel -f
+    incus exec astra -- journalctl -u astra-daemon -u astra-tunnel -f
 
 # Run Rust tests
 test-rust:
