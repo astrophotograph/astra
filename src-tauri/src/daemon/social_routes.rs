@@ -1,8 +1,11 @@
-//! Authed social API: follow/unfollow, follower listings, and counts.
+//! Social API: follow/unfollow, follower listings, counts, notifications.
 //!
 //! Worker parity (`worker/src/routes/social.ts`) over the Kith stores.
-//! Nested under the authed `/api` router — every route requires auth; the
-//! public counts surface arrives later with the gallery pages leaf.
+//! [`routes`] nests under the authed `/api` router — everything there
+//! requires auth. The one exception is [`counts`], registered by `mod.rs`
+//! below the auth layer: the gallery pages' follow widget needs aggregate
+//! counts anonymously, and they expose only totals of already-public
+//! follow edges, never who.
 //!
 //! Kith `UserId` is the daemon `users.id` (`AuthedUser.user_id`), never the
 //! raw OIDC subject — no aliasing layer.
@@ -34,7 +37,6 @@ pub fn routes() -> Router<Arc<DaemonState>> {
         .route("/is-following", get(is_following))
         .route("/followers/{kind}/{id}", get(followers))
         .route("/following", get(following))
-        .route("/counts/{kind}/{id}", get(counts))
         .route("/mutual/{user_id}", get(mutual))
         .route("/notifications", get(list_notifications))
         // Static segments outrank the {id} capture, so unread-count and
@@ -287,10 +289,10 @@ pub async fn following(
 }
 
 /// GET /api/social/counts/{kind}/{id} — follower count, plus following
-/// count when the entity is a user.
+/// count when the entity is a user. Public (registered below the auth
+/// layer): aggregate counts only, briefly cacheable.
 pub async fn counts(
     State(state): State<Arc<DaemonState>>,
-    _user: AuthedUser,
     Path((kind, id)): Path<(String, String)>,
 ) -> Response {
     let Some(entity_kind) = parse_target_kind(&kind) else {
@@ -311,7 +313,12 @@ pub async fn counts(
             Err(e) => return kith_error("social counts", e),
         }
     }
-    Json(body).into_response()
+    let mut response = Json(body).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("public, max-age=30"),
+    );
+    response
 }
 
 /// GET /api/social/mutual/{user_id} — do the caller and `user_id` follow
@@ -485,12 +492,41 @@ mod tests {
             ("GET", "/api/social/is-following?target_kind=user&target_id=bob"),
             ("GET", "/api/social/followers/user/bob"),
             ("GET", "/api/social/following"),
-            ("GET", "/api/social/counts/user/bob"),
             ("GET", "/api/social/mutual/bob"),
         ] {
             let (status, _) = send(&router, method, uri, None, None).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
         }
+    }
+
+    /// Counts are the one public social route — the gallery pages' follow
+    /// widget fetches them anonymously, with a public cache header.
+    #[tokio::test]
+    async fn counts_are_public() {
+        let (router, state, _token, _tmp) = setup().await;
+        state
+            .social()
+            .follow(&UserId::from("alice"), &EntityId::user(&UserId::from("bob")))
+            .await
+            .unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/social/counts/user/bob")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("public, max-age=30")
+        );
+        let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["followers"], 1);
+        assert_eq!(body["following"], 0);
     }
 
     #[tokio::test]

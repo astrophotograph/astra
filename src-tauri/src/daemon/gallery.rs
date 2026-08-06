@@ -73,17 +73,17 @@ pub async fn profile_page(
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
         let mut conn = db.get().map_err(|e| e.to_string())?;
-        let Some(_) = user_id_for_username(&mut conn, &handle)? else {
+        let Some(owner_id) = user_id_for_username(&mut conn, &handle)? else {
             return Ok(None);
         };
         drop(conn);
         let galleries = list_public_for_user_core(&db, &handle)?;
-        Ok(Some((handle, galleries)))
+        Ok(Some((handle, owner_id, galleries)))
     })
     .await;
 
     match result {
-        Ok(Ok(Some((handle, galleries)))) => {
+        Ok(Ok(Some((handle, owner_id, galleries)))) => {
             let items: String = galleries
                 .iter()
                 .map(|g| {
@@ -102,8 +102,9 @@ pub async fn profile_page(
                  <style>body{{font-family:system-ui;background:#0b1020;color:#e6e8f0;\
                  max-width:640px;margin:4rem auto;padding:0 1rem}}a{{color:#8ab4ff}}\
                  li{{margin:.5rem 0}}</style></head>\
-                 <body><h1>@{h}</h1>{list}</body></html>",
+                 <body><h1>@{h}</h1>{widget}{list}</body></html>",
                 h = html_escape(&handle),
+                widget = super::social_widgets::embed(&owner_id, &handle),
                 list = if items.is_empty() {
                     "<p>No public galleries yet.</p>".to_string()
                 } else {
@@ -170,6 +171,15 @@ pub async fn gallery_page(
                 html_escape(&record.slug)
             );
             let body = viewer_html.replacen("<head>", &base, 1);
+            // Follow widget + bell for the publisher, floated over the
+            // viewer chrome. Identical markup for every viewer — per-viewer
+            // state hydrates client-side, so the cache headers stay valid.
+            let snippet = super::social_widgets::embed_floating(&record.user_id, &user[1..]);
+            let body = if body.contains("</body>") {
+                body.replacen("</body>", &format!("{snippet}</body>"), 1)
+            } else {
+                body + &snippet
+            };
             let mut response = Html(body).into_response();
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
@@ -535,6 +545,30 @@ mod tests {
         assert!(!html.contains("drafts"), "unlisted must not be listed");
         assert!(!html.contains("secret"));
         let _ = &f.unlisted_collection;
+    }
+
+    /// Both public page kinds embed the follow widget targeting the owner —
+    /// identical markup for every viewer (the pages are publicly cached; all
+    /// per-viewer state hydrates client-side).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pages_embed_the_follow_widget() {
+        let f = fixture().await;
+        let router = crate::daemon::router(f.state.clone());
+
+        // Profile page: inline widget with the owner's id + handle.
+        let (status, _, body) = get(&router, "/@aliceh").await;
+        assert_eq!(status, StatusCode::OK);
+        let html = String::from_utf8(body).unwrap();
+        assert!(html.contains(r#"class="follow-widget""#));
+        assert!(html.contains(r#"data-target-id="alice""#));
+        assert!(html.contains(r#"data-handle="aliceh""#));
+
+        // Gallery page: floating variant injected into the viewer document.
+        let (status, _, body) = get(&router, "/@aliceh/andromeda-nights/").await;
+        assert_eq!(status, StatusCode::OK);
+        let html = String::from_utf8(body).unwrap();
+        assert!(html.contains(r#"class="follow-widget floating""#));
+        assert!(html.contains(r#"data-target-id="alice""#));
     }
 
     #[tokio::test(flavor = "multi_thread")]

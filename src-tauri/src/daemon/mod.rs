@@ -38,6 +38,7 @@ pub mod kith_store;
 pub mod oidc;
 pub mod session;
 pub mod social_events;
+pub mod social_widgets;
 pub mod social_routes;
 
 use std::future::Future;
@@ -286,7 +287,13 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         )
         .route("/session/config", get(session_config))
         // Public discovery for the marketing landing — recent public galleries.
-        .route("/galleries/recent", get(recent_galleries));
+        .route("/galleries/recent", get(recent_galleries))
+        // Public aggregate follow counts for the gallery pages' follow
+        // widget — only counts of already-public edges, never who.
+        .route(
+            "/social/counts/{kind}/{id}",
+            get(social_routes::counts),
+        );
 
     Router::new()
         .route("/healthz", get(healthz))
