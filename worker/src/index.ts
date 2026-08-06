@@ -1,29 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Env } from "./lib/types";
-import { landingRoutes } from "./routes/landing";
-import { exploreRoutes } from "./routes/explore";
-import { galleryRoutes } from "./routes/gallery";
-import { authRoutes } from "./routes/auth";
-import { presignRoutes } from "./routes/presign";
 import { downloadRoutes } from "./routes/downloads";
-import { uploadRoutes } from "./routes/upload";
-import { webAuthRoutes } from "./routes/web-auth";
-import { socialRoutes } from "./routes/social";
-import { listRoutes, listPageRoutes } from "./routes/lists";
-import { commentRoutes } from "./routes/comments";
 
+// Retired to a downloads CDN (2026-08): the hosted service lives on the
+// daemon behind the tunnel; this worker keeps only `/downloads/*` (tetra3
+// databases + installers on R2 free egress). The zone route in
+// wrangler.jsonc scopes it — everything else on the domain reaches the
+// daemon. Old gallery/social/auth routes live in git history.
 const app = new Hono<{ Bindings: Env }>();
-
-// CORS for desktop app + web UI
-app.use(
-  "/api/*",
-  cors({
-    origin: ["http://localhost:1420", "http://127.0.0.1:1420", "tauri://localhost", "https://astra.gallery"],
-    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
-  })
-);
 
 // CORS for downloads (tetra3 databases, etc.)
 app.use(
@@ -34,46 +19,7 @@ app.use(
   })
 );
 
-// API routes
-app.route("/api/auth", authRoutes);
-app.route("/api", presignRoutes);
-app.route("/api", uploadRoutes);
-app.route("/api/social", socialRoutes);
-app.route("/api/lists", listRoutes);
-app.route("/api/comments", commentRoutes);
-
 // Static downloads (tetra3 databases, etc.)
 app.route("/", downloadRoutes);
-
-// Web auth (callback, sign-out)
-app.route("/", webAuthRoutes);
-
-// Upload page
-app.route("/", uploadRoutes);
-
-// Public list pages
-app.route("/", listPageRoutes);
-
-// Discovery & browse
-app.route("/", exploreRoutes);
-
-// /@username profile and gallery routes
-// Hono doesn't match literal @ in route patterns, so we use /:param
-// and check for the @ prefix in middleware.
-import { handleUserGalleryRequest } from "./routes/gallery";
-app.all("/:profile", async (c, next) => {
-  if (c.req.param("profile").startsWith("@")) return handleUserGalleryRequest(c);
-  await next();
-});
-app.all("/:profile/*", async (c, next) => {
-  if (c.req.param("profile").startsWith("@")) return handleUserGalleryRequest(c);
-  await next();
-});
-
-// Other gallery routes (shares, API endpoints)
-app.route("/", galleryRoutes);
-
-// Landing page (must be last — catches /)
-app.route("/", landingRoutes);
 
 export default app;

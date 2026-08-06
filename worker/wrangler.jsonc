@@ -11,14 +11,10 @@
   "d1_databases": [
     { "binding": "SOCIAL_DB", "database_name": "astra-social", "database_id": "158a56c8-6f2b-48af-854e-a83eccf01346" }
   ],
+  // Downloads-only since the 2026-08 cutover: the apex DNS record points at
+  // the daemon's tunnel; this zone route intercepts just /downloads/*.
+  // (KV/D1 bindings above are retained read-only per the decommission plan.)
   "routes": [
-    { "pattern": "astra.gallery", "custom_domain": true }
-  ],
-  // Secrets (set via `wrangler secret put`):
-  //   CLERK_SECRET_KEY - Clerk secret for JWT verification
-  //   CLERK_PUBLISHABLE_KEY - Clerk publishable key
-  //   API_TOKEN_SECRET - HMAC secret for signing API tokens
-  //   R2_ACCESS_KEY_ID - R2 API token access key (for presigned URLs)
-  //   R2_SECRET_ACCESS_KEY - R2 API token secret key (for presigned URLs)
-  //   R2_ENDPOINT - R2 S3-compatible endpoint URL
+    { "pattern": "astra.gallery/downloads/*", "zone_name": "astra.gallery" }
+  ]
 }
