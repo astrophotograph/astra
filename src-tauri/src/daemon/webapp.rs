@@ -32,14 +32,21 @@ where
     S: Clone + Send + Sync + 'static,
 {
     let dist: Option<Arc<PathBuf>> = web_dist.map(Arc::new);
-    let (root, index, callback, file) =
-        (dist.clone(), dist.clone(), dist.clone(), dist);
+    let (root, explore, index, callback, file) =
+        (dist.clone(), dist.clone(), dist.clone(), dist.clone(), dist);
     Router::new()
         .route(
             "/",
             get(move || {
                 let dist = root.clone();
                 async move { serve_landing(dist.as_deref()).await }
+            }),
+        )
+        .route(
+            "/explore",
+            get(move || {
+                let dist = explore.clone();
+                async move { serve_explore(dist.as_deref()).await }
             }),
         )
         .route(
@@ -79,6 +86,17 @@ async fn serve_landing(dist: Option<&PathBuf>) -> Response {
     match tokio::fs::read(dist.join("landing.html")).await {
         Ok(bytes) => file_response(bytes, "text/html; charset=utf-8", "no-cache"),
         Err(_) => Redirect::temporary("/app").into_response(),
+    }
+}
+
+/// The public gallery directory at `/explore` (`explore.html`, shipped in
+/// the web bundle like the landing). A bundle built before the page existed
+/// falls back to the landing's community strip.
+async fn serve_explore(dist: Option<&PathBuf>) -> Response {
+    let Some(dist) = dist else { return not_found() };
+    match tokio::fs::read(dist.join("explore.html")).await {
+        Ok(bytes) => file_response(bytes, "text/html; charset=utf-8", "no-cache"),
+        Err(_) => Redirect::temporary("/#recent").into_response(),
     }
 }
 

@@ -215,13 +215,18 @@ pub struct RecentGallery {
 /// first. Unlisted galleries never appear (their URL is the only capability),
 /// and a gallery whose owner has no username is skipped — its `@handle` link
 /// would 404. `limit` caps the strip.
-pub fn list_recent_public_core(db: &DbPool, limit: i64) -> Result<Vec<RecentGallery>, String> {
+pub fn list_recent_public_core(
+    db: &DbPool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<RecentGallery>, String> {
     let mut conn = db.get().map_err(|e| e.to_string())?;
 
     let records: Vec<PublishedCollection> = published_collections::table
         .filter(published_collections::visibility.eq(PublishVisibility::Public.as_str()))
         .order(published_collections::published_at.desc())
         .limit(limit)
+        .offset(offset)
         .load(&mut conn)
         .map_err(|e| e.to_string())?;
 
@@ -560,7 +565,7 @@ mod tests {
             .unwrap();
         drop(conn);
 
-        let recent = list_recent_public_core(&db, 10).unwrap();
+        let recent = list_recent_public_core(&db, 10, 0).unwrap();
         // Both public galleries, unlisted excluded, newest (bob) first.
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].username, "bobh");
@@ -576,8 +581,11 @@ mod tests {
             Some(format!("/@aliceh/andromeda/thumbs/{}.jpg", img.id).as_str())
         );
 
-        // The limit caps the strip.
-        assert_eq!(list_recent_public_core(&db, 1).unwrap().len(), 1);
+        // The limit caps the strip; offset pages past newer entries.
+        assert_eq!(list_recent_public_core(&db, 1, 0).unwrap().len(), 1);
+        let page2 = list_recent_public_core(&db, 10, 1).unwrap();
+        assert_eq!(page2.len(), 1);
+        assert_eq!(page2[0].username, "aliceh");
     }
 
     #[test]

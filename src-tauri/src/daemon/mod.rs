@@ -45,7 +45,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -305,14 +305,27 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         .with_state(state)
 }
 
+#[derive(serde::Deserialize)]
+struct RecentGalleriesParams {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
 /// Public discovery: the most recent public galleries, feeding the landing
-/// page's community strip. No auth — it only ever exposes already-public
-/// galleries, and never unlisted ones.
-async fn recent_galleries(State(state): State<Arc<DaemonState>>) -> Response {
+/// page's community strip and the `/explore` directory. No auth — it only
+/// ever exposes already-public galleries, and never unlisted ones.
+/// `limit` (default 12, max 48) and `offset` paginate newest-first.
+async fn recent_galleries(
+    State(state): State<Arc<DaemonState>>,
+    Query(params): Query<RecentGalleriesParams>,
+) -> Response {
+    let limit = params.limit.unwrap_or(12).clamp(1, 48);
+    let offset = params.offset.unwrap_or(0).max(0);
     let db = state.db.clone();
-    let result =
-        tokio::task::spawn_blocking(move || crate::commands::publish::list_recent_public_core(&db, 12))
-            .await;
+    let result = tokio::task::spawn_blocking(move || {
+        crate::commands::publish::list_recent_public_core(&db, limit, offset)
+    })
+    .await;
     match result {
         Ok(Ok(items)) => {
             let mut response = Json(items).into_response();
