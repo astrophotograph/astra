@@ -307,6 +307,10 @@ export const imageApi = {
   regeneratePreview: (id: string, bgPercent?: number, sigma?: number) =>
     invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id, bgPercent, sigma }),
 
+  /** Binary payload for the WebGL live-stretch preview (desktop only). */
+  getStretchData: (id: string, maxDim?: number) =>
+    invoke<ArrayBuffer>("get_stretch_data", { id, maxDim }),
+
   bulkRegeneratePreviews: (imageIds: string[], bgPercent?: number, sigma?: number) =>
     invoke<{ total: number; succeeded: number; failed: number }>("bulk_regenerate_previews", { imageIds, bgPercent, sigma }),
 

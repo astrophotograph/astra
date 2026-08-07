@@ -7,6 +7,8 @@
 //! maintained there. This module keeps astra's original call-site API:
 //! [`StretchParams`] and [`generate_preview`] for FITS → JPEG previews.
 
+pub mod display;
+
 use std::path::Path;
 
 use processinator::{fits_to_image, PipelineConfig, StretchAlgorithm};

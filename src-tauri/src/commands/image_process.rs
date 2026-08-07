@@ -538,6 +538,55 @@ pub async fn regenerate_preview(
     })
 }
 
+/// Pre-stretch float data + statistics for the WebGL live-stretch preview.
+///
+/// Returns the raw binary payload built by `stretch::display` (JSON header,
+/// reference-channel histogram, planar f32 pixels) as an ArrayBuffer —
+/// no JSON serialization of pixel data. The frontend uploads the pixels to
+/// a GL texture once and recomputes the stretch per slider change; only
+/// Apply (`regenerate_preview`) runs the Rust pipeline again.
+#[tauri::command]
+pub async fn get_stretch_data(
+    state: State<'_, AppState>,
+    id: String,
+    max_dim: Option<u32>,
+) -> Result<tauri::ipc::Response, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = repository::get_image_by_id(&mut conn, &id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Image not found: {}", id))?;
+
+    let fits_path = image
+        .fits_url
+        .as_ref()
+        .or_else(|| {
+            image.url.as_ref().filter(|u| {
+                let lower = u.to_lowercase();
+                lower.ends_with(".fit") || lower.ends_with(".fits")
+            })
+        })
+        .ok_or("No FITS file available for this image")?
+        .clone();
+
+    if !Path::new(&fits_path).exists() {
+        return Err(format!("FITS file not found: {}", fits_path));
+    }
+
+    let payload = tokio::task::spawn_blocking(move || {
+        // Same pipeline stages as the Apply path (regenerate_preview):
+        // gradient removal + autocrop on, so the preview matches the JPEG
+        crate::stretch::display::build_stretch_payload(
+            Path::new(&fits_path),
+            &crate::stretch::StretchParams::default(),
+            max_dim.unwrap_or(4096).clamp(512, 8192),
+        )
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))??;
+
+    Ok(tauri::ipc::Response::new(payload))
+}
+
 /// Bulk regenerate previews for multiple images with pipelined I/O.
 ///
 /// Processes images concurrently: reads the next FITS while stretching the current one.

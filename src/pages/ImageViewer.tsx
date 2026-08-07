@@ -26,6 +26,7 @@ import {
   type ProcessImageResponse,
 } from "@/lib/tauri/commands";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
+import { StretchPreview } from "@/components/StretchPreview";
 import { useSettings } from "@/hooks/useSettings";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,7 @@ import {
   MoreHorizontal,
   RefreshCw,
   Save,
+  SlidersHorizontal,
   Sparkles,
   Star,
   Tag,
@@ -141,6 +143,7 @@ export default function ImageViewerPage() {
   const [skymapExpanded, setSkymapExpanded] = useState(false);
   const [processingDialogOpen, setProcessingDialogOpen] = useState(false);
   const [detailsPanelOpen, setDetailsPanelOpen] = useState(true);
+  const [liveStretch, setLiveStretch] = useState(false);
 
   // Zoom and pan state
   const [zoom, setZoom] = useState(1);
@@ -663,6 +666,11 @@ export default function ImageViewerPage() {
   }
 
   const tags = image.tags ? image.tags.split(",").map((t) => t.trim()).filter(Boolean) : [];
+  const hasFits = !!(
+    image.fits_url ||
+    image.url?.toLowerCase().endsWith(".fit") ||
+    image.url?.toLowerCase().endsWith(".fits")
+  );
 
   return (
     <div className="space-y-6">
@@ -762,6 +770,17 @@ export default function ImageViewerPage() {
               Process
             </Button>
           )}
+          {isTauri() && hasFits && (
+            <Button
+              variant={liveStretch ? "default" : "outline"}
+              size="sm"
+              onClick={() => setLiveStretch((v) => !v)}
+              title="Adjust stretch parameters live (GPU preview)"
+            >
+              <SlidersHorizontal className="w-4 h-4 mr-2" />
+              Stretch
+            </Button>
+          )}
           {!isEditing && (
             <Button variant="outline" size="sm" onClick={handleStartEdit}>
               <Edit className="w-4 h-4 mr-2" />
@@ -819,6 +838,23 @@ export default function ImageViewerPage() {
       <div className="grid lg:grid-cols-3 gap-6 relative">
         {/* Image Display */}
         <div className={`${detailsPanelOpen ? "lg:col-span-2" : "lg:col-span-3"} space-y-2 transition-all`}>
+          {liveStretch ? (
+            <StretchPreview
+              imageId={image.id}
+              initialBgPercent={defaultStretch.bgPercent}
+              initialSigma={defaultStretch.sigma}
+              isApplying={isRegenerating}
+              onApply={async (bg, sigma) => {
+                await handleRegeneratePreview(bg, sigma);
+                setLiveStretch(false);
+              }}
+              onCancel={() => setLiveStretch(false)}
+              onUnavailable={(reason) => {
+                toast.error(`Live stretch unavailable: ${reason}`);
+                setLiveStretch(false);
+              }}
+            />
+          ) : (
           <div
             ref={imageContainerRef}
             className="rounded-lg overflow-hidden bg-muted relative"
@@ -989,6 +1025,7 @@ export default function ImageViewerPage() {
               </div>
             )}
           </div>
+          )}
         </div>
 
         {/* Panel Toggle */}

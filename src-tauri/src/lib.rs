@@ -323,6 +323,7 @@ pub fn run() {
             commands::get_processing_defaults,
             commands::regenerate_preview,
             commands::bulk_regenerate_previews,
+            commands::get_stretch_data,
             commands::get_unique_tags,
             commands::get_unique_cameras,
             commands::check_source_health,
