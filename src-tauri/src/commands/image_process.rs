@@ -400,39 +400,7 @@ pub fn classify_target_type(object_name: String) -> Result<TargetInfo, String> {
 /// Get default processing parameters for a target type
 #[tauri::command]
 pub fn get_processing_defaults(target_type: String) -> Result<ProcessingParams, String> {
-    let mut params = ProcessingParams::default();
-
-    match target_type.as_str() {
-        "emission_nebula" => {
-            params.stretch_factor = 0.18;
-            params.star_reduction = true;
-        }
-        "reflection_nebula" => {
-            params.stretch_factor = 0.15;
-        }
-        "planetary_nebula" => {
-            params.stretch_factor = 0.20;
-        }
-        "galaxy" => {
-            params.stretch_factor = 0.12;
-        }
-        "globular_cluster" => {
-            params.stretch_factor = 0.10;
-        }
-        "open_cluster" => {
-            params.stretch_factor = 0.08;
-        }
-        "star_field" => {
-            params.stretch_factor = 0.05;
-            params.background_removal = false;
-        }
-        _ => {
-            // Use defaults for unknown
-        }
-    }
-
-    params.target_type = target_type;
-    Ok(params)
+    Ok(crate::processing::processing_defaults(&target_type))
 }
 
 /// Regenerate preview JPEG and thumbnail for a FITS image

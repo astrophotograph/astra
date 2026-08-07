@@ -249,6 +249,7 @@ mod tests {
             oidc: Some(Arc::new(verifier())),
             limits: Default::default(),
             session_key: TEST_KEY,
+            processing: Default::default(),
         });
         (state, tmp)
     }

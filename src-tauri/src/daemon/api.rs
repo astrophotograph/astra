@@ -61,7 +61,7 @@ struct PageOut<T> {
 #[derive(Debug, Serialize)]
 struct CollectionDetail {
     collection: Collection,
-    images: Vec<Image>,
+    images: Vec<ImageOut>,
 }
 
 pub(crate) fn not_found() -> Response {
@@ -88,6 +88,26 @@ pub(crate) fn strip_thumbnail(mut image: Image) -> Image {
     image
 }
 
+/// Image row plus server-truth flags the browser can't derive itself.
+#[derive(Debug, Serialize)]
+pub(crate) struct ImageOut {
+    #[serde(flatten)]
+    image: Image,
+    /// Whether `/api/images/{id}/process` can run on this image (a FITS
+    /// asset exists in the caller's volume). Gates the web Process action.
+    processable: bool,
+}
+
+/// API output shape for an image row: legacy thumbnail stripped, server
+/// flags attached.
+pub(crate) fn image_out(image: Image) -> ImageOut {
+    let processable = super::process::processable(&image);
+    ImageOut {
+        image: strip_thumbnail(image),
+        processable,
+    }
+}
+
 pub async fn list_images(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
@@ -104,11 +124,11 @@ pub async fn list_images(
     let limit = page.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
     let offset = page.offset.unwrap_or(0);
     let total = all.len();
-    let items: Vec<Image> = all
+    let items: Vec<ImageOut> = all
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(strip_thumbnail)
+        .map(image_out)
         .collect();
 
     Json(PageOut {
@@ -128,7 +148,7 @@ pub async fn get_image(
     let db = state.db.clone();
     let user_id = user.user_id.clone();
     match tokio::task::spawn_blocking(move || get_image_core(&db, &user_id, &id)).await {
-        Ok(Ok(Some(image))) => Json(strip_thumbnail(image)).into_response(),
+        Ok(Ok(Some(image))) => Json(image_out(image)).into_response(),
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => internal("get_image", e),
         Err(e) => internal("get_image task", e.to_string()),
@@ -170,7 +190,7 @@ pub async fn get_collection(
     match result {
         Ok(Ok(Some((collection, images)))) => Json(CollectionDetail {
             collection,
-            images: images.into_iter().map(strip_thumbnail).collect(),
+            images: images.into_iter().map(image_out).collect(),
         })
         .into_response(),
         Ok(Ok(None)) => not_found(),
@@ -294,7 +314,7 @@ pub async fn target_search(
     .await;
     match result {
         Ok(Ok(images)) => {
-            Json(images.into_iter().map(strip_thumbnail).collect::<Vec<_>>()).into_response()
+            Json(images.into_iter().map(image_out).collect::<Vec<_>>()).into_response()
         }
         Ok(Err(e)) => internal("target_search", e),
         Err(e) => internal("target_search task", e.to_string()),
@@ -314,7 +334,7 @@ pub async fn target_images(
     .await;
     match result {
         Ok(Ok(images)) => {
-            Json(images.into_iter().map(strip_thumbnail).collect::<Vec<_>>()).into_response()
+            Json(images.into_iter().map(image_out).collect::<Vec<_>>()).into_response()
         }
         Ok(Err(e)) => internal("target_images", e),
         Err(e) => internal("target_images task", e.to_string()),
@@ -423,8 +443,14 @@ pub async fn image_preview(
     serve_variant(state, user, id, Quality::Preview, headers).await
 }
 
-fn etag_for(blob_id: &str) -> String {
-    format!("\"{blob_id}\"")
+/// Content-addressed blob id plus the row's update stamp: changes when the
+/// bytes change *or* when processing replaces the served variants.
+fn etag_for(image: &crate::db::models::Image) -> String {
+    format!(
+        "\"{}-{}\"",
+        image.blob_id.as_deref().unwrap_or(""),
+        image.updated_at.and_utc().timestamp_micros()
+    )
 }
 
 fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
@@ -474,7 +500,7 @@ pub(crate) async fn variant_response(
     req_headers: &HeaderMap,
     cache_control: &'static str,
 ) -> Response {
-    let etag = image.blob_id.as_deref().map(etag_for);
+    let etag = image.blob_id.as_ref().map(|_| etag_for(&image));
     if let Some(etag) = &etag {
         if if_none_match_hits(req_headers, etag) {
             let mut response = StatusCode::NOT_MODIFIED.into_response();
@@ -629,6 +655,7 @@ mod tests {
             oidc: None,
             limits: Default::default(),
             session_key: [7u8; 32],
+            processing: Default::default(),
         });
         (state, tmp, alice_token, bob_token, image)
     }

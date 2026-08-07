@@ -411,6 +411,7 @@ mod tests {
             oidc: with_oidc.then(|| Arc::new(verifier())),
             limits: Default::default(),
             session_key: [7u8; 32],
+            processing: Default::default(),
         });
         (state, tmp)
     }

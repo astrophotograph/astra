@@ -128,6 +128,9 @@ export interface Image {
   updated_at: string;
   thumbnail: string | null;
   fits_url: string | null;
+  /** Server-truth flag from the daemon API: a processable FITS asset
+   *  exists server-side. Absent on desktop (use local fits_url checks). */
+  processable?: boolean;
 }
 
 export interface CreateImageInput {

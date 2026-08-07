@@ -429,7 +429,8 @@ export function ProcessingDialog({
               onValueChange={(v) => setNoiseReduction(v[0] / 100)}
             />
             <p className="text-xs text-muted-foreground">
-              Light Gaussian blur to reduce noise (may soften details)
+              Reduce noise — wavelet denoise on the server, Gaussian blur on
+              desktop (may soften details)
             </p>
           </div>
         </div>

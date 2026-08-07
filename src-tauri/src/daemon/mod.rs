@@ -31,6 +31,7 @@
 pub mod api;
 pub mod api_write;
 pub mod auth;
+pub mod process;
 pub mod webapp;
 pub mod gallery;
 pub mod ingest;
@@ -110,6 +111,8 @@ pub struct DaemonState {
     pub limits: ingest::IngestLimits,
     /// HMAC key for browser session cookies ({data_dir}/session-key).
     pub session_key: [u8; 32],
+    /// Per-user in-flight image-processing registry (cap: 1 per user).
+    pub processing: process::ProcessingLocks,
 }
 
 impl DaemonState {
@@ -209,6 +212,12 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         )
         .route("/images/{id}/thumbnail", get(api::image_thumbnail))
         .route("/images/{id}/preview", get(api::image_preview))
+        .route(
+            "/images/{id}/process",
+            axum::routing::post(process::process_image),
+        )
+        .route("/processing/defaults", get(process::processing_defaults))
+        .route("/processing/classify", get(process::classify_target))
         .route(
             "/collections",
             get(api::list_collections).post(api_write::create_collection),
@@ -487,6 +496,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         oidc,
         limits,
         session_key,
+        processing: Default::default(),
     })
 }
 

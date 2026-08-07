@@ -127,9 +127,13 @@ function splitId(input: unknown): { id: string; body: Record<string, unknown> } 
   return { id, body };
 }
 
-/** The API strips the legacy base64 thumbnail; point at the bytes endpoint. */
+/** The API strips the legacy base64 thumbnail; point at the bytes endpoint.
+ *  The URL is versioned on the row's update stamp so server-side processing
+ *  (which bumps `updated_at` when it replaces the variants) busts the
+ *  browser cache. */
 function webThumbnail(image: Image): Image {
-  return { ...image, thumbnail: `/api/images/${image.id}/thumbnail` };
+  const v = encodeURIComponent(image.updated_at ?? "");
+  return { ...image, thumbnail: `/api/images/${image.id}/thumbnail?v=${v}` };
 }
 
 interface CollectionDetail {
@@ -266,8 +270,43 @@ const WEB_ROUTES = {
   },
   remove_image_from_collection: (a: Args) =>
     deleteBool(`/api/collections/${a.collectionId}/images/${a.imageId}`),
-  get_image_data: (a: Args) => Promise.resolve(`/api/images/${a.id}/preview`),
-  get_image_thumbnail: (a: Args) => Promise.resolve(`/api/images/${a.id}/thumbnail`),
+  get_image_data: async (a: Args) => {
+    // Version the URL on the row's update stamp (see webThumbnail) — one
+    // extra row fetch, and processing-refreshed bytes load immediately
+    const image = await jsonOr<Image, null>("GET", `/api/images/${a.id}`, null);
+    const v = encodeURIComponent(image?.updated_at ?? "");
+    return `/api/images/${a.id}/preview?v=${v}`;
+  },
+  get_image_thumbnail: async (a: Args) => {
+    const image = await jsonOr<Image, null>("GET", `/api/images/${a.id}`, null);
+    const v = encodeURIComponent(image?.updated_at ?? "");
+    return `/api/images/${a.id}/thumbnail?v=${v}`;
+  },
+
+  // ---- image processing (native pipeline on the daemon) -----------------
+  process_fits_image: async (a: Args) => {
+    const { id, ...params } = a.input as { id: string } & Record<string, unknown>;
+    const result = await json<{
+      success: boolean;
+      targetType: string;
+      processingTime: number;
+      processingParams: Record<string, unknown>;
+    }>("POST", `/api/images/${id}/process`, params);
+    // Desktop shape: the daemon has no local output paths — the "output"
+    // is this image's own preview endpoint, freshly re-variant-ed
+    return {
+      success: result.success,
+      outputFitsPath: "",
+      outputPreviewPath: `/api/images/${id}/preview`,
+      targetType: result.targetType,
+      processingParams: result.processingParams,
+      processingTime: result.processingTime,
+    };
+  },
+  classify_target_type: (a: Args) =>
+    json("GET", `/api/processing/classify?name=${encodeURIComponent(String(a.objectName))}`),
+  get_processing_defaults: (a: Args) =>
+    json("GET", `/api/processing/defaults?targetType=${encodeURIComponent(String(a.targetType))}`),
 
   // ---- schedules ----------------------------------------------------------
   get_schedules: () => json("GET", "/api/schedules"),
@@ -375,6 +414,9 @@ type InScopeCommand =
   | "remove_image_from_collection"
   | "get_image_data"
   | "get_image_thumbnail"
+  | "process_fits_image"
+  | "classify_target_type"
+  | "get_processing_defaults"
   | "get_schedules"
   | "get_active_schedule"
   | "get_active_schedules"

@@ -754,14 +754,14 @@ export default function ImageViewerPage() {
               )}
             </Button>
           )}
-          {developerMode && isTauri() && (
+          {(isTauri() ? developerMode : !!image.processable) && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => setProcessingDialogOpen(true)}
-              disabled={!image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')}
+              disabled={isTauri() && !hasFits}
               title={
-                !image?.fits_url && !image?.url?.toLowerCase().endsWith('.fit') && !image?.url?.toLowerCase().endsWith('.fits')
+                isTauri() && !hasFits
                   ? "No FITS file available for processing"
                   : "Process image with stretch and enhancements"
               }
@@ -1540,6 +1540,13 @@ export default function ImageViewerPage() {
         onProcess={(_result: ProcessImageResponse) => {
           // Refresh the image data to get updated metadata
           refetch();
+          // Server-side processing replaces THIS image's preview variants
+          // (desktop writes a sibling into the Processed collection instead)
+          if (!isTauri()) {
+            setImageDataUrl(null);
+            setImageVersion((v) => v + 1);
+            queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+          }
         }}
       />
     </div>

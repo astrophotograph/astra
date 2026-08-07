@@ -437,6 +437,7 @@ mod tests {
             oidc: None,
             limits: Default::default(),
             session_key: [7u8; 32],
+            processing: Default::default(),
         });
         (state, tmp)
     }
