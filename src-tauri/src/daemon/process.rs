@@ -167,6 +167,20 @@ pub async fn process_image(
 
     // Fetch FITS bytes, run the pipeline, and store the processed variants
     // in one blocking task (pipeline is seconds of CPU)
+    enum PipelineError {
+        /// The fetch came back with non-FITS bytes: the original is an
+        /// external ref whose source path isn't reachable from this host,
+        /// so HoardFS substituted the cached JPEG variant (the right call
+        /// for serving, useless for processing).
+        SourceUnavailable,
+        Other(String),
+    }
+    impl From<String> for PipelineError {
+        fn from(e: String) -> Self {
+            Self::Other(e)
+        }
+    }
+
     let hfs_arc = state.hoardfs.clone();
     let rt = tokio::runtime::Handle::current();
     let volume = tenancy::volume_name(&user.user_id);
@@ -180,8 +194,14 @@ pub async fn process_image(
             .block_on(hfs.get_file(&volume, &path_for_task))
             .map_err(|e| format!("FITS fetch {path_for_task}: {e}"))?;
 
+        // Every FITS file begins with a "SIMPLE" card; anything else means
+        // we got the variant fallback, not the original
+        if !bytes.starts_with(b"SIMPLE") {
+            return Err(PipelineError::SourceUnavailable);
+        }
+
         let processed = processing::process_fits_bytes(
-            &bytes,
+            bytes,
             &params_for_task,
             object_name.as_deref(),
         )?;
@@ -203,13 +223,26 @@ pub async fn process_image(
         ))
         .map_err(|e| format!("store thumbnail variant: {e}"))?;
 
-        Ok::<_, String>(processed)
+        Ok::<_, PipelineError>(processed)
     })
     .await;
 
     let processed = match result {
         Ok(Ok(processed)) => processed,
-        Ok(Err(e)) => return internal("process pipeline", e),
+        Ok(Err(PipelineError::SourceUnavailable)) => {
+            log::warn!(
+                "process {id} for {}: original FITS at {hfs_path} unreachable from this host",
+                user.user_id
+            );
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "the original FITS file isn't reachable from the server, only its cached preview; processing needs the original"
+                })),
+            )
+                .into_response();
+        }
+        Ok(Err(PipelineError::Other(e))) => return internal("process pipeline", e),
         Err(e) => return internal("process pipeline task", e.to_string()),
     };
 
@@ -545,6 +578,67 @@ mod tests {
             StatusCode::UNPROCESSABLE_ENTITY,
             "{}",
             String::from_utf8_lossy(&body)
+        );
+    }
+
+    /// FITS-named file whose bytes aren't FITS — what HoardFS's
+    /// variant fallback serves when an external source path is offline.
+    /// Must come back 422 with a pointed message, not a parse-error 500.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn variant_fallback_bytes_are_422() {
+        let (state, _tmp, alice, _bob, _img) = seeded().await;
+        {
+            let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0];
+            let hfs_arc = state.hoardfs.clone();
+            tokio::task::block_in_place(|| {
+                let hfs = hfs_arc.lock().unwrap();
+                tokio::runtime::Handle::current()
+                    .block_on(hfs.put_file("user-alice", "/2026/offline.fits", &jpeg))
+                    .unwrap();
+            });
+        }
+        let fake = create_image_core(
+            &state.db,
+            "alice",
+            CreateImageInput {
+                collection_id: None,
+                filename: "offline.fits".to_string(),
+                url: None,
+                summary: None,
+                description: None,
+                content_type: Some("image/fits".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: Some(
+                    serde_json::json!({ "hoardfs": { "hfs_path": "/2026/offline.fits" } })
+                        .to_string(),
+                ),
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+
+        let router = crate::daemon::router(state.clone());
+        let (status, _, body) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/process", fake.id),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+        let err = json(&body);
+        assert!(
+            err["error"].as_str().unwrap().contains("original"),
+            "{err}"
         );
     }
 

@@ -263,14 +263,19 @@ fn pipeline_config(
 /// Process FITS bytes into preview + thumbnail JPEGs using the native
 /// pipeline. Auto-classification uses `object_name` when
 /// `params.target_type` is "auto".
+///
+/// Takes the bytes by value so a 150 MB source file isn't kept in memory
+/// while the pipeline runs — the buffer is released as soon as it lands
+/// in the temp file the FITS reader wants.
 pub fn process_fits_bytes(
-    fits_bytes: &[u8],
+    fits_bytes: Vec<u8>,
     params: &ProcessingParams,
     object_name: Option<&str>,
 ) -> Result<ProcessedImage, String> {
     // The FITS reader is path-based; stage the bytes in a temp file
     let tmp = std::env::temp_dir().join(format!("astra_process_{}.fits", uuid::Uuid::new_v4()));
-    std::fs::write(&tmp, fits_bytes).map_err(|e| format!("temp write: {e}"))?;
+    std::fs::write(&tmp, &fits_bytes).map_err(|e| format!("temp write: {e}"))?;
+    drop(fits_bytes);
     let result = process_fits_file(&tmp, params, object_name);
     let _ = std::fs::remove_file(&tmp);
     result
@@ -300,8 +305,10 @@ fn process_fits_file(
 
     let config = pipeline_config(params, stretch_factor, star_reduction);
     let data = read_fits(fits_path).map_err(|e| format!("FITS read: {e}"))?;
-    let processed = process(&data, &config);
+    let processed = process(data, &config);
     let rgb = to_dynamic_image(&processed).to_rgb8();
+    // The f64 planes are ~8x the u8 copy; release them before encoding
+    drop(processed);
 
     let (preview_jpeg, preview_dims) = encode_jpeg(&rgb, 1920, 85)?;
     let (thumbnail_jpeg, thumbnail_dims) = encode_jpeg(&rgb, 256, 70)?;
@@ -417,7 +424,7 @@ mod tests {
             star_reduction: true,
             ..ProcessingParams::default()
         };
-        let out = process_fits_bytes(&bytes, &params, Some("M42")).unwrap();
+        let out = process_fits_bytes(bytes, &params, Some("M42")).unwrap();
 
         assert!(!out.preview_jpeg.is_empty());
         assert!(!out.thumbnail_jpeg.is_empty());

@@ -67,7 +67,7 @@ impl VariantGenerator for FitsVariantGenerator {
         // Normalize + MTF stretch (no autocrop for variants, matching the
         // pre-processinator behavior)
         let stretched = stretch(
-            &data,
+            data,
             &StretchOptions {
                 algorithm: StretchAlgorithm::Mtf {
                     bg_percent: self.params.bg_percent,

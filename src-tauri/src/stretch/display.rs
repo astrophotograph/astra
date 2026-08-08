@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use processinator::{mtf_stats_channel, mtf_stats_linked, prepare, read_fits, Image, MtfStats};
+use processinator::{mtf_stats_channel, mtf_stats_linked, prepare, read_fits, MtfStats};
 use serde::Serialize;
 
 use super::StretchParams;
@@ -72,8 +72,7 @@ pub fn build_stretch_payload(
     let config = params.to_pipeline_config();
 
     let raw = read_fits(fits_path).map_err(|e| e.to_string())?;
-    let prepared = prepare(&raw, &config);
-    drop(raw);
+    let prepared = prepare(raw, &config);
 
     let (w, h, n) = (prepared.width(), prepared.height(), prepared.num_channels());
     let is_color = prepared.is_color();
