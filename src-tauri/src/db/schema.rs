@@ -168,6 +168,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    scan_roots (id) {
+        id -> Text,
+        user_id -> Text,
+        path -> Text,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     scanned_directories (id) {
         id -> Text,
         user_id -> Text,
@@ -231,6 +240,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     kith_subscriptions,
     observation_schedules,
     published_collections,
+    scan_roots,
     scanned_directories,
     simbad_cache,
     users,

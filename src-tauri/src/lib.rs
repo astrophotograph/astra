@@ -332,6 +332,11 @@ pub fn run() {
             commands::scan_unimported_files,
             commands::cancel_unimported_scan,
             commands::get_image_stats,
+            commands::get_scan_roots,
+            commands::add_scan_root,
+            commands::remove_scan_root,
+            commands::set_scan_roots,
+            commands::derive_scan_roots,
             commands::download_tetra3_db,
             // Target browser commands
             commands::get_targets,

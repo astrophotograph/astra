@@ -410,6 +410,28 @@ pub struct NewSimbadCache {
 }
 
 // ============================================================================
+// ScanRoot - User-curated roots for the unimported-files scan
+// ============================================================================
+
+#[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
+#[diesel(table_name = scan_roots)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct ScanRoot {
+    pub id: String,
+    pub user_id: String,
+    pub path: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Insertable)]
+#[diesel(table_name = scan_roots)]
+pub struct NewScanRoot {
+    pub id: String,
+    pub user_id: String,
+    pub path: String,
+}
+
+// ============================================================================
 // ScannedDirectory - Cache for tracking scanned directories
 // ============================================================================
 

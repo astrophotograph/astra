@@ -790,6 +790,64 @@ pub fn get_images_by_target(
 }
 
 // ============================================================================
+// ScanRoot Repository - User-curated unimported-scan roots
+// ============================================================================
+
+/// Get all scan roots for a user, ordered by path.
+pub fn get_scan_roots(conn: &mut SqliteConnection, user_id: &str) -> QueryResult<Vec<String>> {
+    scan_roots::table
+        .filter(scan_roots::user_id.eq(user_id))
+        .order(scan_roots::path.asc())
+        .select(scan_roots::path)
+        .load(conn)
+}
+
+/// Add a scan root. Idempotent — an existing (user_id, path) row is left as is.
+pub fn add_scan_root(conn: &mut SqliteConnection, user_id: &str, path: &str) -> QueryResult<()> {
+    let entry = NewScanRoot {
+        id: uuid::Uuid::new_v4().to_string(),
+        user_id: user_id.to_string(),
+        path: path.to_string(),
+    };
+    diesel::insert_into(scan_roots::table)
+        .values(&entry)
+        .on_conflict((scan_roots::user_id, scan_roots::path))
+        .do_nothing()
+        .execute(conn)?;
+    Ok(())
+}
+
+/// Remove a scan root by exact path.
+pub fn remove_scan_root(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    path: &str,
+) -> QueryResult<usize> {
+    diesel::delete(
+        scan_roots::table
+            .filter(scan_roots::user_id.eq(user_id))
+            .filter(scan_roots::path.eq(path)),
+    )
+    .execute(conn)
+}
+
+/// Replace the user's scan roots wholesale (transactional).
+pub fn set_scan_roots(
+    conn: &mut SqliteConnection,
+    user_id: &str,
+    paths: &[String],
+) -> QueryResult<()> {
+    conn.transaction(|conn| {
+        diesel::delete(scan_roots::table.filter(scan_roots::user_id.eq(user_id)))
+            .execute(conn)?;
+        for path in paths {
+            add_scan_root(conn, user_id, path)?;
+        }
+        Ok(())
+    })
+}
+
+// ============================================================================
 // ScannedDirectory Repository - Directory scan caching
 // ============================================================================
 

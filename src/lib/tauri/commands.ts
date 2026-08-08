@@ -353,6 +353,25 @@ export const imageApi = {
 
   cancelUnimportedScan: () => invoke<void>("cancel_unimported_scan"),
 
+  /** User-curated roots the unimported scan walks. All mutators return the
+   *  updated list. */
+  getScanRoots: () => invoke<string[]>("get_scan_roots"),
+
+  addScanRoot: (path: string) => invoke<string[]>("add_scan_root", { path }),
+
+  removeScanRoot: (path: string) =>
+    invoke<string[]>("remove_scan_root", { path }),
+
+  setScanRoots: (roots: string[]) =>
+    invoke<string[]>("set_scan_roots", { roots }),
+
+  /** Legacy 3-parents-up derivation over the current library — bootstrap
+   *  candidates for the curated list; persists nothing. */
+  deriveScanRoots: () =>
+    invoke<Array<{ path: string; contributingImages: number }>>(
+      "derive_scan_roots",
+    ),
+
   getImageStats: () =>
     invoke<{ totalImages: number; stackedImages: number }>("get_image_stats"),
 

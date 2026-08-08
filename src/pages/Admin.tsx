@@ -281,6 +281,12 @@ export default function AdminPage() {
   const [isScanningLibrary, setIsScanningLibrary] = useState(false);
   const [libraryScanResult, setLibraryScanResult] = useState<Awaited<ReturnType<typeof imageApi.scanUnimportedFiles>> | null>(null);
   const [imageStats, setImageStats] = useState<{ totalImages: number; stackedImages: number } | null>(null);
+  const [scanRoots, setScanRoots] = useState<string[]>([]);
+  const [derivedRoots, setDerivedRoots] = useState<Array<{
+    path: string;
+    contributingImages: number;
+  }> | null>(null);
+  const [isDerivingRoots, setIsDerivingRoots] = useState(false);
   const [scanScope, setScanScope] = useState<
     Array<{ path: string; contributingImages: number }>
   >([]);
@@ -457,6 +463,7 @@ export default function AdminPage() {
     autoImportApi.getStatus().then(setAutoImportStatus).catch(console.error);
     checkDownloadedDbs();
     imageApi.getImageStats().then(setImageStats).catch(console.error);
+    imageApi.getScanRoots().then(setScanRoots).catch(console.error);
   }, []);
 
   // Poll auto-import status and listen for events
@@ -1354,6 +1361,68 @@ export default function AdminPage() {
       await imageApi.cancelUnimportedScan();
     } catch (e) {
       console.error("Cancel failed:", e);
+    }
+  };
+
+  // Scan-root management
+  const addScanRootFromPicker = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: true,
+        title: "Choose a scan root",
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      let roots = scanRoots;
+      for (const p of paths) {
+        roots = await imageApi.addScanRoot(p);
+      }
+      setScanRoots(roots);
+    } catch (e) {
+      toast.error("Failed to add scan root: " + e);
+    }
+  };
+
+  const handleRemoveScanRoot = async (path: string) => {
+    try {
+      setScanRoots(await imageApi.removeScanRoot(path));
+    } catch (e) {
+      toast.error("Failed to remove scan root: " + e);
+    }
+  };
+
+  const deriveRoots = async () => {
+    setIsDerivingRoots(true);
+    try {
+      const candidates = await imageApi.deriveScanRoots();
+      setDerivedRoots(candidates);
+      if (candidates.length === 0) {
+        toast.info("No candidate roots derived — the library has no reachable image paths.");
+      }
+    } catch (e) {
+      toast.error("Derive failed: " + e);
+    } finally {
+      setIsDerivingRoots(false);
+    }
+  };
+
+  const addDerivedRoot = async (path: string) => {
+    try {
+      setScanRoots(await imageApi.addScanRoot(path));
+    } catch (e) {
+      toast.error("Failed to add scan root: " + e);
+    }
+  };
+
+  const addAllDerivedRoots = async () => {
+    if (!derivedRoots) return;
+    try {
+      const merged = [...new Set([...scanRoots, ...derivedRoots.map((d) => d.path)])];
+      setScanRoots(await imageApi.setScanRoots(merged));
+      setDerivedRoots(null);
+    } catch (e) {
+      toast.error("Failed to add scan roots: " + e);
     }
   };
 
@@ -2567,10 +2636,113 @@ export default function AdminPage() {
                   </div>
                 )}
 
+                {/* Curated scan roots — the explicit scope the scan walks */}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-medium">Scan roots</p>
+                    <div className="flex gap-2">
+                      <Button size="sm" variant="outline" onClick={addScanRootFromPicker}>
+                        <FolderPlus className="w-4 h-4 mr-2" />
+                        Add folder…
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={deriveRoots}
+                        disabled={isDerivingRoots}
+                      >
+                        <Wrench className="w-4 h-4 mr-2" />
+                        {isDerivingRoots ? "Deriving…" : "Auto-derive from library"}
+                      </Button>
+                    </div>
+                  </div>
+                  {scanRoots.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      No scan roots configured — the scan will find nothing. Add the
+                      folders where new captures land, or auto-derive candidates from
+                      your current library and curate the list.
+                    </p>
+                  ) : (
+                    <ul className="rounded-md border divide-y max-h-48 overflow-y-auto">
+                      {scanRoots.map((root) => (
+                        <li
+                          key={root}
+                          className="flex items-center justify-between gap-2 p-2"
+                        >
+                          <span className="truncate font-mono text-xs" title={root}>
+                            {root}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveScanRoot(root)}
+                          >
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {derivedRoots && derivedRoots.length > 0 && (
+                    <div className="rounded-md border bg-muted/30 p-2 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium">
+                          Derived candidates ({derivedRoots.length})
+                        </p>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" onClick={addAllDerivedRoots}>
+                            <Plus className="w-4 h-4 mr-1" />
+                            Add all
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDerivedRoots(null)}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                      <ul className="max-h-48 overflow-y-auto divide-y">
+                        {derivedRoots.map((c) => (
+                          <li
+                            key={c.path}
+                            className="flex items-center justify-between gap-2 py-1.5"
+                          >
+                            <span
+                              className="truncate font-mono text-[11px]"
+                              title={c.path}
+                            >
+                              {c.path}
+                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="text-[11px] text-muted-foreground tabular-nums">
+                                {c.contributingImages}{" "}
+                                {c.contributingImages === 1 ? "image" : "images"}
+                              </span>
+                              {scanRoots.includes(c.path) ? (
+                                <Check className="w-4 h-4 text-muted-foreground" />
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => addDerivedRoot(c.path)}
+                                >
+                                  <Plus className="w-4 h-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
                 <div className="flex flex-wrap gap-2">
                   <Button
                     onClick={() => runUnimportedScan(false)}
-                    disabled={isScanningLibrary}
+                    disabled={isScanningLibrary || scanRoots.length === 0}
                   >
                     <Search className="w-4 h-4 mr-2" />
                     {isScanningLibrary ? "Scanning..." : "Scan for Unimported Files"}
@@ -2578,7 +2750,7 @@ export default function AdminPage() {
                   <Button
                     variant="outline"
                     onClick={() => runUnimportedScan(true)}
-                    disabled={isScanningLibrary}
+                    disabled={isScanningLibrary || scanRoots.length === 0}
                   >
                     <Search className="w-4 h-4 mr-2" />
                     Rescan Stacks Only
@@ -2616,10 +2788,12 @@ export default function AdminPage() {
                                 title={d.path}
                               >
                                 <span className="truncate">{d.path}</span>
-                                <span className="shrink-0 text-muted-foreground tabular-nums">
-                                  {d.contributingImages}{" "}
-                                  {d.contributingImages === 1 ? "image" : "images"}
-                                </span>
+                                {d.contributingImages > 0 && (
+                                  <span className="shrink-0 text-muted-foreground tabular-nums">
+                                    {d.contributingImages}{" "}
+                                    {d.contributingImages === 1 ? "image" : "images"}
+                                  </span>
+                                )}
                               </li>
                             ))}
                           </ul>

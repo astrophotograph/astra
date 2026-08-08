@@ -116,6 +116,19 @@ mod tests {
         .collect()
     }
 
+    /// Pop migrations until the given version is no longer applied, so tests
+    /// stay valid as newer migrations land on top of the stack.
+    fn revert_through(conn: &mut SqliteConnection, version: &str) {
+        while conn
+            .applied_migrations()
+            .unwrap()
+            .iter()
+            .any(|v| v.to_string() == version)
+        {
+            conn.revert_last_migration(MIGRATIONS).unwrap();
+        }
+    }
+
     #[test]
     fn kith_social_migration_creates_tables() {
         let pool = test_support::test_pool();
@@ -131,11 +144,11 @@ mod tests {
         let pool = test_support::test_pool();
         let mut conn = pool.get().unwrap();
 
-        // Two kith migrations sit on top: canonical kind codec, then the
-        // table-creating kith_social underneath it.
-        conn.revert_last_migration(MIGRATIONS).unwrap();
+        // The canonical-kind codec migration doesn't drop tables; the
+        // table-creating kith_social migration beneath it does.
+        revert_through(&mut conn, "20260712000000");
         assert_eq!(kith_table_names(&mut conn).len(), 3);
-        conn.revert_last_migration(MIGRATIONS).unwrap();
+        revert_through(&mut conn, "20250112000000");
         assert!(kith_table_names(&mut conn).is_empty());
 
         // Re-applying on a database that already has every prior migration
@@ -153,7 +166,7 @@ mod tests {
 
         // Wind back the codec migration and plant legacy serde-JSON rows,
         // exactly as the pre-codec AstraKithStore wrote them.
-        conn.revert_last_migration(MIGRATIONS).unwrap();
+        revert_through(&mut conn, "20260712000000");
         conn.batch_execute(
             r#"
             INSERT INTO kith_edges (actor_id, target_kind, target_id, edge_kind, weight, metadata, created_at)
