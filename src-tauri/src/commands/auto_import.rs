@@ -593,7 +593,7 @@ fn run_scan_cycle(
                             solver,
                             config.plate_solve_api_key.as_deref(),
                             config.plate_solve_api_url.as_deref(),
-                            None, None, Some(120), None, None, None,
+                            None, None, Some(120), None, None, None, None,
                         ) {
                             Ok(result) if result.success => {
                                 log::info!("Plate solved {}: RA={:.4} Dec={:.4}", new_image.filename, result.center_ra, result.center_dec);

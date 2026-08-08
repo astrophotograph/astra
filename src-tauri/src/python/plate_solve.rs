@@ -54,6 +54,7 @@ pub struct CatalogObject {
 }
 
 /// Plate solve an image using the specified solver
+#[allow(clippy::too_many_arguments)]
 pub fn solve_image(
     image_path: &str,
     solver: &str,
@@ -65,6 +66,7 @@ pub fn solve_image(
     hint_ra: Option<f64>,
     hint_dec: Option<f64>,
     hint_radius: Option<f64>,
+    binary_path: Option<&str>,
 ) -> Result<PlateSolveResult, String> {
     Python::attach(|py| {
         // Import our module
@@ -128,6 +130,12 @@ pub fn solve_image(
             kwargs
                 .set_item("hint_radius", radius)
                 .map_err(|e| format!("Failed to set hint_radius: {}", e))?;
+        }
+
+        if let Some(binary) = binary_path {
+            kwargs
+                .set_item("binary_path", binary)
+                .map_err(|e| format!("Failed to set binary_path: {}", e))?;
         }
 
         // Call solve_image function

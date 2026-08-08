@@ -794,6 +794,21 @@ export interface PlateSolveInput {
   tetra3DbPath?: string;
   /** FOV estimate in degrees for tetra3 solver */
   fovEstimate?: number;
+  /** Ordered fallback chain; when present it replaces the single-solver
+   *  fields — each entry is tried in turn until one succeeds. */
+  solverChain?: SolverChainEntry[];
+}
+
+/** One self-describing entry in the solver fallback chain. */
+export interface SolverChainEntry {
+  solver: string;
+  apiKey?: string;
+  apiUrl?: string;
+  tetra3DbPath?: string;
+  /** Solver binary path (astap / solve-field), overriding PATH discovery */
+  binaryPath?: string;
+  /** Per-solver timeout in seconds */
+  timeout?: number;
 }
 
 export interface PlateSolveResult {
@@ -865,6 +880,13 @@ export const plateSolveApi = {
    */
   detectSolvers: () =>
     invoke<Record<string, SolverInfo>>("detect_plate_solvers"),
+
+  /**
+   * Run one solver attempt against a real image without persisting
+   * anything — the Settings "Test" button. Desktop only.
+   */
+  testSolver: (config: SolverChainEntry, imageId?: string) =>
+    invoke<PlateSolveResult>("test_plate_solver", { config, imageId }),
 
   /**
    * Extract plate solving hints from a FITS file's headers

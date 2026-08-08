@@ -61,6 +61,10 @@ import {
   Code,
   ToggleLeft,
   ToggleRight,
+  ChevronUp,
+  ChevronDown,
+  Play,
+  Loader2,
 } from "lucide-react";
 import {
   appApi,
@@ -79,6 +83,19 @@ import {
   type VerificationReport,
 } from "@/lib/tauri/commands";
 import { fetchMe, signOut, type SessionUser } from "@/lib/auth-web";
+import { plateSolveApi } from "@/lib/tauri/commands";
+import {
+  SOLVER_IDS,
+  SOLVER_LABELS,
+  buildChainEntry,
+  loadAstapPath,
+  loadSolveFieldPath,
+  loadSolverChain,
+  saveAstapPath,
+  saveSolveFieldPath,
+  saveSolverChain,
+  type SolverId,
+} from "@/lib/solver-config";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   parseHorizonFile,
@@ -433,6 +450,13 @@ export default function AdminPage() {
   const [tetra3DbPath, setTetra3DbPath] = useState(
     () => localStorage.getItem("tetra3_db_path") || "",
   );
+  const [solverChain, setSolverChain] = useState<SolverId[]>(loadSolverChain);
+  const [astapPath, setAstapPath] = useState(loadAstapPath);
+  const [solveFieldPath, setSolveFieldPath] = useState(loadSolveFieldPath);
+  const [testingSolver, setTestingSolver] = useState<SolverId | null>(null);
+  const [solverTestResults, setSolverTestResults] = useState<
+    Record<string, string>
+  >({});
   const [isDownloadingDb, setIsDownloadingDb] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<{
     label: string;
@@ -1316,6 +1340,50 @@ export default function AdminPage() {
     toast.success("Tetra3 database path saved");
   };
 
+  // Solver fallback chain
+  const updateSolverChain = (chain: SolverId[]) => {
+    setSolverChain(chain);
+    saveSolverChain(chain);
+  };
+
+  const moveChainEntry = (index: number, dir: -1 | 1) => {
+    const next = [...solverChain];
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    updateSolverChain(next);
+  };
+
+  const saveAstapPathField = () => {
+    saveAstapPath(astapPath.trim());
+    toast.success(astapPath.trim() ? "ASTAP path saved" : "ASTAP path cleared");
+  };
+
+  const saveSolveFieldPathField = () => {
+    saveSolveFieldPath(solveFieldPath.trim());
+    toast.success(
+      solveFieldPath.trim() ? "solve-field path saved" : "solve-field path cleared",
+    );
+  };
+
+  const testSolverConfig = async (solver: SolverId) => {
+    setTestingSolver(solver);
+    setSolverTestResults((prev) => ({ ...prev, [solver]: "" }));
+    try {
+      const result = await plateSolveApi.testSolver(buildChainEntry(solver, 120));
+      setSolverTestResults((prev) => ({
+        ...prev,
+        [solver]: result.success
+          ? `Solved: RA ${result.centerRa.toFixed(4)}°, Dec ${result.centerDec.toFixed(4)}° in ${result.solveTime.toFixed(1)}s`
+          : `Failed: ${result.errorMessage || "no solution"}`,
+      }));
+    } catch (e) {
+      setSolverTestResults((prev) => ({ ...prev, [solver]: `Error: ${e}` }));
+    } finally {
+      setTestingSolver(null);
+    }
+  };
+
   // Browse for tetra3 database file
   const browseTetra3Db = async () => {
     const selected = await open({
@@ -2039,6 +2107,168 @@ export default function AdminPage() {
                     "Requires ASTAP solver installed with star database."}
                 </p>
               </div>
+
+              {/* Fallback chain, binary paths, and per-solver testing */}
+              <Card className="border-dashed">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Wrench className="w-4 h-4" />
+                    Solver Fallback Chain
+                  </CardTitle>
+                  <CardDescription>
+                    Solvers are tried top to bottom until one succeeds. Leave
+                    empty to always use only the solver selected above.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {solverChain.length > 0 && (
+                    <ul className="rounded-md border divide-y">
+                      {solverChain.map((solver, index) => (
+                        <li
+                          key={solver}
+                          className="flex items-center justify-between gap-2 p-2"
+                        >
+                          <span className="text-sm">
+                            <span className="text-muted-foreground tabular-nums mr-2">
+                              {index + 1}.
+                            </span>
+                            {SOLVER_LABELS[solver]}
+                          </span>
+                          <span className="flex gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={index === 0}
+                              onClick={() => moveChainEntry(index, -1)}
+                            >
+                              <ChevronUp className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={index === solverChain.length - 1}
+                              onClick={() => moveChainEntry(index, 1)}
+                            >
+                              <ChevronDown className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                updateSolverChain(
+                                  solverChain.filter((_, i) => i !== index),
+                                )
+                              }
+                            >
+                              <X className="w-4 h-4" />
+                            </Button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {SOLVER_IDS.some((s) => !solverChain.includes(s)) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Add:</span>
+                      {SOLVER_IDS.filter((s) => !solverChain.includes(s)).map(
+                        (s) => (
+                          <Button
+                            key={s}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => updateSolverChain([...solverChain, s])}
+                          >
+                            <Plus className="w-4 h-4 mr-1" />
+                            {SOLVER_LABELS[s]}
+                          </Button>
+                        ),
+                      )}
+                    </div>
+                  )}
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label htmlFor="astap-path" className="text-xs">
+                        ASTAP binary path
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="astap-path"
+                          value={astapPath}
+                          onChange={(e) => setAstapPath(e.target.value)}
+                          placeholder="astap (found via PATH)"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={saveAstapPathField}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="solve-field-path" className="text-xs">
+                        solve-field binary path
+                      </Label>
+                      <div className="flex gap-2">
+                        <Input
+                          id="solve-field-path"
+                          value={solveFieldPath}
+                          onChange={(e) => setSolveFieldPath(e.target.value)}
+                          placeholder="solve-field (found via PATH)"
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={saveSolveFieldPathField}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs">
+                      Test a solver against your most recent image (nothing is
+                      saved)
+                    </Label>
+                    <div className="flex flex-wrap gap-2">
+                      {SOLVER_IDS.map((s) => (
+                        <Button
+                          key={s}
+                          variant="outline"
+                          size="sm"
+                          disabled={testingSolver !== null}
+                          onClick={() => testSolverConfig(s)}
+                        >
+                          {testingSolver === s ? (
+                            <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                          ) : (
+                            <Play className="w-4 h-4 mr-1" />
+                          )}
+                          {SOLVER_LABELS[s]}
+                        </Button>
+                      ))}
+                    </div>
+                    {Object.entries(solverTestResults)
+                      .filter(([, v]) => v)
+                      .map(([s, v]) => (
+                        <p
+                          key={s}
+                          className={`text-xs font-mono ${
+                            v.startsWith("Solved")
+                              ? "text-green-500"
+                              : "text-destructive"
+                          }`}
+                        >
+                          {SOLVER_LABELS[s as SolverId]}: {v}
+                        </p>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
 
               {plateSolveSolver === "tetra3" && (
                 <Card className="border-dashed">

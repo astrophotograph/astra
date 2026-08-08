@@ -26,6 +26,7 @@ import {
   type ProcessImageResponse,
 } from "@/lib/tauri/commands";
 import { queryObjectsInFovClient } from "@/lib/solve-annotations";
+import { buildChainEntries } from "@/lib/solver-config";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { StretchPreview } from "@/components/StretchPreview";
 import { useSettings } from "@/hooks/useSettings";
@@ -463,6 +464,9 @@ export default function ImageViewerPage() {
         hintDec: solveHints.hintDec,
         queryCatalogs: true,
         timeout: 300,
+        // Desktop: the configured fallback chain (Settings > Plate Solving)
+        // overrides the single solver above when present
+        solverChain: isTauri() ? buildChainEntries(300) : undefined,
       });
 
       if (result.success) {

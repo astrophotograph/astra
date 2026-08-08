@@ -44,6 +44,174 @@ pub struct PlateSolveInput {
     /// FOV estimate in degrees for tetra3 solver (horizontal field of view).
     /// If not specified, will be estimated from scale_lower/scale_upper and image dimensions.
     pub fov_estimate: Option<f64>,
+    /// Ordered fallback chain. When present (and non-empty) it replaces the
+    /// single-solver fields above: each entry is tried in turn until one
+    /// succeeds. Absent → the legacy single-solver behavior, unchanged.
+    pub solver_chain: Option<Vec<SolverChainEntry>>,
+}
+
+/// One entry in the solver fallback chain, fully self-describing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolverChainEntry {
+    /// "tetra3" | "nova" | "local" | "astap"
+    pub solver: String,
+    pub api_key: Option<String>,
+    pub api_url: Option<String>,
+    pub tetra3_db_path: Option<String>,
+    /// Solver binary path (astap / solve-field), overriding PATH discovery
+    pub binary_path: Option<String>,
+    /// Per-solver timeout in seconds
+    pub timeout: Option<i32>,
+}
+
+/// Everything a solver needs to know about the image being solved.
+pub struct SolveContext {
+    pub image_path: String,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub fov_estimate: Option<f64>,
+    pub scale_lower: Option<f64>,
+    pub scale_upper: Option<f64>,
+    pub hint_ra: Option<f64>,
+    pub hint_dec: Option<f64>,
+    pub hint_radius: Option<f64>,
+}
+
+/// A configured plate solver. New solver backends implement this and get
+/// chain dispatch and the Settings "Test" button for free.
+pub trait Solver {
+    fn label(&self) -> String;
+    fn attempt(&self, ctx: &SolveContext) -> Result<PlateSolveResult, String>;
+}
+
+/// Native tetra3 (pure Rust).
+struct Tetra3Solver {
+    db_path: String,
+    timeout: Option<i32>,
+}
+
+impl Solver for Tetra3Solver {
+    fn label(&self) -> String {
+        "tetra3".to_string()
+    }
+    fn attempt(&self, ctx: &SolveContext) -> Result<PlateSolveResult, String> {
+        solve_with_tetra3(
+            &ctx.image_path,
+            &self.db_path,
+            ctx.fov_estimate,
+            ctx.scale_lower,
+            ctx.scale_upper,
+            ctx.image_width,
+            ctx.image_height,
+            self.timeout.map(|t| (t as u64) * 1000),
+        )
+    }
+}
+
+/// nova / local (solve-field) / astap — all via the Python bridge, which
+/// shells out to the respective backend.
+struct PythonSolver {
+    kind: String,
+    api_key: Option<String>,
+    api_url: Option<String>,
+    binary_path: Option<String>,
+    timeout: Option<i32>,
+}
+
+impl Solver for PythonSolver {
+    fn label(&self) -> String {
+        self.kind.clone()
+    }
+    fn attempt(&self, ctx: &SolveContext) -> Result<PlateSolveResult, String> {
+        plate_solve::solve_image(
+            &ctx.image_path,
+            &self.kind,
+            self.api_key.as_deref(),
+            self.api_url.as_deref(),
+            ctx.scale_lower,
+            ctx.scale_upper,
+            self.timeout,
+            ctx.hint_ra,
+            ctx.hint_dec,
+            ctx.hint_radius,
+            self.binary_path.as_deref(),
+        )
+    }
+}
+
+/// Instantiate the solver a chain entry describes.
+pub fn build_solver(entry: &SolverChainEntry) -> Result<Box<dyn Solver + Send>, String> {
+    match entry.solver.as_str() {
+        "tetra3" => {
+            let db_path = entry.tetra3_db_path.clone().ok_or_else(|| {
+                "tetra3 solver requires a database path (tetra3DbPath). \
+                 Download or generate one in Settings > Plate Solving."
+                    .to_string()
+            })?;
+            Ok(Box::new(Tetra3Solver {
+                db_path,
+                timeout: entry.timeout,
+            }))
+        }
+        "nova" | "local" | "astap" => Ok(Box::new(PythonSolver {
+            kind: entry.solver.clone(),
+            api_key: entry.api_key.clone(),
+            api_url: entry.api_url.clone(),
+            binary_path: entry.binary_path.clone(),
+            timeout: entry.timeout,
+        })),
+        other => Err(format!(
+            "Unknown solver: {other}. Use 'tetra3', 'nova', 'local', or 'astap'."
+        )),
+    }
+}
+
+/// Try each solver in order; the first success wins. When every solver
+/// fails, the synthesized failed result aggregates each attempt's error so
+/// the failure metadata tells the whole story.
+pub fn run_solver_chain(
+    solvers: &[Box<dyn Solver + Send>],
+    ctx: &SolveContext,
+) -> PlateSolveResult {
+    let start = std::time::Instant::now();
+    let mut attempts: Vec<String> = Vec::new();
+    for solver in solvers {
+        match solver.attempt(ctx) {
+            Ok(result) if result.success => return result,
+            Ok(result) => attempts.push(format!(
+                "{}: {}",
+                solver.label(),
+                result
+                    .error_message
+                    .unwrap_or_else(|| "no solution".to_string())
+            )),
+            Err(e) => attempts.push(format!("{}: {e}", solver.label())),
+        }
+    }
+    PlateSolveResult {
+        success: false,
+        center_ra: 0.0,
+        center_dec: 0.0,
+        pixel_scale: 0.0,
+        rotation: 0.0,
+        width_deg: 0.0,
+        height_deg: 0.0,
+        image_width: ctx.image_width as i32,
+        image_height: ctx.image_height as i32,
+        solver: solvers
+            .iter()
+            .map(|s| s.label())
+            .collect::<Vec<_>>()
+            .join("+"),
+        solve_time: start.elapsed().as_secs_f64(),
+        error_message: Some(if attempts.is_empty() {
+            "no solvers configured".to_string()
+        } else {
+            attempts.join("; ")
+        }),
+        wcs: None,
+    }
 }
 
 /// Combined result from plate solving and catalog query
@@ -439,55 +607,46 @@ pub async fn plate_solve_image(
         return Err(format!("Image file not found: {}", file_path));
     }
 
-    // Plate solve the image — dispatch to tetra3 native solver or Python bridge
-    let solve_result = if input.solver == "tetra3" {
-        // Get image dimensions for tetra3 (try to read from the image file).
-        // The `image` crate doesn't support FITS, so we fall back to reading
-        // FITS dimensions via fitrs if the standard image read fails.
-        let (img_w, img_h) = ::image::image_dimensions(path)
-            .ok()
-            .or_else(|| {
-                // Try reading dimensions from FITS headers
-                read_fits_dimensions(path).ok()
-            })
-            .unwrap_or_else(|| {
-                log::warn!("Could not read image dimensions from file, using 0x0");
-                (0, 0)
-            });
+    // Image dimensions (needed by tetra3). The `image` crate doesn't support
+    // FITS, so fall back to reading FITS headers via fitrs.
+    let (img_w, img_h) = ::image::image_dimensions(path)
+        .ok()
+        .or_else(|| read_fits_dimensions(path).ok())
+        .unwrap_or_else(|| {
+            log::warn!("Could not read image dimensions from file, using 0x0");
+            (0, 0)
+        });
 
-        // Resolve tetra3 database path
-        let db_path = input.tetra3_db_path
-            .ok_or_else(|| "tetra3 solver requires a database path (tetra3DbPath). \
-                Generate one with the `generate_tetra3_db` binary (or tetra3's \
-                SolverDatabase::generate_from_gaia()) and \
-                save it as an .rkyv file.".to_string())?;
-
-        let timeout_ms = input.timeout.map(|t| (t as u64) * 1000);
-
-        solve_with_tetra3(
-            file_path,
-            &db_path,
-            input.fov_estimate,
-            input.scale_lower,
-            input.scale_upper,
-            img_w,
-            img_h,
-            timeout_ms,
-        )?
-    } else {
-        plate_solve::solve_image(
-            file_path,
-            &input.solver,
-            input.api_key.as_deref(),
-            input.api_url.as_deref(),
-            input.scale_lower,
-            input.scale_upper,
-            input.timeout,
-            input.hint_ra,
-            input.hint_dec,
-            input.hint_radius,
-        )?
+    let ctx = SolveContext {
+        image_path: file_path.clone(),
+        image_width: img_w,
+        image_height: img_h,
+        fov_estimate: input.fov_estimate,
+        scale_lower: input.scale_lower,
+        scale_upper: input.scale_upper,
+        hint_ra: input.hint_ra,
+        hint_dec: input.hint_dec,
+        hint_radius: input.hint_radius,
     };
+
+    // An explicit chain wins; otherwise the legacy single-solver fields
+    // become a one-entry chain (behavior unchanged).
+    let entries: Vec<SolverChainEntry> = match &input.solver_chain {
+        Some(chain) if !chain.is_empty() => chain.clone(),
+        _ => vec![SolverChainEntry {
+            solver: input.solver.clone(),
+            api_key: input.api_key.clone(),
+            api_url: input.api_url.clone(),
+            tetra3_db_path: input.tetra3_db_path.clone(),
+            binary_path: None,
+            timeout: input.timeout,
+        }],
+    };
+    let solvers = entries
+        .iter()
+        .map(build_solver)
+        .collect::<Result<Vec<_>, _>>()?;
+    let solve_result = run_solver_chain(&solvers, &ctx);
 
     let mut objects = Vec::new();
 
@@ -630,6 +789,58 @@ pub fn detect_plate_solvers() -> Result<std::collections::HashMap<String, Solver
     plate_solve::detect_solvers()
 }
 
+/// Run one solver attempt against a real image WITHOUT persisting anything —
+/// the Settings "Test" button. Uses the given image, or the most recent
+/// library image whose file is reachable on disk.
+#[tauri::command]
+pub async fn test_plate_solver(
+    state: State<'_, AppState>,
+    config: SolverChainEntry,
+    image_id: Option<String>,
+) -> Result<PlateSolveResult, String> {
+    let mut conn = state.db.get().map_err(|e| e.to_string())?;
+    let image = match image_id {
+        Some(id) => repository::get_image_by_id(&mut conn, &id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("Image not found: {id}"))?,
+        None => repository::get_images_by_user(&mut conn, &state.user_id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|img| {
+                img.url
+                    .as_deref()
+                    .is_some_and(|u| Path::new(u).exists())
+            })
+            .ok_or_else(|| {
+                "No library image with a reachable file to test against".to_string()
+            })?,
+    };
+    drop(conn);
+
+    let file_path = image
+        .url
+        .clone()
+        .ok_or_else(|| "Image has no file path".to_string())?;
+    let path = Path::new(&file_path);
+    let (img_w, img_h) = ::image::image_dimensions(path)
+        .ok()
+        .or_else(|| read_fits_dimensions(path).ok())
+        .unwrap_or((0, 0));
+
+    let ctx = SolveContext {
+        image_path: file_path,
+        image_width: img_w,
+        image_height: img_h,
+        fov_estimate: None,
+        scale_lower: None,
+        scale_upper: None,
+        hint_ra: None,
+        hint_dec: None,
+        hint_radius: None,
+    };
+    build_solver(&config)?.attempt(&ctx)
+}
+
 /// Extract plate solving hints from a FITS file's headers
 #[tauri::command]
 pub fn get_solve_hints(
@@ -674,4 +885,142 @@ pub fn query_sky_region(
         None,
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A scripted solver for chain-behavior tests.
+    struct FakeSolver {
+        name: &'static str,
+        outcome: Result<bool, String>,
+    }
+
+    impl Solver for FakeSolver {
+        fn label(&self) -> String {
+            self.name.to_string()
+        }
+        fn attempt(&self, ctx: &SolveContext) -> Result<PlateSolveResult, String> {
+            match &self.outcome {
+                Err(e) => Err(e.clone()),
+                Ok(success) => Ok(PlateSolveResult {
+                    success: *success,
+                    center_ra: 83.0,
+                    center_dec: -5.0,
+                    pixel_scale: 2.0,
+                    rotation: 0.0,
+                    width_deg: 1.0,
+                    height_deg: 0.5,
+                    image_width: ctx.image_width as i32,
+                    image_height: ctx.image_height as i32,
+                    solver: self.name.to_string(),
+                    solve_time: 0.1,
+                    error_message: (!success).then(|| "no match".to_string()),
+                    wcs: None,
+                }),
+            }
+        }
+    }
+
+    fn ctx() -> SolveContext {
+        SolveContext {
+            image_path: "/nonexistent.fits".to_string(),
+            image_width: 1920,
+            image_height: 1080,
+            fov_estimate: None,
+            scale_lower: None,
+            scale_upper: None,
+            hint_ra: None,
+            hint_dec: None,
+            hint_radius: None,
+        }
+    }
+
+    fn boxed(solvers: Vec<FakeSolver>) -> Vec<Box<dyn Solver + Send>> {
+        solvers
+            .into_iter()
+            .map(|s| Box::new(s) as Box<dyn Solver + Send>)
+            .collect()
+    }
+
+    #[test]
+    fn chain_stops_at_first_success() {
+        let solvers = boxed(vec![
+            FakeSolver { name: "a", outcome: Ok(true) },
+            FakeSolver { name: "b", outcome: Err("must not run".to_string()) },
+        ]);
+        let result = run_solver_chain(&solvers, &ctx());
+        assert!(result.success);
+        assert_eq!(result.solver, "a");
+    }
+
+    #[test]
+    fn chain_falls_through_failures_and_errors() {
+        let solvers = boxed(vec![
+            FakeSolver { name: "a", outcome: Ok(false) },
+            FakeSolver { name: "b", outcome: Err("binary not found".to_string()) },
+            FakeSolver { name: "c", outcome: Ok(true) },
+        ]);
+        let result = run_solver_chain(&solvers, &ctx());
+        assert!(result.success);
+        assert_eq!(result.solver, "c");
+    }
+
+    #[test]
+    fn chain_all_failed_aggregates_every_attempt() {
+        let solvers = boxed(vec![
+            FakeSolver { name: "a", outcome: Ok(false) },
+            FakeSolver { name: "b", outcome: Err("binary not found".to_string()) },
+        ]);
+        let result = run_solver_chain(&solvers, &ctx());
+        assert!(!result.success);
+        assert_eq!(result.solver, "a+b");
+        let msg = result.error_message.unwrap();
+        assert!(msg.contains("a: no match"));
+        assert!(msg.contains("b: binary not found"));
+    }
+
+    #[test]
+    fn empty_chain_reports_no_solvers() {
+        let result = run_solver_chain(&[], &ctx());
+        assert!(!result.success);
+        assert_eq!(result.error_message.unwrap(), "no solvers configured");
+    }
+
+    #[test]
+    fn build_solver_validates_config() {
+        // tetra3 without a database is a config error, not a runtime surprise
+        let entry = SolverChainEntry {
+            solver: "tetra3".to_string(),
+            api_key: None,
+            api_url: None,
+            tetra3_db_path: None,
+            binary_path: None,
+            timeout: None,
+        };
+        assert!(build_solver(&entry).is_err());
+
+        let entry = SolverChainEntry {
+            tetra3_db_path: Some("/db.bin".to_string()),
+            ..entry
+        };
+        assert_eq!(build_solver(&entry).unwrap().label(), "tetra3");
+
+        let entry = SolverChainEntry {
+            solver: "astap".to_string(),
+            api_key: None,
+            api_url: None,
+            tetra3_db_path: None,
+            binary_path: Some("/opt/astap/astap_cli".to_string()),
+            timeout: Some(60),
+        };
+        assert_eq!(build_solver(&entry).unwrap().label(), "astap");
+
+        let entry = SolverChainEntry {
+            solver: "wat".to_string(),
+            ..entry
+        };
+        assert!(build_solver(&entry).is_err());
+    }
 }

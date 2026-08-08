@@ -363,6 +363,7 @@ pub fn run() {
             commands::plate_solve_image,
             commands::query_sky_region,
             commands::detect_plate_solvers,
+            commands::test_plate_solver,
             commands::get_solve_hints,
             // Skymap commands
             commands::generate_skymap,

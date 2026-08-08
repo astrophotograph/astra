@@ -255,6 +255,7 @@ def solve_with_local(
     scale_lower: Optional[float] = None,
     scale_upper: Optional[float] = None,
     timeout: int = 120,
+    binary_path: Optional[str] = None,
 ) -> PlateSolveResult:
     """
     Plate solve using local solve-field (astrometry.net local install).
@@ -277,15 +278,16 @@ def solve_with_local(
     start_time = time.time()
 
     try:
-        # Check if solve-field is available
+        # Check if solve-field is available (configured path wins)
+        solver_bin = binary_path or "solve-field"
         try:
-            subprocess.run(["solve-field", "--version"], capture_output=True, check=True, timeout=5)
+            subprocess.run([solver_bin, "--version"], capture_output=True, check=True, timeout=5)
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
             return PlateSolveResult(
                 success=False,
                 solver="local",
                 solve_time=time.time() - start_time,
-                error_message="solve-field not found. Please install astrometry.net locally.",
+                error_message=f"{solver_bin} not found. Please install astrometry.net locally.",
             )
 
         # Create temp directory for output
@@ -294,7 +296,7 @@ def solve_with_local(
 
             # Build solve-field command
             cmd = [
-                "solve-field",
+                solver_bin,
                 "--overwrite",
                 "--no-plots",
                 "--cpulimit",
@@ -377,6 +379,7 @@ def solve_with_astap(
     scale_lower: Optional[float] = None,
     scale_upper: Optional[float] = None,
     timeout: int = 120,
+    binary_path: Optional[str] = None,
 ) -> PlateSolveResult:
     """
     Plate solve using ASTAP solver.
@@ -398,9 +401,10 @@ def solve_with_astap(
     start_time = time.time()
 
     try:
-        # Check for ASTAP executable
+        # Check for ASTAP executable (configured path first)
         astap_cmd = None
-        for cmd in ["astap", "astap_cli", "/opt/astap/astap_cli"]:
+        candidates = ([binary_path] if binary_path else []) + ["astap", "astap_cli", "/opt/astap/astap_cli"]
+        for cmd in candidates:
             try:
                 subprocess.run([cmd, "-h"], capture_output=True, timeout=5)
                 astap_cmd = cmd
@@ -749,6 +753,7 @@ def solve_image(
     hint_ra: Optional[float] = None,
     hint_dec: Optional[float] = None,
     hint_radius: Optional[float] = None,
+    binary_path: Optional[str] = None,
 ) -> dict:
     """
     Plate solve an image using the specified solver.
@@ -788,9 +793,9 @@ def solve_image(
             ).to_dict()
         result = solve_with_nova(image_path, api_key, api_url, scale_lower, scale_upper, timeout)
     elif solver_lower == "local":
-        result = solve_with_local(image_path, scale_lower, scale_upper, timeout)
+        result = solve_with_local(image_path, scale_lower, scale_upper, timeout, binary_path)
     elif solver_lower == "astap":
-        result = solve_with_astap(image_path, scale_lower, scale_upper, timeout)
+        result = solve_with_astap(image_path, scale_lower, scale_upper, timeout, binary_path)
     else:
         return PlateSolveResult(
             success=False,
