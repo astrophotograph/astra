@@ -121,6 +121,14 @@ async function okStatus(method: string, path: string): Promise<void> {
   if (!resp.ok) return fail(resp);
 }
 
+/** For binary endpoints (the stretch payload) — the JSON helpers above
+ *  would corrupt the bytes. */
+async function bytes(path: string): Promise<ArrayBuffer> {
+  const resp = await send("GET", path);
+  if (!resp.ok) return fail(resp);
+  return resp.arrayBuffer();
+}
+
 /** Split an `Update*Input` into the path id and the request body. */
 function splitId(input: unknown): { id: string; body: Record<string, unknown> } {
   const { id, ...body } = input as { id: string } & Record<string, unknown>;
@@ -308,6 +316,28 @@ const WEB_ROUTES = {
   get_processing_defaults: (a: Args) =>
     json("GET", `/api/processing/defaults?targetType=${encodeURIComponent(String(a.targetType))}`),
 
+  // ---- live stretch (WebGL preview fed by the daemon) --------------------
+  get_stretch_data: (a: Args) => {
+    const q = a.maxDim ? `?maxDim=${encodeURIComponent(String(a.maxDim))}` : "";
+    return bytes(`/api/images/${a.id}/stretch-data${q}`);
+  },
+  regenerate_preview: async (a: Args) => {
+    // Desktop Apply runs the MTF pipeline locally; on web the daemon runs
+    // the same pipeline via the process endpoint's "mtf" method and
+    // replaces the served preview/thumbnail variants.
+    await json("POST", `/api/images/${a.id}/process`, {
+      stretchMethod: "mtf",
+      bgPercent: a.bgPercent,
+      sigma: a.sigma,
+    });
+    // Desktop returns local output paths; the web equivalents are the
+    // image's own freshly re-variant-ed endpoints
+    return {
+      previewPath: `/api/images/${a.id}/preview`,
+      thumbnail: `/api/images/${a.id}/thumbnail`,
+    };
+  },
+
   // ---- schedules ----------------------------------------------------------
   get_schedules: () => json("GET", "/api/schedules"),
   get_active_schedule: async () => {
@@ -417,6 +447,8 @@ type InScopeCommand =
   | "process_fits_image"
   | "classify_target_type"
   | "get_processing_defaults"
+  | "get_stretch_data"
+  | "regenerate_preview"
   | "get_schedules"
   | "get_active_schedule"
   | "get_active_schedules"

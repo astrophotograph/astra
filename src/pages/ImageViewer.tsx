@@ -770,7 +770,7 @@ export default function ImageViewerPage() {
               Process
             </Button>
           )}
-          {isTauri() && hasFits && (
+          {(isTauri() ? hasFits : !!image.processable) && (
             <Button
               variant={liveStretch ? "default" : "outline"}
               size="sm"

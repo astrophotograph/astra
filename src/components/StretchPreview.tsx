@@ -108,9 +108,11 @@ export function StretchPreview({
             <p className="text-sm text-muted-foreground">Loading FITS data…</p>
           </div>
         )}
+        {/* Cap at 70vh so portrait frames can't push the sliders below the
+            fold; object-contain letterboxes instead of distorting */}
         <canvas
           ref={canvasRef}
-          className={`w-full h-auto block ${isLoading ? "invisible" : ""}`}
+          className={`w-full h-auto max-h-[70vh] object-contain block ${isLoading ? "invisible" : ""}`}
         />
       </div>
 

@@ -13,16 +13,17 @@
 //! concurrent request from the same user gets 429.
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use hoardfs_core::Quality;
 use serde::Deserialize;
 
-use super::api::{image_out, internal, not_found};
+use super::api::{if_none_match_hits, image_out, internal, not_found};
 use super::auth::AuthedUser;
 use super::DaemonState;
 use crate::commands::hoardfs::resolve_hfs_path;
@@ -83,6 +84,11 @@ pub(crate) fn processable(image: &Image) -> bool {
 
 /// Request body — the desktop `ProcessImageInput` minus the id (which is
 /// in the path). Absent fields take the `ProcessingParams` defaults.
+///
+/// `stretchMethod: "mtf"` selects the live-stretch Apply path instead:
+/// the exact desktop `regenerate_preview` pipeline, parameterized by
+/// `bgPercent`/`sigma` (the two live-preview sliders); the other fields
+/// are ignored there.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessBody {
@@ -94,6 +100,8 @@ pub struct ProcessBody {
     color_calibration: Option<bool>,
     noise_reduction: Option<f64>,
     contrast: Option<f64>,
+    bg_percent: Option<f64>,
+    sigma: Option<f64>,
 }
 
 impl ProcessBody {
@@ -112,6 +120,33 @@ impl ProcessBody {
     }
 }
 
+/// Failure modes of fetching + running a pipeline over a user's FITS asset.
+enum PipelineError {
+    /// The fetch came back with non-FITS bytes: the original is an
+    /// external ref whose source path isn't reachable from this host,
+    /// so HoardFS substituted the cached JPEG variant (the right call
+    /// for serving, useless for processing).
+    SourceUnavailable,
+    Other(String),
+}
+
+impl From<String> for PipelineError {
+    fn from(e: String) -> Self {
+        Self::Other(e)
+    }
+}
+
+/// The 422 for [`PipelineError::SourceUnavailable`].
+fn source_unavailable() -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(serde_json::json!({
+            "error": "the original FITS file isn't reachable from the server, only its cached preview; processing needs the original"
+        })),
+    )
+        .into_response()
+}
+
 pub async fn process_image(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
@@ -119,7 +154,12 @@ pub async fn process_image(
     body: Option<Json<ProcessBody>>,
 ) -> Response {
     let started = std::time::Instant::now();
-    let params = body.map(|Json(b)| b).unwrap_or_default().into_params();
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    // The MTF path bypasses ProcessingParams: it is the desktop
+    // regenerate_preview pipeline, not the target-classified one
+    let mtf = (body.stretch_method.as_deref() == Some("mtf"))
+        .then(|| (body.bg_percent.unwrap_or(0.15), body.sigma.unwrap_or(3.0)));
+    let params = body.into_params();
 
     // One run per user at a time — the permit lives until this handler
     // returns, covering the fetch + pipeline + store sequence
@@ -167,20 +207,6 @@ pub async fn process_image(
 
     // Fetch FITS bytes, run the pipeline, and store the processed variants
     // in one blocking task (pipeline is seconds of CPU)
-    enum PipelineError {
-        /// The fetch came back with non-FITS bytes: the original is an
-        /// external ref whose source path isn't reachable from this host,
-        /// so HoardFS substituted the cached JPEG variant (the right call
-        /// for serving, useless for processing).
-        SourceUnavailable,
-        Other(String),
-    }
-    impl From<String> for PipelineError {
-        fn from(e: String) -> Self {
-            Self::Other(e)
-        }
-    }
-
     let hfs_arc = state.hoardfs.clone();
     let rt = tokio::runtime::Handle::current();
     let volume = tenancy::volume_name(&user.user_id);
@@ -200,11 +226,16 @@ pub async fn process_image(
             return Err(PipelineError::SourceUnavailable);
         }
 
-        let processed = processing::process_fits_bytes(
-            bytes,
-            &params_for_task,
-            object_name.as_deref(),
-        )?;
+        let processed = match mtf {
+            Some((bg_percent, sigma)) => {
+                processing::stretch_fits_bytes(bytes, bg_percent, sigma)?
+            }
+            None => processing::process_fits_bytes(
+                bytes,
+                &params_for_task,
+                object_name.as_deref(),
+            )?,
+        };
 
         rt.block_on(hfs.add_variant(
             &volume,
@@ -234,13 +265,7 @@ pub async fn process_image(
                 "process {id} for {}: original FITS at {hfs_path} unreachable from this host",
                 user.user_id
             );
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "the original FITS file isn't reachable from the server, only its cached preview; processing needs the original"
-                })),
-            )
-                .into_response();
+            return source_unavailable();
         }
         Ok(Err(PipelineError::Other(e))) => return internal("process pipeline", e),
         Err(e) => return internal("process pipeline task", e.to_string()),
@@ -309,6 +334,185 @@ pub async fn process_image(
         "image": image_out(image),
     }))
     .into_response()
+}
+
+/// Query for `GET /api/images/{id}/stretch-data`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StretchDataQuery {
+    max_dim: Option<u32>,
+}
+
+/// Web default texture cap — half the desktop command's 4096: this payload
+/// crosses the network, and 2048² RGB is already ~50 MB of raw floats.
+const STRETCH_MAX_DIM_DEFAULT: u32 = 2048;
+const STRETCH_MAX_DIM_MIN: u32 = 512;
+const STRETCH_MAX_DIM_MAX: u32 = 4096;
+
+/// `GET /api/images/{id}/stretch-data` — the live-stretch preview payload
+/// (JSON header + histogram + planar f32 pixels) for the caller's image,
+/// built by the same `stretch::display::build_stretch_payload` the desktop
+/// command uses, so web preview ≡ desktop preview ≡ Apply output.
+pub async fn stretch_data(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    Query(q): Query<StretchDataQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let started = std::time::Instant::now();
+    let max_dim = q
+        .max_dim
+        .unwrap_or(STRETCH_MAX_DIM_DEFAULT)
+        .clamp(STRETCH_MAX_DIM_MIN, STRETCH_MAX_DIM_MAX);
+
+    // Owner-scoped lookup, same as /process: someone else's image id is
+    // indistinguishable from a missing one
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let lookup_id = id.clone();
+    let image = match tokio::task::spawn_blocking(move || {
+        get_image_core(&db, &user_id, &lookup_id)
+    })
+    .await
+    {
+        Ok(Ok(Some(image))) => image,
+        Ok(Ok(None)) => return not_found(),
+        Ok(Err(e)) => return internal("stretch-data lookup", e),
+        Err(e) => return internal("stretch-data lookup task", e.to_string()),
+    };
+
+    if !processable(&image) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "image has no processable FITS asset" })),
+        )
+            .into_response();
+    }
+    let hfs_path = resolve_hfs_path(&image).expect("processable implies hfs path");
+
+    // The payload is a pure function of the FITS blob, the fixed prepare
+    // config, and max_dim — deliberately NOT keyed on the row's updated_at,
+    // so an Apply (which bumps the row) can't invalidate a cached payload.
+    // A conditional hit exits before any HoardFS or pipeline work; paired
+    // with `no-cache` the browser revalidates each open and reuses its
+    // cached copy on the 304.
+    let etag = image
+        .blob_id
+        .as_deref()
+        .map(|blob| format!("\"sd1-{blob}-{max_dim}\""));
+    if let Some(etag) = &etag {
+        if if_none_match_hits(&headers, etag) {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            let h = response.headers_mut();
+            if let Ok(etag) = etag.parse() {
+                h.insert(header::ETAG, etag);
+            }
+            h.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("private, no-cache"),
+            );
+            return response;
+        }
+    }
+
+    // Payload generation is seconds-scale CPU — share the per-user slot
+    // with /process so one user can't stack pipeline runs on the VM
+    let Some(_permit) = state.processing.try_acquire(&user.user_id) else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": "processing already in progress" })),
+        )
+            .into_response();
+    };
+
+    let accepts_gzip = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("gzip"));
+
+    let hfs_arc = state.hoardfs.clone();
+    let rt = tokio::runtime::Handle::current();
+    let volume = tenancy::volume_name(&user.user_id);
+    let path_for_task = hfs_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let hfs = hfs_arc
+            .lock()
+            .map_err(|_| "HoardFS lock poisoned".to_string())?;
+        let bytes = rt
+            .block_on(hfs.get_file(&volume, &path_for_task))
+            .map_err(|e| format!("FITS fetch {path_for_task}: {e}"))?;
+        if !bytes.starts_with(b"SIMPLE") {
+            return Err(PipelineError::SourceUnavailable);
+        }
+
+        // Same pipeline stages as Apply: StretchParams::default() has
+        // gradient removal + autocrop on; its bg/sigma are irrelevant
+        // here since the stretch itself happens in the shader
+        let payload = processing::with_temp_fits(bytes, |tmp| {
+            crate::stretch::display::build_stretch_payload(
+                tmp,
+                &crate::stretch::StretchParams::default(),
+                max_dim,
+            )
+        })?;
+
+        // Float planes gzip ~30-50%; the fast level keeps this to a
+        // fraction of the pipeline cost
+        if accepts_gzip {
+            let mut enc = flate2::write::GzEncoder::new(
+                Vec::with_capacity(payload.len() / 2),
+                flate2::Compression::fast(),
+            );
+            enc.write_all(&payload)
+                .and_then(|_| enc.finish())
+                .map(|gz| (gz, true))
+                .map_err(|e| PipelineError::Other(format!("gzip: {e}")))
+        } else {
+            Ok((payload, false))
+        }
+    })
+    .await;
+
+    let (body, gzipped) = match result {
+        Ok(Ok(out)) => out,
+        Ok(Err(PipelineError::SourceUnavailable)) => {
+            log::warn!(
+                "stretch-data {id} for {}: original FITS at {hfs_path} unreachable from this host",
+                user.user_id
+            );
+            return source_unavailable();
+        }
+        Ok(Err(PipelineError::Other(e))) => return internal("stretch-data payload", e),
+        Err(e) => return internal("stretch-data payload task", e.to_string()),
+    };
+
+    log::info!(
+        "stretch-data {id} for {} ({} bytes{}, max_dim {max_dim}) in {:?}",
+        user.user_id,
+        body.len(),
+        if gzipped { " gzipped" } else { "" },
+        started.elapsed()
+    );
+
+    let mut response = (StatusCode::OK, body).into_response();
+    let h = response.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    h.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, no-cache"),
+    );
+    h.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    if gzipped {
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
+    if let Some(etag) = etag.and_then(|e| e.parse().ok()) {
+        h.insert(header::ETAG, etag);
+    }
+    response
 }
 
 #[derive(Debug, Deserialize)]
@@ -456,6 +660,37 @@ mod tests {
 
     fn json(body: &[u8]) -> serde_json::Value {
         serde_json::from_slice(body).unwrap()
+    }
+
+    /// GET with extra request headers (conditional / encoding negotiation).
+    async fn get_with_headers(
+        router: &axum::Router,
+        token: &str,
+        uri: &str,
+        extra: &[(header::HeaderName, &str)],
+    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+        let mut req = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("Authorization", format!("Bearer {token}"));
+        for (name, value) in extra {
+            req = req.header(name, *value);
+        }
+        let resp = router
+            .clone()
+            .oneshot(req.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let bytes = to_bytes(resp.into_body(), 64 << 20).await.unwrap().to_vec();
+        (status, headers, bytes)
+    }
+
+    /// JSON header block of a stretch-data payload.
+    fn payload_header(payload: &[u8]) -> serde_json::Value {
+        let header_len = u32::from_le_bytes(payload[0..4].try_into().unwrap()) as usize;
+        serde_json::from_slice(&payload[4..4 + header_len]).unwrap()
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -698,5 +933,255 @@ mod tests {
         let (status, _, _) =
             request(&router, "GET", "nope", "/api/processing/classify?name=M42", None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stretch_data_roundtrip_and_304() {
+        let (state, _tmp, alice, _bob, img) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let uri = format!("/api/images/{}/stretch-data", img.id);
+
+        let (status, headers, body) = request(&router, "GET", &alice, &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "private, no-cache"
+        );
+        let etag = headers.get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        assert!(etag.starts_with("\"sd1-"), "{etag}");
+
+        // RGB synthetic → 3 channels, 65536-bin green histogram, and no
+        // downsample (256² is under the web default cap)
+        let h = payload_header(&body);
+        assert_eq!(h["version"], 1);
+        assert_eq!(h["channels"], 3);
+        assert_eq!(h["histBins"], 65536);
+        assert_eq!(h["stats"].as_array().unwrap().len(), 3);
+        assert_eq!(h["width"], h["fullWidth"]);
+
+        // Conditional revalidation exits before any pipeline work
+        let (status, headers, body) =
+            get_with_headers(&router, &alice, &uri, &[(header::IF_NONE_MATCH, &etag)]).await;
+        assert_eq!(status, StatusCode::NOT_MODIFIED);
+        assert!(body.is_empty());
+        assert_eq!(headers.get(header::ETAG).unwrap().to_str().unwrap(), etag);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stretch_data_gzip_when_accepted() {
+        let (state, _tmp, alice, _bob, img) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let uri = format!("/api/images/{}/stretch-data", img.id);
+
+        let (_, _, plain) = request(&router, "GET", &alice, &uri, None).await;
+        let (status, headers, gz) = get_with_headers(
+            &router,
+            &alice,
+            &uri,
+            &[(header::ACCEPT_ENCODING, "gzip, deflate, br")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers.get(header::CONTENT_ENCODING).unwrap(), "gzip");
+        assert_eq!(headers.get(header::VARY).unwrap(), "Accept-Encoding");
+        assert!(gz.len() < plain.len(), "{} !< {}", gz.len(), plain.len());
+
+        let mut decoded = Vec::new();
+        std::io::Read::read_to_end(
+            &mut flate2::read::GzDecoder::new(&gz[..]),
+            &mut decoded,
+        )
+        .unwrap();
+        assert_eq!(decoded, plain);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cross_user_stretch_data_is_404() {
+        let (state, _tmp, _alice, bob, img) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let (status, _, _) = request(
+            &router,
+            "GET",
+            &bob,
+            &format!("/api/images/{}/stretch-data", img.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stretch_data_shares_processing_slot() {
+        let (state, _tmp, alice, _bob, img) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let _held = state.processing.try_acquire("alice").unwrap();
+        let (status, _, _) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/api/images/{}/stretch-data", img.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stretch_data_non_fits_is_422() {
+        let (state, _tmp, alice, _bob, _img) = seeded().await;
+        {
+            let png = {
+                let img = image::RgbImage::from_pixel(8, 8, image::Rgb([9, 9, 9]));
+                let mut bytes = std::io::Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgb8(img)
+                    .write_to(&mut bytes, image::ImageFormat::Png)
+                    .unwrap();
+                bytes.into_inner()
+            };
+            let hfs_arc = state.hoardfs.clone();
+            tokio::task::block_in_place(|| {
+                let hfs = hfs_arc.lock().unwrap();
+                tokio::runtime::Handle::current()
+                    .block_on(hfs.put_file("user-alice", "/2026/flat.png", &png))
+                    .unwrap();
+            });
+        }
+        let png_image = create_image_core(
+            &state.db,
+            "alice",
+            CreateImageInput {
+                collection_id: None,
+                filename: "flat.png".to_string(),
+                url: None,
+                summary: None,
+                description: None,
+                content_type: Some("image/png".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: Some(
+                    serde_json::json!({ "hoardfs": { "hfs_path": "/2026/flat.png" } }).to_string(),
+                ),
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+
+        let router = crate::daemon::router(state.clone());
+        let (status, _, body) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/api/images/{}/stretch-data", png_image.id),
+            None,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stretch_data_max_dim_caps_texture() {
+        let (state, _tmp, alice, _bob, _img) = seeded().await;
+        // A frame large enough that the clamp floor (512) forces a downsample
+        let big = {
+            let field = processinator::make_test_image(&processinator::SyntheticParams {
+                rgb: true,
+                seed: 11,
+                width: 700,
+                height: 700,
+                ..Default::default()
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("big.fits");
+            processinator::write_fits(&field.data, &path).unwrap();
+            std::fs::read(&path).unwrap()
+        };
+        {
+            let hfs_arc = state.hoardfs.clone();
+            tokio::task::block_in_place(|| {
+                let hfs = hfs_arc.lock().unwrap();
+                tokio::runtime::Handle::current()
+                    .block_on(hfs.put_file("user-alice", "/2026/big.fits", &big))
+                    .unwrap();
+            });
+        }
+        let image = create_image_core(
+            &state.db,
+            "alice",
+            CreateImageInput {
+                collection_id: None,
+                filename: "big.fits".to_string(),
+                url: None,
+                summary: None,
+                description: None,
+                content_type: Some("image/fits".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: Some(
+                    serde_json::json!({ "hoardfs": { "hfs_path": "/2026/big.fits" } }).to_string(),
+                ),
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+
+        let router = crate::daemon::router(state.clone());
+        let (status, _, body) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/api/images/{}/stretch-data?maxDim=512", image.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let h = payload_header(&body);
+        let width = h["width"].as_u64().unwrap();
+        let full_width = h["fullWidth"].as_u64().unwrap();
+        assert!(full_width > 512, "{full_width}");
+        assert!(width <= 512 && width < full_width, "{width} vs {full_width}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mtf_process_applies_live_stretch_params() {
+        let (state, _tmp, alice, _bob, img) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let preview_uri = format!("/api/images/{}/preview", img.id);
+        let (_, _, before) = request(&router, "GET", &alice, &preview_uri, None).await;
+
+        let (status, _, body) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/process", img.id),
+            Some(serde_json::json!({
+                "stretchMethod": "mtf",
+                "bgPercent": 0.25,
+                "sigma": 2.0
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let result = json(&body);
+        assert_eq!(result["success"], true);
+        assert_eq!(result["processingParams"]["stretchMethod"], "mtf");
+        assert_eq!(result["processingParams"]["bgPercent"], 0.25);
+        assert_eq!(result["processingParams"]["sigma"], 2.0);
+
+        // The served preview is now the MTF render
+        let (_, _, after) = request(&router, "GET", &alice, &preview_uri, None).await;
+        assert_ne!(before, after);
     }
 }

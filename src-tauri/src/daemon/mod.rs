@@ -216,6 +216,7 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/images/{id}/process",
             axum::routing::post(process::process_image),
         )
+        .route("/images/{id}/stretch-data", get(process::stretch_data))
         .route("/processing/defaults", get(process::processing_defaults))
         .route("/processing/classify", get(process::classify_target))
         .route(

@@ -453,7 +453,7 @@ fn etag_for(image: &crate::db::models::Image) -> String {
     )
 }
 
-fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
+pub(crate) fn if_none_match_hits(headers: &HeaderMap, etag: &str) -> bool {
     headers
         .get(header::IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())

@@ -69,6 +69,9 @@ hex = "0.4"
 image = "0.25"
 base64 = "0.22"
 
+# Response compression for the daemon's stretch-data payload
+flate2 = "1"
+
 # OAuth callback server
 tiny_http = "0.12"
 open = "5"

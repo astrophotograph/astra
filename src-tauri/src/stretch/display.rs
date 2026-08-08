@@ -235,7 +235,9 @@ mod tests {
         assert_eq!(header["refChannel"], 1);
         assert_eq!(header["stats"].as_array().unwrap().len(), 3);
         assert!(header["stats"][0]["median"].as_f64().unwrap() > 0.0);
-        assert_eq!(header["greenRemoval"], 1.0);
+        // Pins processinator's PipelineConfig::default() SCNR strength —
+        // halved to 0.5 there (full strength tinted skies magenta)
+        assert_eq!(header["greenRemoval"], 0.5);
         assert_eq!(header["saturation"], 1.25);
 
         let w = header["width"].as_u64().unwrap() as usize;

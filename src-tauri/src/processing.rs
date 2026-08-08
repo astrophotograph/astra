@@ -214,6 +214,12 @@ pub struct AppliedParams {
     pub color_calibration: bool,
     pub noise_reduction: f64,
     pub contrast: f64,
+    /// MTF stretch parameters — present only for `stretch_method: "mtf"`
+    /// runs (the web Apply of the live stretch preview).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bg_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sigma: Option<f64>,
 }
 
 /// Output of a native processing run.
@@ -272,13 +278,72 @@ pub fn process_fits_bytes(
     params: &ProcessingParams,
     object_name: Option<&str>,
 ) -> Result<ProcessedImage, String> {
-    // The FITS reader is path-based; stage the bytes in a temp file
+    with_temp_fits(fits_bytes, |tmp| process_fits_file(tmp, params, object_name))
+}
+
+/// Apply the desktop live-stretch parameters over FITS bytes: the exact
+/// `regenerate_preview` pipeline (`StretchParams::to_pipeline_config` —
+/// linked MTF, gradient removal, autocrop), so the stored variants match
+/// what the WebGL preview showed. The web Apply path of the live stretch.
+pub fn stretch_fits_bytes(
+    fits_bytes: Vec<u8>,
+    bg_percent: f64,
+    sigma: f64,
+) -> Result<ProcessedImage, String> {
+    let stretch = crate::stretch::StretchParams {
+        bg_percent,
+        sigma,
+        gradient_removal: true,
+        autocrop: true,
+    };
+    let config = stretch.to_pipeline_config();
+    let (preview, thumbnail) = with_temp_fits(fits_bytes, |tmp| render_jpegs(tmp, &config))?;
+    Ok(ProcessedImage {
+        preview_jpeg: preview.0,
+        thumbnail_jpeg: thumbnail.0,
+        preview_dims: preview.1,
+        thumbnail_dims: thumbnail.1,
+        applied: AppliedParams {
+            target_type: "manual".to_string(),
+            stretch_method: "mtf".to_string(),
+            stretch_factor: 0.0,
+            background_removal: stretch.gradient_removal,
+            star_reduction: false,
+            color_calibration: false,
+            noise_reduction: 0.0,
+            contrast: 1.0,
+            bg_percent: Some(bg_percent),
+            sigma: Some(sigma),
+        },
+    })
+}
+
+/// Stage FITS bytes in a temp file for the path-based reader, releasing
+/// the buffer before `f` runs and cleaning up afterwards.
+pub(crate) fn with_temp_fits<T>(
+    fits_bytes: Vec<u8>,
+    f: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
     let tmp = std::env::temp_dir().join(format!("astra_process_{}.fits", uuid::Uuid::new_v4()));
     std::fs::write(&tmp, &fits_bytes).map_err(|e| format!("temp write: {e}"))?;
     drop(fits_bytes);
-    let result = process_fits_file(&tmp, params, object_name);
+    let result = f(&tmp);
     let _ = std::fs::remove_file(&tmp);
     result
+}
+
+/// Read → pipeline → preview + thumbnail JPEGs, releasing the f64 planes
+/// before encoding. Each entry is `(jpeg_bytes, (width, height))`.
+type Jpeg = (Vec<u8>, (u32, u32));
+fn render_jpegs(fits_path: &Path, config: &PipelineConfig) -> Result<(Jpeg, Jpeg), String> {
+    let data = read_fits(fits_path).map_err(|e| format!("FITS read: {e}"))?;
+    let processed = process(data, config);
+    let rgb = to_dynamic_image(&processed).to_rgb8();
+    // The f64 planes are ~8x the u8 copy; release them before encoding
+    drop(processed);
+    let preview = encode_jpeg(&rgb, 1920, 85)?;
+    let thumbnail = encode_jpeg(&rgb, 256, 70)?;
+    Ok((preview, thumbnail))
 }
 
 fn process_fits_file(
@@ -304,20 +369,13 @@ fn process_fits_file(
     let star_reduction = params.star_reduction || default_star_reduction;
 
     let config = pipeline_config(params, stretch_factor, star_reduction);
-    let data = read_fits(fits_path).map_err(|e| format!("FITS read: {e}"))?;
-    let processed = process(data, &config);
-    let rgb = to_dynamic_image(&processed).to_rgb8();
-    // The f64 planes are ~8x the u8 copy; release them before encoding
-    drop(processed);
-
-    let (preview_jpeg, preview_dims) = encode_jpeg(&rgb, 1920, 85)?;
-    let (thumbnail_jpeg, thumbnail_dims) = encode_jpeg(&rgb, 256, 70)?;
+    let (preview, thumbnail) = render_jpegs(fits_path, &config)?;
 
     Ok(ProcessedImage {
-        preview_jpeg,
-        thumbnail_jpeg,
-        preview_dims,
-        thumbnail_dims,
+        preview_jpeg: preview.0,
+        thumbnail_jpeg: thumbnail.0,
+        preview_dims: preview.1,
+        thumbnail_dims: thumbnail.1,
         applied: AppliedParams {
             target_type: target.as_str().to_string(),
             stretch_method: params.stretch_method.clone(),
@@ -327,6 +385,8 @@ fn process_fits_file(
             color_calibration: params.color_calibration,
             noise_reduction: params.noise_reduction,
             contrast: params.contrast,
+            bg_percent: None,
+            sigma: None,
         },
     })
 }
