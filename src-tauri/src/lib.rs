@@ -11,6 +11,7 @@ mod db;
 mod fits_variant;
 pub mod processing;
 mod python;
+pub mod relink;
 mod share;
 mod state;
 pub mod stretch;
@@ -109,6 +110,54 @@ pub fn run_standalone_verification(
     let hoardfs = std::sync::Arc::new(std::sync::Mutex::new(hfs));
 
     commands::hoardfs::verify_variants_core(&db_pool, &hoardfs, "local-user", on_progress)
+}
+
+/// Re-link relocated image sources, as a one-shot outside the GUI.
+///
+/// Opens the same SQLite database and HoardFS repository the desktop app uses.
+/// When `options.search_roots` is empty, the user's persisted scan roots (the
+/// Settings-curated list) are used as the auto-search scope. HoardFS is
+/// optional — with no repository present, relinking still rewrites DB paths
+/// but skips external-ref updates and hash verification.
+pub fn run_standalone_relink(
+    data_dir: Option<std::path::PathBuf>,
+    mut options: relink::RelinkOptions,
+    on_progress: impl FnMut(u32, u32, &str),
+) -> Result<relink::RelinkReport, String> {
+    let data_dir = data_dir.unwrap_or_else(default_app_data_dir);
+
+    let db_path = data_dir.join("astra.db");
+    if !db_path.exists() {
+        return Err(format!("Astra database not found at {}", db_path.display()));
+    }
+    let db_pool = db::init_database(&db_path).map_err(|e| format!("DB init: {}", e))?;
+
+    if options.search_roots.is_empty() {
+        let mut conn = db_pool.get().map_err(|e| e.to_string())?;
+        options.search_roots = db::repository::get_scan_roots(&mut conn, "local-user")
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+    }
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("tokio runtime: {}", e))?;
+    let handle = rt.handle().clone();
+
+    let hoardfs_dir = data_dir.join("hoardfs");
+    let hoardfs = if hoardfs_dir.exists() {
+        let hfs = handle
+            .block_on(hoardfs_volume::HoardFs::open(&hoardfs_dir))
+            .map_err(|e| format!("HoardFS open: {}", e))?;
+        Some(std::sync::Arc::new(std::sync::Mutex::new(hfs)))
+    } else {
+        None
+    };
+
+    relink::relink_library_core(&db_pool, hoardfs.as_ref(), "local-user", &options, on_progress)
 }
 
 /// Get application info
