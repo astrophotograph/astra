@@ -336,6 +336,22 @@ export const imageApi = {
 
   checkSourceHealth: () => invoke<[string, boolean, number][]>("check_source_health"),
 
+  /** Full per-image verification: source reachable, size undrifted, HoardFS
+   *  variants intact. Long-running; progress via `library-verification-progress`. */
+  verifyLibrarySources: () =>
+    invoke<VerificationReport>("verify_library_sources"),
+
+  cancelLibraryVerification: () =>
+    invoke<void>("cancel_library_verification"),
+
+  /** Fetching a HoardFS variant lazily regenerates it when missing — used as
+   *  the "regenerate" action for variant-cache gaps. */
+  getThumbnailHoardfs: (imageId: string) =>
+    invoke<number[]>("get_image_thumbnail_hoardfs", { imageId }),
+
+  getPreviewHoardfs: (imageId: string) =>
+    invoke<number[]>("get_image_preview_hoardfs", { imageId }),
+
   scanUnimportedFiles: (scanPaths?: string[], stacksOnly?: boolean) =>
     invoke<{
       directoriesScanned: number;
@@ -503,6 +519,22 @@ export interface SunTimes {
 // =============================================================================
 // Backup Types
 // =============================================================================
+
+export interface FlaggedImage {
+  imageId: string;
+  filename: string;
+  path: string | null;
+  detail: string;
+}
+
+export interface VerificationReport {
+  total: number;
+  okCount: number;
+  unreachable: FlaggedImage[];
+  drifted: FlaggedImage[];
+  variantsMissing: FlaggedImage[];
+  cancelled: boolean;
+}
 
 export interface BackupInfo {
   filename: string;

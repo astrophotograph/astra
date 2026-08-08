@@ -337,6 +337,8 @@ pub fn run() {
             commands::remove_scan_root,
             commands::set_scan_roots,
             commands::derive_scan_roots,
+            commands::verify_library_sources,
+            commands::cancel_library_verification,
             commands::download_tetra3_db,
             // Target browser commands
             commands::get_targets,

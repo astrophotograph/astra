@@ -76,6 +76,7 @@ import {
   type PathPrefix,
   type PopulateFitsUrlsResult,
   type GalleryDaemonStatus,
+  type VerificationReport,
 } from "@/lib/tauri/commands";
 import { fetchMe, signOut, type SessionUser } from "@/lib/auth-web";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -282,6 +283,18 @@ export default function AdminPage() {
   const [libraryScanResult, setLibraryScanResult] = useState<Awaited<ReturnType<typeof imageApi.scanUnimportedFiles>> | null>(null);
   const [imageStats, setImageStats] = useState<{ totalImages: number; stackedImages: number } | null>(null);
   const [scanRoots, setScanRoots] = useState<string[]>([]);
+  const [verifyReport, setVerifyReport] = useState<VerificationReport | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verifyProgress, setVerifyProgress] = useState<{
+    checked: number;
+    total: number;
+    currentFile: string;
+    unreachable: number;
+    drifted: number;
+    variantsMissing: number;
+  } | null>(null);
+  const [sourceHealth, setSourceHealth] = useState<[string, boolean, number][] | null>(null);
+  const [regeneratingIds, setRegeneratingIds] = useState<Set<string>>(new Set());
   const [derivedRoots, setDerivedRoots] = useState<Array<{
     path: string;
     contributingImages: number;
@@ -517,6 +530,23 @@ export default function AdminPage() {
       dirTotal: number;
     }>("unimported-scan-progress", (event) => {
       setScanProgress(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for library-verification progress events from the Rust backend
+  useEffect(() => {
+    const unlisten = listen<{
+      checked: number;
+      total: number;
+      currentFile: string;
+      unreachable: number;
+      drifted: number;
+      variantsMissing: number;
+    }>("library-verification-progress", (event) => {
+      setVerifyProgress(event.payload);
     });
     return () => {
       unlisten.then((fn) => fn());
@@ -1361,6 +1391,98 @@ export default function AdminPage() {
       await imageApi.cancelUnimportedScan();
     } catch (e) {
       console.error("Cancel failed:", e);
+    }
+  };
+
+  // Library verification
+  const runLibraryVerification = async () => {
+    setIsVerifying(true);
+    setVerifyProgress(null);
+    // Mount-level health shown alongside the per-image results
+    imageApi.checkSourceHealth().then(setSourceHealth).catch(console.error);
+    try {
+      const report = await imageApi.verifyLibrarySources();
+      setVerifyReport(report);
+      const flags =
+        report.unreachable.length +
+        report.drifted.length +
+        report.variantsMissing.length;
+      if (report.cancelled) {
+        toast.info(`Verification cancelled — ${report.okCount} images checked OK so far.`);
+      } else if (flags === 0) {
+        toast.success(`All ${report.total} images verified.`);
+      } else {
+        toast.info(`Verification found ${flags} issue${flags === 1 ? "" : "s"}.`);
+      }
+    } catch (e) {
+      toast.error("Verification failed: " + e);
+    } finally {
+      setIsVerifying(false);
+      setVerifyProgress(null);
+    }
+  };
+
+  const cancelLibraryVerification = async () => {
+    try {
+      await imageApi.cancelLibraryVerification();
+    } catch (e) {
+      console.error("Cancel failed:", e);
+    }
+  };
+
+  const regenerateVariants = async (imageId: string) => {
+    setRegeneratingIds((prev) => new Set(prev).add(imageId));
+    try {
+      // Fetching variants lazily regenerates missing ones
+      await imageApi.getThumbnailHoardfs(imageId);
+      await imageApi.getPreviewHoardfs(imageId);
+      toast.success("Variants regenerated.");
+      setVerifyReport((prev) =>
+        prev
+          ? {
+              ...prev,
+              variantsMissing: prev.variantsMissing.filter(
+                (f) => f.imageId !== imageId,
+              ),
+            }
+          : prev,
+      );
+    } catch (e) {
+      toast.error("Regenerate failed: " + e);
+    } finally {
+      setRegeneratingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(imageId);
+        return next;
+      });
+    }
+  };
+
+  const removeFlaggedImage = async (imageId: string, filename: string) => {
+    if (
+      !window.confirm(
+        `Remove "${filename}" from the library? The database record is deleted; files on disk are untouched.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await imageApi.delete(imageId);
+      toast.success(`Removed ${filename} from the library.`);
+      setVerifyReport((prev) =>
+        prev
+          ? {
+              ...prev,
+              unreachable: prev.unreachable.filter((f) => f.imageId !== imageId),
+              drifted: prev.drifted.filter((f) => f.imageId !== imageId),
+              variantsMissing: prev.variantsMissing.filter(
+                (f) => f.imageId !== imageId,
+              ),
+            }
+          : prev,
+      );
+    } catch (e) {
+      toast.error("Remove failed: " + e);
     }
   };
 
@@ -2867,6 +2989,201 @@ export default function AdminPage() {
                   <p className="text-sm text-muted-foreground">
                     All images in known directories are already in your library.
                   </p>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Per-Image Library Verification */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
+                  <HardDrive className="w-5 h-5" />
+                  Verify Library Sources
+                </CardTitle>
+                <CardDescription>
+                  Confirm every image's source file is reachable, unchanged, and
+                  has its cached variants.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={runLibraryVerification} disabled={isVerifying}>
+                    <RefreshCw
+                      className={`w-4 h-4 mr-2 ${isVerifying ? "animate-spin" : ""}`}
+                    />
+                    {isVerifying ? "Verifying..." : "Verify Library Sources"}
+                  </Button>
+                  {isVerifying && (
+                    <Button variant="outline" onClick={cancelLibraryVerification}>
+                      Cancel
+                    </Button>
+                  )}
+                </div>
+
+                {sourceHealth && sourceHealth.length > 0 && (
+                  <div className="rounded-md border bg-muted/30 p-3 space-y-1">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Mount health
+                    </p>
+                    {sourceHealth.map(([mount, available, count]) => (
+                      <div
+                        key={mount}
+                        className="flex items-center justify-between gap-2 text-xs"
+                      >
+                        <span className="font-mono truncate" title={mount}>
+                          {mount}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                          {count} {count === 1 ? "image" : "images"} ·{" "}
+                          <span
+                            className={available ? "text-green-500" : "text-destructive"}
+                          >
+                            {available ? "online" : "offline"}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isVerifying && verifyProgress && (
+                  <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>
+                        {verifyProgress.checked.toLocaleString()} of{" "}
+                        {verifyProgress.total.toLocaleString()} checked
+                      </span>
+                      <span>
+                        {verifyProgress.unreachable} unreachable ·{" "}
+                        {verifyProgress.drifted} drifted ·{" "}
+                        {verifyProgress.variantsMissing} variant gaps
+                      </span>
+                    </div>
+                    {verifyProgress.currentFile && (
+                      <p
+                        className="font-mono text-xs text-muted-foreground truncate"
+                        title={verifyProgress.currentFile}
+                      >
+                        {verifyProgress.currentFile}
+                      </p>
+                    )}
+                    {verifyProgress.total > 0 && (
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full bg-primary transition-[width] duration-150"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (verifyProgress.checked /
+                                Math.max(1, verifyProgress.total)) *
+                                100,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {verifyReport && (
+                  <div className="space-y-3">
+                    <div className="flex gap-4 text-sm text-muted-foreground">
+                      <span>
+                        {verifyReport.okCount.toLocaleString()} of{" "}
+                        {verifyReport.total.toLocaleString()} OK
+                      </span>
+                      {verifyReport.cancelled && <span>(cancelled — partial)</span>}
+                    </div>
+
+                    {(
+                      [
+                        {
+                          key: "unreachable",
+                          title: "Unreachable sources",
+                          items: verifyReport.unreachable,
+                          hint: "Source file missing — mount offline or file moved. Re-link tooling can fix moved files; Remove drops the record.",
+                        },
+                        {
+                          key: "drifted",
+                          title: "Drifted files",
+                          items: verifyReport.drifted,
+                          hint: "File on disk no longer matches the size recorded at import — likely overwritten.",
+                        },
+                        {
+                          key: "variantsMissing",
+                          title: "Missing variants",
+                          items: verifyReport.variantsMissing,
+                          hint: "Cached thumbnail/preview absent — regenerate while the source is reachable.",
+                        },
+                      ] as const
+                    ).map(
+                      (group) =>
+                        group.items.length > 0 && (
+                          <div key={group.key} className="border rounded-lg">
+                            <div className="p-3 border-b bg-muted/50">
+                              <h4 className="font-medium text-sm">
+                                {group.title} ({group.items.length})
+                              </h4>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {group.hint}
+                              </p>
+                            </div>
+                            <div className="divide-y max-h-64 overflow-y-auto">
+                              {group.items.map((f) => (
+                                <div
+                                  key={`${group.key}-${f.imageId}`}
+                                  className="p-3 flex items-center justify-between gap-3 hover:bg-muted/30"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="font-mono text-sm truncate">
+                                      {f.filename}
+                                    </p>
+                                    {f.path && (
+                                      <p
+                                        className="font-mono text-[11px] text-muted-foreground truncate"
+                                        title={f.path}
+                                      >
+                                        {f.path}
+                                      </p>
+                                    )}
+                                    <p className="text-xs text-muted-foreground">
+                                      {f.detail}
+                                    </p>
+                                  </div>
+                                  <div className="flex shrink-0 gap-2">
+                                    {group.key === "variantsMissing" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={regeneratingIds.has(f.imageId)}
+                                        onClick={() => regenerateVariants(f.imageId)}
+                                      >
+                                        <RefreshCw
+                                          className={`w-4 h-4 ${
+                                            regeneratingIds.has(f.imageId)
+                                              ? "animate-spin"
+                                              : ""
+                                          }`}
+                                        />
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() =>
+                                        removeFlaggedImage(f.imageId, f.filename)
+                                      }
+                                    >
+                                      <Trash2 className="w-4 h-4 text-destructive" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ),
+                    )}
+                  </div>
                 )}
               </CardContent>
             </Card>

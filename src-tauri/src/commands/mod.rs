@@ -15,6 +15,7 @@ pub mod skymap;
 pub mod targets;
 pub mod tetra3_db;
 pub mod hoardfs;
+pub mod verify;
 pub mod share;
 pub mod todos;
 
@@ -35,3 +36,4 @@ pub use skymap::*;
 pub use targets::*;
 pub use tetra3_db::*;
 pub use todos::*;
+pub use verify::*;
