@@ -25,6 +25,7 @@ import {
   type CatalogObject,
   type ProcessImageResponse,
 } from "@/lib/tauri/commands";
+import { queryObjectsInFovClient } from "@/lib/solve-annotations";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { StretchPreview } from "@/components/StretchPreview";
 import { useSettings } from "@/hooks/useSettings";
@@ -433,17 +434,20 @@ export default function ImageViewerPage() {
     setPlateSolveDialogOpen(false);
 
     try {
-      // Try to extract hints from FITS headers for better solve performance
+      // Try to extract hints from FITS headers for better solve performance.
+      // Desktop only — the daemon extracts its own hints server-side.
       let solveHints: { scaleLower?: number; scaleUpper?: number; fovDeg?: number; hintRa?: number; hintDec?: number } = {};
-      try {
-        const hints = await plateSolveApi.getSolveHints(image.id);
-        if (hints.scaleLower) solveHints.scaleLower = hints.scaleLower;
-        if (hints.scaleUpper) solveHints.scaleUpper = hints.scaleUpper;
-        if (hints.fovDeg) solveHints.fovDeg = hints.fovDeg;
-        if (hints.raHint) solveHints.hintRa = hints.raHint;
-        if (hints.decHint) solveHints.hintDec = hints.decHint;
-      } catch {
-        // No hints available — solve blind
+      if (isTauri()) {
+        try {
+          const hints = await plateSolveApi.getSolveHints(image.id);
+          if (hints.scaleLower) solveHints.scaleLower = hints.scaleLower;
+          if (hints.scaleUpper) solveHints.scaleUpper = hints.scaleUpper;
+          if (hints.fovDeg) solveHints.fovDeg = hints.fovDeg;
+          if (hints.raHint) solveHints.hintRa = hints.raHint;
+          if (hints.decHint) solveHints.hintDec = hints.decHint;
+        } catch {
+          // No hints available — solve blind
+        }
       }
 
       const result = await plateSolveApi.solve({
@@ -462,8 +466,30 @@ export default function ImageViewerPage() {
       });
 
       if (result.success) {
-        toast.success(`Plate solved in ${result.solveTime.toFixed(1)}s - found ${result.objects.length} objects`);
-        setCatalogObjects(result.objects);
+        // Web: the daemon solves but doesn't annotate (no Python) —
+        // compute objects-in-FOV from the bundled catalogs and persist
+        // them like the desktop solve does.
+        let objects = result.objects;
+        if (!isTauri()) {
+          objects = queryObjectsInFovClient(
+            result.centerRa,
+            result.centerDec,
+            result.widthDeg,
+            result.heightDeg,
+          );
+          if (objects.length > 0) {
+            try {
+              await imageApi.update({
+                id: image.id,
+                annotations: JSON.stringify(objects),
+              });
+            } catch (e) {
+              console.error("Failed to persist annotations:", e);
+            }
+          }
+        }
+        toast.success(`Plate solved in ${result.solveTime.toFixed(1)}s - found ${objects.length} objects`);
+        setCatalogObjects(objects);
         // Refresh the image data to get updated metadata
         await refetch();
         // Clear any cached skymap so it regenerates with new data
@@ -732,13 +758,14 @@ export default function ImageViewerPage() {
               }`}
             />
           </Button>
-          {developerMode && isTauri() && (
+          {(isTauri() ? developerMode : !!image.solvable) && (
             <Button
               variant="outline"
               size="sm"
               onClick={() => {
-                // Skip dialog if we already have what we need
-                if (plateSolveSolver !== "nova" || plateSolveApiKey) {
+                // Web: server-side tetra3 only — no solver choice to make.
+                // Desktop: skip dialog if we already have what we need.
+                if (!isTauri() || plateSolveSolver !== "nova" || plateSolveApiKey) {
                   handlePlateSolve();
                 } else {
                   setPlateSolveDialogOpen(true);

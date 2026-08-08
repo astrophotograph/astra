@@ -132,7 +132,7 @@ impl ProcessBody {
 }
 
 /// Failure modes of fetching + running a pipeline over a user's FITS asset.
-enum PipelineError {
+pub(crate) enum PipelineError {
     /// The fetch came back with non-FITS bytes: the original is an
     /// external ref whose source path isn't reachable from this host,
     /// so HoardFS substituted the cached JPEG variant (the right call
@@ -148,7 +148,7 @@ impl From<String> for PipelineError {
 }
 
 /// The 422 for [`PipelineError::SourceUnavailable`].
-fn source_unavailable() -> Response {
+pub(crate) fn source_unavailable() -> Response {
     (
         StatusCode::UNPROCESSABLE_ENTITY,
         Json(serde_json::json!({
@@ -350,7 +350,7 @@ pub async fn process_image(
         "targetType": processed.applied.target_type,
         "processingTime": started.elapsed().as_secs_f64(),
         "processingParams": applied,
-        "image": image_out(image),
+        "image": image_out(image, super::solve::solver_available_for(&state)),
     }))
     .into_response()
 }
@@ -648,6 +648,7 @@ mod tests {
             limits: Default::default(),
             session_key: [7u8; 32],
             processing: Default::default(),
+            tetra3_db: None,
         });
         (state, tmp, alice, bob, image)
     }
@@ -1228,5 +1229,128 @@ mod tests {
         assert_eq!(result["processingParams"]["saturation"], 2.0);
         let (_, _, saturated) = request(&router, "GET", &alice, &preview_uri, None).await;
         assert_ne!(after, saturated);
+    }
+
+    // --- /plate-solve endpoint guards (handler in daemon::solve, sharing
+    // this module's seeded() fixture and the processing slot) ---
+
+    #[tokio::test]
+    async fn cross_user_plate_solve_is_404() {
+        let (state, _tmp, _alice, bob, image) = seeded().await;
+        let router = crate::daemon::router(state);
+        let (status, _, _) = request(
+            &router,
+            "POST",
+            &bob,
+            &format!("/api/images/{}/plate-solve", image.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn plate_solve_without_solver_db_is_503_with_clear_error() {
+        let (state, _tmp, alice, _bob, image) = seeded().await;
+        let router = crate::daemon::router(state);
+        let (status, _, body) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/plate-solve", image.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(json(&body)["error"]
+            .as_str()
+            .unwrap()
+            .contains("solver database"));
+    }
+
+    #[tokio::test]
+    async fn non_fits_plate_solve_is_422() {
+        let (state, _tmp, alice, _bob, _image) = seeded().await;
+        let plain = create_image_core(
+            &state.db,
+            "alice",
+            CreateImageInput {
+                collection_id: None,
+                filename: "note.jpg".to_string(),
+                url: None,
+                summary: None,
+                description: None,
+                content_type: Some("image/jpeg".to_string()),
+                tags: None,
+                visibility: None,
+                location: None,
+                annotations: None,
+                metadata: None,
+                thumbnail: None,
+            },
+        )
+        .unwrap();
+        let router = crate::daemon::router(state);
+        let (status, _, _) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/plate-solve", plain.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn concurrent_plate_solve_from_same_user_is_429() {
+        let (state, _tmp, alice, _bob, image) = seeded().await;
+        let permit = state.processing.try_acquire("alice").unwrap();
+        let router = crate::daemon::router(state.clone());
+        let (status, _, _) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/plate-solve", image.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        drop(permit);
+    }
+
+    #[tokio::test]
+    async fn solvable_flag_and_capabilities_follow_server_db_config() {
+        let (state, tmp, alice, _bob, image) = seeded().await;
+
+        // No solver database → processable but not solvable; tetra3 unavailable
+        let router = crate::daemon::router(state.clone());
+        let (status, _, body) =
+            request(&router, "GET", &alice, &format!("/api/images/{}", image.id), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let v = json(&body);
+        assert_eq!(v["processable"], true);
+        assert_eq!(v["solvable"], false);
+        let (_, _, caps) = request(&router, "GET", &alice, "/api/solvers", None).await;
+        assert_eq!(json(&caps)["tetra3"]["available"], false);
+
+        // Same backend with a database file present → solvable flips on
+        let db_file = tmp.path().join("tetra3.bin");
+        std::fs::write(&db_file, b"stub").unwrap();
+        let with_db = Arc::new(DaemonState {
+            db: state.db.clone(),
+            hoardfs: state.hoardfs.clone(),
+            oidc: None,
+            limits: Default::default(),
+            session_key: [7u8; 32],
+            processing: Default::default(),
+            tetra3_db: Some(db_file),
+        });
+        let router = crate::daemon::router(with_db);
+        let (_, _, body) =
+            request(&router, "GET", &alice, &format!("/api/images/{}", image.id), None).await;
+        assert_eq!(json(&body)["solvable"], true);
+        let (_, _, caps) = request(&router, "GET", &alice, "/api/solvers", None).await;
+        assert_eq!(json(&caps)["tetra3"]["available"], true);
     }
 }

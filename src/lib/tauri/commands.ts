@@ -128,6 +128,10 @@ export interface Image {
   updated_at: string;
   thumbnail: string | null;
   fits_url: string | null;
+  /** Server-truth flag from the daemon API: plate solving available for
+   *  this image (FITS asset + a solver database on the server). Absent on
+   *  desktop. */
+  solvable?: boolean;
   /** Server-truth flag from the daemon API: a processable FITS asset
    *  exists server-side. Absent on desktop (use local fits_url checks). */
   processable?: boolean;

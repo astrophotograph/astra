@@ -96,13 +96,18 @@ pub(crate) struct ImageOut {
     /// Whether `/api/images/{id}/process` can run on this image (a FITS
     /// asset exists in the caller's volume). Gates the web Process action.
     processable: bool,
+    /// Whether `/api/images/{id}/plate-solve` can run: processable AND this
+    /// server has a tetra3 database. Gates the web Plate Solve action.
+    solvable: bool,
 }
 
 /// API output shape for an image row: legacy thumbnail stripped, server
-/// flags attached.
-pub(crate) fn image_out(image: Image) -> ImageOut {
+/// flags attached. `solver_available` is the per-request answer to "does
+/// this server have a tetra3 database" (compute once, not per row).
+pub(crate) fn image_out(image: Image, solver_available: bool) -> ImageOut {
     let processable = super::process::processable(&image);
     ImageOut {
+        solvable: solver_available && processable,
         image: strip_thumbnail(image),
         processable,
     }
@@ -124,11 +129,12 @@ pub async fn list_images(
     let limit = page.limit.unwrap_or(DEFAULT_PAGE_LIMIT).min(MAX_PAGE_LIMIT);
     let offset = page.offset.unwrap_or(0);
     let total = all.len();
+    let solver = super::solve::solver_available_for(&state);
     let items: Vec<ImageOut> = all
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(image_out)
+        .map(|image| image_out(image, solver))
         .collect();
 
     Json(PageOut {
@@ -147,8 +153,9 @@ pub async fn get_image(
 ) -> Response {
     let db = state.db.clone();
     let user_id = user.user_id.clone();
+    let solver = super::solve::solver_available_for(&state);
     match tokio::task::spawn_blocking(move || get_image_core(&db, &user_id, &id)).await {
-        Ok(Ok(Some(image))) => Json(image_out(image)).into_response(),
+        Ok(Ok(Some(image))) => Json(image_out(image, solver)).into_response(),
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => internal("get_image", e),
         Err(e) => internal("get_image task", e.to_string()),
@@ -187,10 +194,11 @@ pub async fn get_collection(
     })
     .await;
 
+    let solver = super::solve::solver_available_for(&state);
     match result {
         Ok(Ok(Some((collection, images)))) => Json(CollectionDetail {
             collection,
-            images: images.into_iter().map(image_out).collect(),
+            images: images.into_iter().map(|i| image_out(i, solver)).collect(),
         })
         .into_response(),
         Ok(Ok(None)) => not_found(),
@@ -312,9 +320,10 @@ pub async fn target_search(
         search_images_by_target_core(&db, &user_id, &params.q)
     })
     .await;
+    let solver = super::solve::solver_available_for(&state);
     match result {
         Ok(Ok(images)) => {
-            Json(images.into_iter().map(image_out).collect::<Vec<_>>()).into_response()
+            Json(images.into_iter().map(|i| image_out(i, solver)).collect::<Vec<_>>()).into_response()
         }
         Ok(Err(e)) => internal("target_search", e),
         Err(e) => internal("target_search task", e.to_string()),
@@ -332,9 +341,10 @@ pub async fn target_images(
         get_images_by_target_core(&db, &user_id, &params.name)
     })
     .await;
+    let solver = super::solve::solver_available_for(&state);
     match result {
         Ok(Ok(images)) => {
-            Json(images.into_iter().map(image_out).collect::<Vec<_>>()).into_response()
+            Json(images.into_iter().map(|i| image_out(i, solver)).collect::<Vec<_>>()).into_response()
         }
         Ok(Err(e)) => internal("target_images", e),
         Err(e) => internal("target_images task", e.to_string()),
@@ -656,6 +666,7 @@ mod tests {
             limits: Default::default(),
             session_key: [7u8; 32],
             processing: Default::default(),
+            tetra3_db: None,
         });
         (state, tmp, alice_token, bob_token, image)
     }

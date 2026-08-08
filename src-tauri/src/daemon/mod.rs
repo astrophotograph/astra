@@ -32,6 +32,7 @@ pub mod api;
 pub mod api_write;
 pub mod auth;
 pub mod process;
+pub mod solve;
 pub mod webapp;
 pub mod gallery;
 pub mod ingest;
@@ -113,6 +114,10 @@ pub struct DaemonState {
     pub session_key: [u8; 32],
     /// Per-user in-flight image-processing registry (cap: 1 per user).
     pub processing: process::ProcessingLocks,
+    /// tetra3 solver database (.bin, postcard format) for server-side plate
+    /// solving. Env `ASTRA_TETRA3_DB`, or `{data_dir}/tetra3/
+    /// tetra3_unified_05_5deg.bin` when present. None → solving disabled.
+    pub tetra3_db: Option<PathBuf>,
 }
 
 impl DaemonState {
@@ -216,6 +221,11 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/images/{id}/process",
             axum::routing::post(process::process_image),
         )
+        .route(
+            "/images/{id}/plate-solve",
+            axum::routing::post(solve::plate_solve_image),
+        )
+        .route("/solvers", get(solve::solver_capabilities))
         .route("/images/{id}/stretch-data", get(process::stretch_data))
         .route("/processing/defaults", get(process::processing_defaults))
         .route("/processing/classify", get(process::classify_target))
@@ -491,6 +501,23 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
 
     let session_key = session::load_or_create_session_key(data_dir)?;
 
+    let tetra3_db = std::env::var("ASTRA_TETRA3_DB")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let default = data_dir.join("tetra3/tetra3_unified_05_5deg.bin");
+            default.exists().then_some(default)
+        });
+    match &tetra3_db {
+        Some(p) if p.exists() => log::info!("tetra3 solver database: {}", p.display()),
+        Some(p) => log::warn!(
+            "tetra3 solver database configured but missing: {} — solves will fail until it exists",
+            p.display()
+        ),
+        None => log::info!("no tetra3 solver database — server-side plate solving disabled"),
+    }
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
@@ -498,6 +525,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         limits,
         session_key,
         processing: Default::default(),
+        tetra3_db,
     })
 }
 

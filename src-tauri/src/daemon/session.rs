@@ -250,6 +250,7 @@ mod tests {
             limits: Default::default(),
             session_key: TEST_KEY,
             processing: Default::default(),
+            tetra3_db: None,
         });
         (state, tmp)
     }

@@ -37,7 +37,10 @@ fn print_help() {
          ENVIRONMENT:\n\
          \x20 ASTRA_OIDC_ISSUER    OIDC issuer (e.g. https://auth.bcc.sh); with\n\
          \x20 ASTRA_OIDC_CLIENT_ID the Zitadel app client id, enables JWT sessions.\n\
-         \x20                      Unset: only personal access tokens authenticate.\n\n\
+         \x20                      Unset: only personal access tokens authenticate.\n\
+         \x20 ASTRA_TETRA3_DB      tetra3 solver database (.bin) for server-side plate\n\
+         \x20                      solving (default: {{data_dir}}/tetra3/tetra3_unified_05_5deg.bin\n\
+         \x20                      when present; unset otherwise → solving disabled)\n\n\
          Endpoints:\n\
          \x20 GET /healthz         Version plus DB and HoardFS status (public)\n\
          \x20 GET /api/me          Identity of the authenticated caller (bearer token)"

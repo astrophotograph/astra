@@ -66,7 +66,10 @@ pub struct PlateSolveResponse {
 ///
 /// The database file must be generated separately via `generate_tetra3_db` (or
 /// `tetra3::SolverDatabase::generate_from_gaia()` in your own code).
-fn solve_with_tetra3(
+///
+/// Tauri-free and path-based — the daemon reuses it through a temp file
+/// (`processing::with_temp_fits`).
+pub(crate) fn solve_with_tetra3(
     image_path: &str,
     db_path: &str,
     fov_estimate_deg: Option<f64>,
@@ -303,7 +306,7 @@ fn solve_with_tetra3(
 }
 
 /// Read image dimensions from a FITS file's NAXIS1/NAXIS2 headers.
-fn read_fits_dimensions(path: &Path) -> Result<(u32, u32), String> {
+pub(crate) fn read_fits_dimensions(path: &Path) -> Result<(u32, u32), String> {
     use fitrs::Fits;
 
     let fits = Fits::open(path).map_err(|e| format!("Failed to open FITS: {}", e))?;

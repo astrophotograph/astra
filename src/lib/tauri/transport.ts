@@ -27,6 +27,7 @@ import {
   type UnlistenFn,
 } from "@tauri-apps/api/event";
 import type { Collection, Image, ObservationSchedule, TargetWithCount } from "./commands";
+import { queryObjectsInFovClient } from "../solve-annotations";
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -313,6 +314,35 @@ const WEB_ROUTES = {
   },
   classify_target_type: (a: Args) =>
     json("GET", `/api/processing/classify?name=${encodeURIComponent(String(a.objectName))}`),
+  // ---- plate solving --------------------------------------------------
+  // The daemon runs native tetra3 only; solver choice / API keys / local
+  // DB paths from the desktop input are meaningless server-side and are
+  // stripped. Catalog objects come from the client-side computation
+  // (solve-annotations.ts) — the response's `objects` is always empty.
+  plate_solve_image: async (a: Args) => {
+    const input = a.input as {
+      id: string;
+      fovEstimate?: number;
+      scaleLower?: number;
+      scaleUpper?: number;
+      timeout?: number;
+    };
+    return json("POST", `/api/images/${input.id}/plate-solve`, {
+      fovEstimate: input.fovEstimate,
+      scaleLower: input.scaleLower,
+      scaleUpper: input.scaleUpper,
+      timeout: input.timeout,
+    });
+  },
+  detect_plate_solvers: () => json("GET", "/api/solvers"),
+  // Pure client-side: bundled catalogs + the solve footprint, no HTTP.
+  query_sky_region: async (a: Args) =>
+    queryObjectsInFovClient(
+      Number(a.centerRa),
+      Number(a.centerDec),
+      Number(a.widthDeg),
+      Number(a.heightDeg),
+    ),
   get_processing_defaults: (a: Args) =>
     json("GET", `/api/processing/defaults?targetType=${encodeURIComponent(String(a.targetType))}`),
 
@@ -448,6 +478,9 @@ type InScopeCommand =
   | "get_image_thumbnail"
   | "process_fits_image"
   | "classify_target_type"
+  | "plate_solve_image"
+  | "detect_plate_solvers"
+  | "query_sky_region"
   | "get_processing_defaults"
   | "get_stretch_data"
   | "regenerate_preview"
