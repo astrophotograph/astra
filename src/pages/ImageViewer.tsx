@@ -606,12 +606,17 @@ export default function ImageViewerPage() {
     return () => { unlisten.then((fn) => fn()); };
   }, [id]);
 
-  const handleRegeneratePreview = async (bgPercent?: number, sigma?: number) => {
+  const handleRegeneratePreview = async (
+    bgPercent?: number,
+    sigma?: number,
+    greenRemoval?: number,
+    saturation?: number,
+  ) => {
     if (!image) return;
     setIsRegenerating(true);
     toast.info("Regenerating preview...");
     try {
-      await imageApi.regeneratePreview(image.id, bgPercent, sigma);
+      await imageApi.regeneratePreview(image.id, bgPercent, sigma, greenRemoval, saturation);
       toast.success("Preview regenerated");
       await refetch();
       // Force clear and reload the image data
@@ -844,8 +849,8 @@ export default function ImageViewerPage() {
               initialBgPercent={defaultStretch.bgPercent}
               initialSigma={defaultStretch.sigma}
               isApplying={isRegenerating}
-              onApply={async (bg, sigma) => {
-                await handleRegeneratePreview(bg, sigma);
+              onApply={async (bg, sigma, greenRemoval, saturation) => {
+                await handleRegeneratePreview(bg, sigma, greenRemoval, saturation);
                 setLiveStretch(false);
               }}
               onCancel={() => setLiveStretch(false)}

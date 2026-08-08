@@ -19,15 +19,25 @@ pub struct StretchParams {
     pub sigma: f64,
     pub gradient_removal: bool,
     pub autocrop: bool,
+    /// SCNR green-removal amount: 0 disables, 1 full suppression.
+    pub green_removal: f64,
+    /// Chroma scale around per-pixel luminance; 1.0 is a no-op.
+    pub saturation: f64,
 }
 
 impl Default for StretchParams {
     fn default() -> Self {
+        // The cosmetic constants come from the library defaults so there is
+        // one source of truth — the payload header ships these same values
+        // as the live editor's initial slider positions.
+        let lib = PipelineConfig::default();
         Self {
             bg_percent: 0.15,
             sigma: 3.0,
             gradient_removal: true,
             autocrop: true,
+            green_removal: lib.green_removal,
+            saturation: lib.saturation,
         }
     }
 }
@@ -44,6 +54,8 @@ impl StretchParams {
                 sigma: self.sigma,
                 linked: true,
             },
+            green_removal: self.green_removal,
+            saturation: self.saturation,
             ..Default::default()
         }
     }

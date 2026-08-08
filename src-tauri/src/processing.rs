@@ -220,6 +220,10 @@ pub struct AppliedParams {
     pub bg_percent: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sigma: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub green_removal: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saturation: Option<f64>,
 }
 
 /// Output of a native processing run.
@@ -285,16 +289,22 @@ pub fn process_fits_bytes(
 /// `regenerate_preview` pipeline (`StretchParams::to_pipeline_config` —
 /// linked MTF, gradient removal, autocrop), so the stored variants match
 /// what the WebGL preview showed. The web Apply path of the live stretch.
+/// `green_removal`/`saturation` fall back to the pipeline defaults (the
+/// same values the payload header seeds the sliders with).
 pub fn stretch_fits_bytes(
     fits_bytes: Vec<u8>,
     bg_percent: f64,
     sigma: f64,
+    green_removal: Option<f64>,
+    saturation: Option<f64>,
 ) -> Result<ProcessedImage, String> {
+    let defaults = crate::stretch::StretchParams::default();
     let stretch = crate::stretch::StretchParams {
         bg_percent,
         sigma,
-        gradient_removal: true,
-        autocrop: true,
+        green_removal: green_removal.unwrap_or(defaults.green_removal),
+        saturation: saturation.unwrap_or(defaults.saturation),
+        ..defaults
     };
     let config = stretch.to_pipeline_config();
     let (preview, thumbnail) = with_temp_fits(fits_bytes, |tmp| render_jpegs(tmp, &config))?;
@@ -314,6 +324,8 @@ pub fn stretch_fits_bytes(
             contrast: 1.0,
             bg_percent: Some(bg_percent),
             sigma: Some(sigma),
+            green_removal: Some(stretch.green_removal),
+            saturation: Some(stretch.saturation),
         },
     })
 }
@@ -387,6 +399,8 @@ fn process_fits_file(
             contrast: params.contrast,
             bg_percent: None,
             sigma: None,
+            green_removal: None,
+            saturation: None,
         },
     })
 }

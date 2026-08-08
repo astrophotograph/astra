@@ -22,7 +22,14 @@ interface StretchPreviewProps {
   initialSigma: number;
   /** Apply is running (disables controls, shows spinner). */
   isApplying: boolean;
-  onApply: (bgPercent: number, sigma: number) => void;
+  /** greenRemoval/saturation are undefined for mono images (both are
+   *  color-only no-ops in the pipeline). */
+  onApply: (
+    bgPercent: number,
+    sigma: number,
+    greenRemoval?: number,
+    saturation?: number,
+  ) => void;
   onCancel: () => void;
   /** Payload fetch or WebGL2 setup failed — caller falls back to presets. */
   onUnavailable: (reason: string) => void;
@@ -43,6 +50,11 @@ export function StretchPreview({
   const [isLoading, setIsLoading] = useState(true);
   const [bgPercent, setBgPercent] = useState(initialBgPercent);
   const [sigma, setSigma] = useState(initialSigma);
+  // Color-only cosmetic params; seeded from the payload header's pipeline
+  // defaults once it arrives (isColor stays false for mono, hiding them)
+  const [isColor, setIsColor] = useState(false);
+  const [greenRemoval, setGreenRemoval] = useState(0.5);
+  const [saturation, setSaturation] = useState(1.25);
 
   // Latest values for the load effect to render once ready, without
   // re-triggering the payload fetch when sliders move
@@ -60,6 +72,13 @@ export function StretchPreview({
         const payload = parseStretchPayload(buf);
         const renderer = new StretchRenderer(canvasRef.current, payload);
         rendererRef.current = renderer;
+        setIsColor(renderer.isColor);
+        if (renderer.isColor) {
+          setGreenRemoval(payload.greenRemoval);
+          setSaturation(payload.saturation);
+        }
+        // Header values are what the sliders now show, so passing them
+        // explicitly and defaulting them inside setParams are equivalent
         renderer.setParams(paramsRef.current.bgPercent, paramsRef.current.sigma);
         setIsLoading(false);
       })
@@ -78,21 +97,34 @@ export function StretchPreview({
   }, [imageId]);
 
   // Coalesce slider updates to one redraw per frame
-  const scheduleRender = useCallback((bg: number, sig: number) => {
-    cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(() => {
-      rendererRef.current?.setParams(bg, sig);
-    });
-  }, []);
+  const scheduleRender = useCallback(
+    (bg: number, sig: number, green: number, sat: number) => {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        rendererRef.current?.setParams(bg, sig, green, sat);
+      });
+    },
+    [],
+  );
 
   const handleBgChange = (value: number) => {
     setBgPercent(value);
-    scheduleRender(value, sigma);
+    scheduleRender(value, sigma, greenRemoval, saturation);
   };
 
   const handleSigmaChange = (value: number) => {
     setSigma(value);
-    scheduleRender(bgPercent, value);
+    scheduleRender(bgPercent, value, greenRemoval, saturation);
+  };
+
+  const handleGreenChange = (value: number) => {
+    setGreenRemoval(value);
+    scheduleRender(bgPercent, sigma, value, saturation);
+  };
+
+  const handleSaturationChange = (value: number) => {
+    setSaturation(value);
+    scheduleRender(bgPercent, sigma, greenRemoval, value);
   };
 
   return (
@@ -143,6 +175,36 @@ export function StretchPreview({
             onValueChange={([v]) => handleSigmaChange(v)}
           />
         </div>
+        {isColor && (
+          <>
+            <div className="flex items-center gap-3 min-w-[220px] flex-1">
+              <span className="text-xs text-muted-foreground whitespace-nowrap w-24">
+                SCNR {(greenRemoval * 100).toFixed(0)}%
+              </span>
+              <Slider
+                value={[greenRemoval]}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={isLoading || isApplying}
+                onValueChange={([v]) => handleGreenChange(v)}
+              />
+            </div>
+            <div className="flex items-center gap-3 min-w-[220px] flex-1">
+              <span className="text-xs text-muted-foreground whitespace-nowrap w-24">
+                Saturation {saturation.toFixed(2)}
+              </span>
+              <Slider
+                value={[saturation]}
+                min={0}
+                max={2}
+                step={0.05}
+                disabled={isLoading || isApplying}
+                onValueChange={([v]) => handleSaturationChange(v)}
+              />
+            </div>
+          </>
+        )}
         <div className="flex items-center gap-2 ml-auto">
           <Button
             variant="ghost"
@@ -153,7 +215,18 @@ export function StretchPreview({
             <X className="w-4 h-4 mr-1" />
             Cancel
           </Button>
-          <Button size="sm" onClick={() => onApply(bgPercent, sigma)} disabled={isLoading || isApplying}>
+          <Button
+            size="sm"
+            onClick={() =>
+              onApply(
+                bgPercent,
+                sigma,
+                isColor ? greenRemoval : undefined,
+                isColor ? saturation : undefined,
+              )
+            }
+            disabled={isLoading || isApplying}
+          >
             {isApplying ? (
               <Loader2 className="w-4 h-4 mr-1 animate-spin" />
             ) : (

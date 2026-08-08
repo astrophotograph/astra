@@ -102,6 +102,17 @@ pub struct ProcessBody {
     contrast: Option<f64>,
     bg_percent: Option<f64>,
     sigma: Option<f64>,
+    green_removal: Option<f64>,
+    saturation: Option<f64>,
+}
+
+/// The live-stretch Apply parameters carved out of a `ProcessBody` when
+/// `stretchMethod` is "mtf".
+struct MtfApply {
+    bg_percent: f64,
+    sigma: f64,
+    green_removal: Option<f64>,
+    saturation: Option<f64>,
 }
 
 impl ProcessBody {
@@ -157,8 +168,12 @@ pub async fn process_image(
     let body = body.map(|Json(b)| b).unwrap_or_default();
     // The MTF path bypasses ProcessingParams: it is the desktop
     // regenerate_preview pipeline, not the target-classified one
-    let mtf = (body.stretch_method.as_deref() == Some("mtf"))
-        .then(|| (body.bg_percent.unwrap_or(0.15), body.sigma.unwrap_or(3.0)));
+    let mtf = (body.stretch_method.as_deref() == Some("mtf")).then(|| MtfApply {
+        bg_percent: body.bg_percent.unwrap_or(0.15),
+        sigma: body.sigma.unwrap_or(3.0),
+        green_removal: body.green_removal,
+        saturation: body.saturation,
+    });
     let params = body.into_params();
 
     // One run per user at a time — the permit lives until this handler
@@ -227,9 +242,13 @@ pub async fn process_image(
         }
 
         let processed = match mtf {
-            Some((bg_percent, sigma)) => {
-                processing::stretch_fits_bytes(bytes, bg_percent, sigma)?
-            }
+            Some(m) => processing::stretch_fits_bytes(
+                bytes,
+                m.bg_percent,
+                m.sigma,
+                m.green_removal,
+                m.saturation,
+            )?,
             None => processing::process_fits_bytes(
                 bytes,
                 &params_for_task,
@@ -1179,9 +1198,35 @@ mod tests {
         assert_eq!(result["processingParams"]["stretchMethod"], "mtf");
         assert_eq!(result["processingParams"]["bgPercent"], 0.25);
         assert_eq!(result["processingParams"]["sigma"], 2.0);
+        // Cosmetic params omitted → pipeline defaults recorded
+        assert_eq!(result["processingParams"]["greenRemoval"], 0.5);
+        assert_eq!(result["processingParams"]["saturation"], 1.25);
 
         // The served preview is now the MTF render
         let (_, _, after) = request(&router, "GET", &alice, &preview_uri, None).await;
         assert_ne!(before, after);
+
+        // Explicit cosmetic params are honored: recorded in the echo AND
+        // reaching the pipeline (a heavy saturation boost changes pixels)
+        let (status, _, body) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/process", img.id),
+            Some(serde_json::json!({
+                "stretchMethod": "mtf",
+                "bgPercent": 0.25,
+                "sigma": 2.0,
+                "greenRemoval": 0.0,
+                "saturation": 2.0
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let result = json(&body);
+        assert_eq!(result["processingParams"]["greenRemoval"], 0.0);
+        assert_eq!(result["processingParams"]["saturation"], 2.0);
+        let (_, _, saturated) = request(&router, "GET", &alice, &preview_uri, None).await;
+        assert_ne!(after, saturated);
     }
 }

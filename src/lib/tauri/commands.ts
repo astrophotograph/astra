@@ -307,8 +307,20 @@ export const imageApi = {
   ensureFitsUrl: (id: string) =>
     invoke<string | null>("ensure_fits_url", { id }),
 
-  regeneratePreview: (id: string, bgPercent?: number, sigma?: number) =>
-    invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", { id, bgPercent, sigma }),
+  regeneratePreview: (
+    id: string,
+    bgPercent?: number,
+    sigma?: number,
+    greenRemoval?: number,
+    saturation?: number,
+  ) =>
+    invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", {
+      id,
+      bgPercent,
+      sigma,
+      greenRemoval,
+      saturation,
+    }),
 
   /** Binary payload for the WebGL live-stretch preview. Desktop reads the
    *  local FITS; web fetches the daemon's `/stretch-data` endpoint. */

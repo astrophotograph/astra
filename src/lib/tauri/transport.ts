@@ -329,6 +329,8 @@ const WEB_ROUTES = {
       stretchMethod: "mtf",
       bgPercent: a.bgPercent,
       sigma: a.sigma,
+      greenRemoval: a.greenRemoval,
+      saturation: a.saturation,
     });
     // Desktop returns local output paths; the web equivalents are the
     // image's own freshly re-variant-ed endpoints

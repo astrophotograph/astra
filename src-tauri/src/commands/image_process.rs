@@ -418,6 +418,8 @@ pub async fn regenerate_preview(
     id: String,
     bg_percent: Option<f64>,
     sigma: Option<f64>,
+    green_removal: Option<f64>,
+    saturation: Option<f64>,
 ) -> Result<RegenerateResult, String> {
     let mut conn = state.db.get().map_err(|e| e.to_string())?;
     let image = repository::get_image_by_id(&mut conn, &id)
@@ -457,11 +459,13 @@ pub async fn regenerate_preview(
         let fits = fits_path.clone();
         let out = preview_path_str.clone();
         move || {
+            let defaults = crate::stretch::StretchParams::default();
             let params = crate::stretch::StretchParams {
                 bg_percent: bg_percent.unwrap_or(0.15),
                 sigma: sigma.unwrap_or(3.0),
-                gradient_removal: true,
-                autocrop: true,
+                green_removal: green_removal.unwrap_or(defaults.green_removal),
+                saturation: saturation.unwrap_or(defaults.saturation),
+                ..defaults
             };
             let result = crate::stretch::generate_preview(
                 std::path::Path::new(&fits),
@@ -634,8 +638,7 @@ pub async fn bulk_regenerate_previews(
                     let params = crate::stretch::StretchParams {
                         bg_percent: bg,
                         sigma: sig,
-                        gradient_removal: true,
-                        autocrop: true,
+                        ..Default::default()
                     };
                     let r = crate::stretch::generate_preview(
                         std::path::Path::new(&fits),

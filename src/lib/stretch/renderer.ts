@@ -110,14 +110,31 @@ export class StretchRenderer {
     gl.uniform1f(this.loc.uSaturation, payload.channels > 1 ? payload.saturation : 1);
   }
 
-  /** Recompute the solution for these parameters and redraw. */
-  setParams(bgPercent: number, sigma: number): void {
+  /** The cosmetic sliders only exist for color images (SCNR and
+   *  saturation are no-ops on mono, in the shader and in Rust alike). */
+  get isColor(): boolean {
+    return this.payload.channels > 1;
+  }
+
+  /** Recompute the solution for these parameters and redraw. The cosmetic
+   *  params (SCNR strength, saturation) default to the payload header's
+   *  pipeline constants when omitted. */
+  setParams(
+    bgPercent: number,
+    sigma: number,
+    greenRemoval?: number,
+    saturation?: number,
+  ): void {
     const { gl } = this;
     const sol = computeMtfSolution(this.payload, bgPercent, sigma);
     gl.useProgram(this.program);
     gl.uniform3f(this.loc.uShadows, sol.shadows[0], sol.shadows[1], sol.shadows[2]);
     gl.uniform1f(this.loc.uScale, sol.scale);
     gl.uniform1f(this.loc.uMidtone, sol.midtone);
+    if (this.isColor) {
+      gl.uniform1f(this.loc.uGreenRemoval, greenRemoval ?? this.payload.greenRemoval);
+      gl.uniform1f(this.loc.uSaturation, saturation ?? this.payload.saturation);
+    }
     gl.clearColor(0, 0, 0, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

@@ -552,8 +552,7 @@ fn run_scan_cycle(
                     let stretch_params = crate::stretch::StretchParams {
                         bg_percent: config.stretch_bg_percent.unwrap_or(0.15),
                         sigma: config.stretch_sigma.unwrap_or(3.0),
-                        gradient_removal: true,
-                        autocrop: true,
+                        ..Default::default()
                     };
                     match crate::stretch::generate_preview(
                         Path::new(&fits_path_str),
