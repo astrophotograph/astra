@@ -150,13 +150,18 @@ pub fn unpublish_collection_core(
         return Ok(false);
     }
 
-    diesel::delete(
-        published_collections::table
-            .filter(published_collections::collection_id.eq(collection_id))
-            .filter(published_collections::user_id.eq(user_id)),
-    )
-    .execute(&mut conn)
-    .map(|n| n > 0)
+    // Signed records go with the publish record (same transaction), so a
+    // gallery never lingers as records after its URL is gone.
+    conn.transaction::<bool, diesel::result::Error, _>(|conn| {
+        crate::share::records::delete_records_for_collection(conn, collection_id)?;
+        diesel::delete(
+            published_collections::table
+                .filter(published_collections::collection_id.eq(collection_id))
+                .filter(published_collections::user_id.eq(user_id)),
+        )
+        .execute(conn)
+        .map(|n| n > 0)
+    })
     .map_err(|e| e.to_string())
 }
 

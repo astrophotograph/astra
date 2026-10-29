@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "preact/hooks";
 import type { ShareManifest, SortMode } from "./types";
 import { parseUsername } from "./utils";
+import { fetchGallery } from "./adapter";
 import { TopBar } from "./components/TopBar";
 import { Header } from "./components/Header";
 import { Toolbar } from "./components/Toolbar";
@@ -10,15 +11,9 @@ import { Skeleton } from "./components/Skeleton";
 import { Footer } from "./components/Footer";
 import "./styles.css";
 
-async function fetchManifest(): Promise<ShareManifest | null> {
-  try {
-    const resp = await fetch("manifest.json?t=" + Date.now());
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch {
-    return null;
-  }
-}
+// Signed galleries serve `bundle.json` (kenning records); legacy ones the
+// live `manifest.json`. The adapter normalises both to a ShareManifest.
+const fetchManifest = fetchGallery;
 
 export function App() {
   const [manifest, setManifest] = useState<ShareManifest | null>(null);

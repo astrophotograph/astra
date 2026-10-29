@@ -8,4 +8,5 @@
 pub mod config;
 pub mod daemon_client;
 pub mod manifest;
+pub mod records;
 pub mod viewer;

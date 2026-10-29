@@ -3,9 +3,13 @@
 //! - `GET /@{username}/{slug}` — the embedded Preact viewer with an injected
 //!   `<base>` tag (the viewer fetches `manifest.json` and image paths
 //!   relatively).
-//! - `GET /@{username}/{slug}/manifest.json` — built live from the publish
-//!   record + image rows, so a published gallery updates the moment the
-//!   library does (the viewer polls every 30s).
+//! - `GET /@{username}/{slug}/manifest.json` — the stored, signed
+//!   `gallery.astra.collection` record (byte-for-byte, see
+//!   `share::records`) when the collection was published with signing;
+//!   otherwise built live from the publish record + image rows, so a
+//!   legacy gallery updates the moment the library does (the viewer polls
+//!   every 30s either way; a signed gallery changes only when the daemon
+//!   re-signs on publish/sync).
 //! - `GET /@{username}/{slug}/images/{file}` + `/thumbs/{file}` — HoardFS
 //!   variant bytes with `Cache-Control: public` (the hot artifacts
 //!   Cloudflare caches at the edge) and blob-id ETags.
@@ -35,7 +39,7 @@ use crate::commands::publish::{
 use crate::db::models::{Collection, Image, PublishedCollection};
 use crate::db::schema::published_collections;
 use crate::db::{repository, tenancy, DbPool};
-use crate::share::{manifest, viewer};
+use crate::share::{manifest, records, viewer};
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
@@ -199,9 +203,15 @@ pub async fn gallery_page(
     }
 }
 
+enum ManifestBody {
+    Signed(crate::db::models::PublishedRecord),
+    Legacy(manifest::ShareManifest),
+}
+
 pub async fn gallery_manifest(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
@@ -213,17 +223,25 @@ pub async fn gallery_manifest(
             return Ok(None);
         };
         let mut conn = db.get().map_err(|e| e.to_string())?;
+        // Signed publish: the stored record is the manifest, unchanged.
+        if let Some(record) = records::stored_collection_record(&mut conn, &collection.id)
+            .map_err(|e| e.to_string())?
+        {
+            return Ok(Some(ManifestBody::Signed(record)));
+        }
         let images = repository::get_images_in_collection(&mut conn, &collection.id)
             .map_err(|e| e.to_string())?;
-        Ok(Some(manifest::build_manifest_for_collection(
-            &collection,
-            &images,
+        Ok(Some(ManifestBody::Legacy(
+            manifest::build_manifest_for_collection(&collection, &images),
         )))
     })
     .await;
 
     match result {
-        Ok(Ok(Some(manifest))) => {
+        Ok(Ok(Some(ManifestBody::Signed(record)))) => {
+            super::records::json_bytes_response(record.signed_json, &record.cid, &headers)
+        }
+        Ok(Ok(Some(ManifestBody::Legacy(manifest)))) => {
             let mut response = axum::Json(manifest).into_response();
             // Short: the viewer polls for live updates every 30s.
             response.headers_mut().insert(
@@ -352,10 +370,27 @@ pub(crate) mod tests {
         pub(crate) private_collection: Collection,
         pub(crate) image: Image,
         pub(crate) private_image: Image,
+        /// Public half of the fixture's signing key (method `astra`).
+        pub(crate) verifying_key: kenning::keys::VerifyingKey,
+        /// HoardFS blob id of `image`.
+        pub(crate) blob_id: String,
+    }
+
+    /// A signer over a fresh secp256k1 key and the checkout's `lexicons/`.
+    pub(crate) fn test_signer() -> records::Signer {
+        let key = kenning::keys::SigningKey::generate(kenning::keys::KeyAlgo::Secp256k1);
+        let lexicons = kenning::lexicon::LexiconRegistry::from_dir(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../lexicons"
+        ))
+        .expect("lexicons load");
+        records::Signer::new(key, records::DEFAULT_METHOD_ID, lexicons)
     }
 
     /// alice (@aliceh) with a public, an unlisted, and a private collection;
     /// one HoardFS-backed image in the public one, one image kept private.
+    /// The state carries a signer, but alice has no DID, so every publish
+    /// here is a legacy one — signed tests link a DID and re-publish.
     pub(crate) async fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let db = test_pool();
@@ -433,7 +468,7 @@ pub(crate) mod tests {
             ),
         );
         diesel::update(images_table::table.find(&image.id))
-            .set(images_table::blob_id.eq(Some(blob_id)))
+            .set(images_table::blob_id.eq(Some(blob_id.clone())))
             .execute(&mut db.get().unwrap())
             .unwrap();
         let private_image = mk_image("secret.png", "M 51", None);
@@ -459,6 +494,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
+        let signer = test_signer();
+        let verifying_key = signer.key.verifying_key();
         let state = Arc::new(DaemonState {
             db,
             hoardfs: Arc::new(Mutex::new(hfs)),
@@ -467,6 +504,7 @@ pub(crate) mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            signer: Some(Arc::new(signer)),
         });
         Fixture {
             state,
@@ -476,6 +514,8 @@ pub(crate) mod tests {
             private_collection,
             image,
             private_image,
+            verifying_key,
+            blob_id,
         }
     }
 

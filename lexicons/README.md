@@ -186,3 +186,13 @@ Nothing that is local state, operational, or private leaves the machine:
   `maxLength` byte limits are set to 10x the grapheme limit.
 - Blob `accept` is enforced on `preview`, `thumbnail` and `avatar` (`image/*`),
   not on `original`.
+
+## How the Astra daemon serves these
+
+`src-tauri/src/share/records.rs` builds, validates and signs the records;
+`published_records` stores the kenning `SignedRecord` JSON and the public
+routes serve it byte-for-byte (`docs/hosting.md`, "Signed publishing").
+Blob references use the CIDv1 (`raw`, sha2-256) of the rendition bytes,
+and the daemon resolves `GET /blob/{cid}` back to the HoardFS variant via
+its `blob_digests` table — so a record needs no host-specific field to
+locate its images. `original` is not published yet.

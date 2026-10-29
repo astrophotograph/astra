@@ -570,12 +570,94 @@ var MESSIER = [
   var imageMap = {}; // M id -> array of manifest images
   var currentFilter = 'all'; // 'all', 'captured', 'missing'
 
-  async function fetchManifest() {
+  async function getJson(url) {
     try {
-      var resp = await fetch('manifest.json?t=' + Date.now());
+      var resp = await fetch(url);
       if (!resp.ok) return null;
       return await resp.json();
     } catch(e) { return null; }
+  }
+
+  // Signed galleries serve bundle.json: the gallery.astra.collection
+  // SignedRecord plus one gallery.astra.image SignedRecord per image
+  // (lexicons/README.md). Convert to the legacy manifest shape this page
+  // renders; integer sub-units become floats, blobs become /blob/{cid}.
+  function rkeyOf(uri) { return uri.slice(uri.lastIndexOf('/') + 1); }
+  function blobUrl(b) { return '/blob/' + b.ref.$link; }
+  function opt(v, scale) { return (v === undefined || v === null) ? null : v / scale; }
+  function imageFromRecord(s) {
+    var r = s.record;
+    var ps = r.plateSolve ? {
+      centerRa: r.plateSolve.centerRaMicroDeg / 1e6,
+      centerDec: r.plateSolve.centerDecMicroDeg / 1e6,
+      pixelScale: r.plateSolve.pixelScaleMilliArcsec / 1e3,
+      rotation: r.plateSolve.rotationMilliDeg / 1e3,
+      widthDeg: r.plateSolve.widthMilliDeg / 1e3,
+      heightDeg: r.plateSolve.heightMilliDeg / 1e3,
+      imageWidth: r.plateSolve.imageWidth == null ? null : r.plateSolve.imageWidth,
+      imageHeight: r.plateSolve.imageHeight == null ? null : r.plateSolve.imageHeight
+    } : null;
+    return {
+      id: rkeyOf(s.uri),
+      filename: r.filename,
+      summary: r.summary == null ? null : r.summary,
+      contentType: r.contentType,
+      imagePath: blobUrl(r.preview),
+      thumbPath: blobUrl(r.thumbnail),
+      createdAt: r.createdAt,
+      favorite: !!r.favorite,
+      catalogIds: r.catalogIds || [],
+      plateSolve: ps,
+      objects: (r.objects || []).map(function(o) {
+        return {
+          name: o.name,
+          ra: o.raMicroDeg / 1e6,
+          dec: o.decMicroDeg / 1e6,
+          magnitude: opt(o.magnitudeMilli, 1e3),
+          sizeArcmin: opt(o.sizeArcsecTenths, 600),
+          pixelX: o.pixelX == null ? null : o.pixelX,
+          pixelY: o.pixelY == null ? null : o.pixelY,
+          radiusPx: o.radiusPx == null ? null : o.radiusPx
+        };
+      })
+    };
+  }
+  function manifestFromBundle(bundle) {
+    var c = bundle.collection.record;
+    var byUri = {};
+    (bundle.images || []).forEach(function(s) { byUri[s.uri] = s; });
+    var images = [];
+    (c.images || []).forEach(function(ref) {
+      if (byUri[ref.uri]) images.push(imageFromRecord(byUri[ref.uri]));
+    });
+    var date = function(dt) { return dt ? dt.slice(0, 10) : null; };
+    return {
+      version: 1,
+      collectionName: c.title,
+      collectionDescription: c.description == null ? null : c.description,
+      template: c.template == null ? null : c.template,
+      imageCount: images.length,
+      updatedAt: c.updatedAt,
+      images: images,
+      dateRangeStart: date(c.dateRangeStart),
+      dateRangeEnd: date(c.dateRangeEnd)
+    };
+  }
+  function isBundle(v) {
+    return !!(v && v.collection && v.collection.record &&
+      v.collection.record.$type === 'gallery.astra.collection' && Array.isArray(v.images));
+  }
+
+  async function fetchManifest() {
+    var stamp = '?t=' + Date.now();
+    var bundle = await getJson('bundle.json' + stamp);
+    if (isBundle(bundle)) return manifestFromBundle(bundle);
+    var m = await getJson('manifest.json' + stamp);
+    if (m && typeof m.collectionName === 'string' && Array.isArray(m.images)) return m;
+    if (m && m.record && m.record.$type === 'gallery.astra.collection') {
+      return manifestFromBundle({ collection: m, images: [] });
+    }
+    return null;
   }
 
   // Pick the best thumbnail: favorited first, then most recent

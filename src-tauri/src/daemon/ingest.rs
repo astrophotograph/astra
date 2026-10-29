@@ -307,6 +307,56 @@ fn upsert_push(
     })
 }
 
+/// After a sync lands rows for a collection that is already published,
+/// re-sign its records so the public gallery follows the pushed state.
+/// The push itself has committed, so a signing failure is reported in the
+/// response (`signed: false`, `signing_error`) rather than failing it.
+fn resign_if_published(
+    state: &DaemonState,
+    user_id: &str,
+    collection_id: &str,
+    response: &mut serde_json::Value,
+) {
+    let Some(signer) = state.signer.as_ref() else {
+        return;
+    };
+    let published = state.db.get().ok().and_then(|mut conn| {
+        use crate::db::schema::published_collections;
+        published_collections::table
+            .filter(published_collections::collection_id.eq(collection_id))
+            .filter(published_collections::user_id.eq(user_id))
+            .count()
+            .get_result::<i64>(&mut conn)
+            .ok()
+    });
+    if published != Some(1) {
+        return;
+    }
+    let Some(obj) = response.as_object_mut() else {
+        return;
+    };
+    match crate::share::records::publish_signed(
+        &state.db,
+        &state.hoardfs,
+        signer,
+        user_id,
+        collection_id,
+    ) {
+        Ok(Some(signed)) => {
+            obj.insert("signed".into(), serde_json::json!(true));
+            obj.insert("record".into(), serde_json::json!(signed));
+        }
+        Ok(None) => {
+            obj.insert("signed".into(), serde_json::json!(false));
+        }
+        Err(e) => {
+            log::warn!("push ingest: re-sign of {collection_id} failed: {e}");
+            obj.insert("signed".into(), serde_json::json!(false));
+            obj.insert("signing_error".into(), serde_json::json!(e.to_string()));
+        }
+    }
+}
+
 pub async fn push_collection(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
@@ -315,7 +365,14 @@ pub async fn push_collection(
     let db = state.db.clone();
     let user_id = user.user_id.clone();
     let limits = state.limits;
-    match tokio::task::spawn_blocking(move || upsert_push(&db, &user_id, &body, limits)).await {
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut response = upsert_push(&db, &user_id, &body, limits)?;
+        resign_if_published(&state2, &user_id, &body.collection.id, &mut response);
+        Ok::<_, PushError>(response)
+    })
+    .await;
+    match result {
         Ok(Ok(response)) => Json(response).into_response(),
         Ok(Err(e)) => e.into_response(),
         Err(e) => PushError::Db(format!("push task: {e}")).into_response(),
@@ -384,6 +441,7 @@ pub async fn put_image_asset(
     let hoardfs = state.hoardfs.clone();
     let user_id = user.user_id.clone();
     let rt = tokio::runtime::Handle::current();
+    let state2 = state.clone();
 
     let result = tokio::task::spawn_blocking(move || -> Result<Response, String> {
         let mut conn = db.get().map_err(|e| e.to_string())?;
@@ -445,10 +503,30 @@ pub async fn put_image_asset(
             ))
             .execute(&mut conn)
             .map_err(|e| e.to_string())?;
+        drop(conn);
+
+        // The bytes behind a published image changed (or arrived): re-sign
+        // every published collection that contains it so the records'
+        // blob references follow. Best-effort; failures are logged.
+        let resigned = match state2.signer.as_ref() {
+            Some(signer) => crate::share::records::resign_collections_with_image(
+                &db,
+                &state2.hoardfs,
+                signer,
+                &user_id,
+                &image.id,
+            )
+            .unwrap_or_else(|e| {
+                log::warn!("put_image_asset: re-sign after upload failed: {e}");
+                0
+            }),
+            None => 0,
+        };
 
         Ok(Json(serde_json::json!({
             "status": "stored",
             "blob_id": stored_blob,
+            "resigned_collections": resigned,
         }))
         .into_response())
     })
@@ -519,6 +597,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            signer: None,
         });
         (state, tmp, alice, bob)
     }

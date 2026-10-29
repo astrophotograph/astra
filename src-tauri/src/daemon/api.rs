@@ -40,6 +40,7 @@ use crate::commands::todos::{get_todo_core, get_todos_core};
 use crate::db::models::{Collection, Image};
 use crate::db::repository::TargetWithCount;
 use crate::db::tenancy;
+use crate::share::records::{self, SignError};
 
 const DEFAULT_PAGE_LIMIT: usize = 100;
 const MAX_PAGE_LIMIT: usize = 500;
@@ -357,6 +358,49 @@ pub struct PublishBody {
     slug: Option<String>,
 }
 
+enum PublishFailure {
+    Core(String),
+    Sign(SignError),
+}
+
+/// 400 for a record that failed lexicon validation — the publish record
+/// itself is in place (legacy manifest serves), but no signed records were
+/// stored. The body names the offending record and the failing paths.
+pub(crate) fn sign_error_response(context: &str, e: SignError) -> Response {
+    match e {
+        SignError::Invalid { uri, errors } => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "record validation failed",
+                "uri": uri,
+                "paths": errors,
+            })),
+        )
+            .into_response(),
+        SignError::Other(e) => internal(context, e),
+    }
+}
+
+/// The publish response: the `published_collections` row as before, plus
+/// `signed` (whether kenning records were written) and, when they were,
+/// `record` with the collection record's `uri`/`cid`.
+fn publish_response(
+    record: crate::db::models::PublishedCollection,
+    signed: Option<records::SignedPublish>,
+) -> Response {
+    let mut value = match serde_json::to_value(&record) {
+        Ok(v) => v,
+        Err(e) => return internal("publish_collection serialize", e.to_string()),
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("signed".into(), serde_json::json!(signed.is_some()));
+        if let Some(s) = signed {
+            obj.insert("record".into(), serde_json::json!(s));
+        }
+    }
+    Json(value).into_response()
+}
+
 pub async fn publish_collection(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
@@ -365,24 +409,36 @@ pub async fn publish_collection(
 ) -> Response {
     let PublishBody { visibility, slug } = body.map(|Json(b)| b).unwrap_or_default();
     let db = state.db.clone();
+    let hoardfs = state.hoardfs.clone();
+    let signer = state.signer.clone();
     let user_id = user.user_id.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Fresh publish vs. update of an existing record — only the former
         // fans out to followers below.
-        let was_new = get_publish_status_core(&db, &user_id, &id)?.is_none();
-        publish_collection_core(
+        let was_new = get_publish_status_core(&db, &user_id, &id)
+            .map_err(PublishFailure::Core)?
+            .is_none();
+        let record = publish_collection_core(
             &db,
             &user_id,
             &id,
             visibility.unwrap_or(PublishVisibility::Public),
             slug.as_deref(),
         )
-        .map(|record| (record, was_new))
+        .map_err(PublishFailure::Core)?;
+        // Signed records after the publish bookkeeping: a signer plus a
+        // linked DID write them; otherwise the legacy live manifest serves.
+        let signed = match &signer {
+            Some(signer) => records::publish_signed(&db, &hoardfs, signer, &user_id, &id)
+                .map_err(PublishFailure::Sign)?,
+            None => None,
+        };
+        Ok::<_, PublishFailure>((record, was_new, signed))
     })
     .await;
 
     match result {
-        Ok(Ok((record, was_new))) => {
+        Ok(Ok((record, was_new, signed))) => {
             // Notify followers post-commit, fire-and-forget: fan-out latency
             // and errors never touch the publish response. Unlisted galleries
             // stay quiet.
@@ -394,10 +450,11 @@ pub async fn publish_collection(
                     record.slug.clone(),
                 ));
             }
-            Json(record).into_response()
+            publish_response(record, signed)
         }
-        Ok(Err(e)) if e.starts_with("Collection not found") => not_found(),
-        Ok(Err(e)) => internal("publish_collection", e),
+        Ok(Err(PublishFailure::Core(e))) if e.starts_with("Collection not found") => not_found(),
+        Ok(Err(PublishFailure::Core(e))) => internal("publish_collection", e),
+        Ok(Err(PublishFailure::Sign(e))) => sign_error_response("publish_collection sign", e),
         Err(e) => internal("publish_collection task", e.to_string()),
     }
 }
@@ -667,6 +724,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            signer: None,
         });
         (state, tmp, alice_token, bob_token, image)
     }

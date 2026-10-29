@@ -97,6 +97,7 @@ diesel::table! {
         thumbnail -> Nullable<Text>,
         fits_url -> Nullable<Text>,
         blob_id -> Nullable<Text>,
+        rkey -> Nullable<Text>,
     }
 }
 
@@ -154,6 +155,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    blob_digests (blob_id, quality) {
+        blob_id -> Text,
+        quality -> Text,
+        cid -> Text,
+        sha256 -> Text,
+        size -> BigInt,
+        mime -> Text,
+    }
+}
+
+diesel::table! {
     published_collections (id) {
         id -> Text,
         collection_id -> Text,
@@ -164,6 +176,19 @@ diesel::table! {
         published_at -> Timestamp,
         updated_at -> Timestamp,
         view_count -> Integer,
+    }
+}
+
+diesel::table! {
+    published_records (uri) {
+        uri -> Text,
+        collection_id -> Text,
+        user_id -> Text,
+        collection -> Text,
+        rkey -> Text,
+        cid -> Text,
+        signed_json -> Text,
+        updated_at -> Timestamp,
     }
 }
 
@@ -214,6 +239,7 @@ diesel::table! {
         external_subject -> Nullable<Text>,
         role -> Text,
         status -> Text,
+        did -> Nullable<Text>,
     }
 }
 
@@ -227,11 +253,13 @@ diesel::joinable!(images -> users (user_id));
 diesel::joinable!(observation_schedules -> users (user_id));
 diesel::joinable!(published_collections -> collections (collection_id));
 diesel::joinable!(published_collections -> users (user_id));
+diesel::joinable!(published_records -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     access_tokens,
     astro_objects,
     astronomy_todos,
+    blob_digests,
     collection_images,
     collections,
     images,
@@ -240,6 +268,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     kith_subscriptions,
     observation_schedules,
     published_collections,
+    published_records,
     scan_roots,
     scanned_directories,
     simbad_cache,

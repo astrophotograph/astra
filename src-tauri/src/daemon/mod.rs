@@ -33,9 +33,11 @@ pub mod api_write;
 pub mod auth;
 pub mod blob;
 pub mod process;
+pub mod records;
 pub mod solve;
 pub mod webapp;
 pub mod gallery;
+pub mod identity;
 pub mod ingest;
 pub mod kith_store;
 pub mod oidc;
@@ -119,6 +121,12 @@ pub struct DaemonState {
     /// solving. Env `ASTRA_TETRA3_DB`, or `{data_dir}/tetra3/
     /// tetra3_unified_05_5deg.bin` when present. None → solving disabled.
     pub tetra3_db: Option<PathBuf>,
+    /// Signing identity + lexicons for signed publishing
+    /// (`share::records`). None → signed publishing disabled; galleries
+    /// serve the legacy live manifest. Env `ASTRA_SIGNING_KEY_SOURCE`
+    /// (`ho:<name>|file:<path>|env:<VAR>`), `ASTRA_SIGNING_METHOD_ID`
+    /// (default `astra`), `ASTRA_LEXICONS_DIR`.
+    pub signer: Option<Arc<crate::share::records::Signer>>,
 }
 
 impl DaemonState {
@@ -209,6 +217,7 @@ pub fn router(state: Arc<DaemonState>) -> Router {
 pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Router {
     let api = Router::new()
         .route("/me", get(me))
+        .route("/me/did", axum::routing::put(identity::set_did))
         .route("/images", get(api::list_images))
         .route(
             "/images/{id}",
@@ -325,6 +334,17 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         .route("/{user}/{slug}", get(gallery::gallery_page))
         .route("/{user}/{slug}/", get(gallery::gallery_page))
         .route("/{user}/{slug}/manifest.json", get(gallery::gallery_manifest))
+        // Signed kenning records (records.rs): the bundle the viewer
+        // prefers, per-image records, and the atproto read shape.
+        .route("/{user}/{slug}/bundle.json", get(records::gallery_bundle))
+        .route(
+            "/{user}/{slug}/records/{rkey}",
+            get(records::gallery_record),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.getRecord",
+            get(records::xrpc_get_record),
+        )
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
         // Bare content-addressed blobs, gated by the publish state of the
@@ -525,6 +545,19 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         None => log::info!("no tetra3 solver database — server-side plate solving disabled"),
     }
 
+    // Set but unloadable is a startup error (the `?`): a daemon must not
+    // come up believing it signs when it cannot.
+    let signer = match crate::share::records::Signer::from_env(data_dir)? {
+        Some(s) => Some(Arc::new(s)),
+        None => {
+            log::info!(
+                "signed publishing disabled — {} not set; galleries serve the live manifest",
+                crate::share::records::SIGNING_KEY_SOURCE_ENV
+            );
+            None
+        }
+    };
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
@@ -533,6 +566,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         session_key,
         processing: Default::default(),
         tetra3_db,
+        signer,
     })
 }
 

@@ -6,6 +6,10 @@
 //!   HoardFS [`Quality`] exactly as `gallery_thumb` / `gallery_image` do.
 //!   `original` is recognised but 404s: the gallery routes never serve
 //!   originals publicly, and neither does this one.
+//! - `GET /blob/{cid}` — the same, addressed by the CIDv1 (`raw`,
+//!   sha2-256) of a rendition's bytes as a signed record's blob reference
+//!   carries it (`share::records`). The CID names one rendition, so the
+//!   quality is implied; `/blob/{cid}/{quality}` must agree or 404s.
 //!
 //! The gallery-scoped paths tie a blob's address to a publish record
 //! (`/@{user}/{slug}/images/{file}`). This route gives the same bytes a
@@ -34,7 +38,9 @@ use hoardfs_core::Quality;
 use super::api::variant_response;
 use super::DaemonState;
 use crate::commands::publish::published_image_for_blob;
+use crate::db::models::Image;
 use crate::db::tenancy;
+use crate::share::records::lookup_blob_cid;
 
 /// Quality segment of `/blob/{blob_id}/{quality}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +89,7 @@ pub async fn blob_default(
     Path(blob_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    serve_blob(state, blob_id, Quality::Preview, headers).await
+    serve_blob(state, blob_id, None, headers).await
 }
 
 /// `GET /blob/{blob_id}/{quality}`.
@@ -98,13 +104,38 @@ pub async fn blob_quality(
         // Originals are never public (matches the gallery routes).
         Some(BlobQuality::Original) | None => return not_found(),
     };
-    serve_blob(state, blob_id, quality, headers).await
+    serve_blob(state, blob_id, Some(quality), headers).await
+}
+
+/// Resolve the path id to a published image + the quality to serve.
+/// A HoardFS blob id serves `requested` (default preview); a blob CID
+/// serves the rendition it digests, provided `requested` (if any) agrees.
+/// Blocking (diesel).
+fn resolve_blob(
+    conn: &mut diesel::SqliteConnection,
+    id: &str,
+    requested: Option<Quality>,
+) -> Result<Option<(Image, Quality)>, String> {
+    if let Some(image) = published_image_for_blob(conn, id)? {
+        return Ok(Some((image, requested.unwrap_or(Quality::Preview))));
+    }
+    if id.parse::<ipld_core::cid::Cid>().is_ok() {
+        for (blob_id, quality) in lookup_blob_cid(conn, id)? {
+            if !requested.as_ref().is_none_or(|r| *r == quality) {
+                continue;
+            }
+            if let Some(image) = published_image_for_blob(conn, &blob_id)? {
+                return Ok(Some((image, quality)));
+            }
+        }
+    }
+    Ok(None)
 }
 
 async fn serve_blob(
     State(state): State<Arc<DaemonState>>,
     blob_id: String,
-    quality: Quality,
+    requested: Option<Quality>,
     headers: HeaderMap,
 ) -> Response {
     if !plausible_blob_id(&blob_id) {
@@ -114,12 +145,12 @@ async fn serve_blob(
     let db = state.db.clone();
     let resolved = tokio::task::spawn_blocking(move || {
         let mut conn = db.get().map_err(|e| e.to_string())?;
-        published_image_for_blob(&mut conn, &blob_id)
+        resolve_blob(&mut conn, &blob_id, requested)
     })
     .await;
 
     match resolved {
-        Ok(Ok(Some(image))) => {
+        Ok(Ok(Some((image, quality)))) => {
             let volume = tenancy::volume_name(&image.user_id);
             variant_response(
                 state,

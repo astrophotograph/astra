@@ -35,6 +35,9 @@ pub struct User {
     pub role: String,
     /// `active`, `invited`, or `disabled` — see `db::tenancy::UserStatus`.
     pub status: String,
+    /// AT Protocol DID (`did:plc:…` / `did:web:…`) records are published
+    /// under; NULL until the user links one via `PUT /api/me/did`.
+    pub did: Option<String>,
 }
 
 #[derive(Debug, Clone, Queryable, Selectable, Serialize, Deserialize)]
@@ -79,6 +82,39 @@ pub struct UpdateUser {
     pub bio: Option<String>,
     pub description: Option<String>,
     pub metadata: Option<String>,
+}
+
+/// A stored kenning `SignedRecord` (see `share::records`), served verbatim.
+#[derive(Debug, Clone, Queryable, Selectable, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = published_records)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct PublishedRecord {
+    /// `at://<did>/<collection>/<rkey>`.
+    pub uri: String,
+    pub collection_id: String,
+    pub user_id: String,
+    /// The record NSID (`gallery.astra.collection` / `gallery.astra.image`).
+    pub collection: String,
+    pub rkey: String,
+    pub cid: String,
+    /// The exact JSON bytes of the `SignedRecord`.
+    pub signed_json: String,
+    pub updated_at: NaiveDateTime,
+}
+
+/// Digest of one HoardFS variant rendition, as a `BlobRef` needs it.
+#[derive(Debug, Clone, Queryable, Selectable, Insertable, Serialize, Deserialize)]
+#[diesel(table_name = blob_digests)]
+#[diesel(check_for_backend(diesel::sqlite::Sqlite))]
+pub struct BlobDigest {
+    pub blob_id: String,
+    /// `preview` or `thumbnail`.
+    pub quality: String,
+    /// CIDv1, raw codec, sha2-256 — what the blob `ref.$link` carries.
+    pub cid: String,
+    pub sha256: String,
+    pub size: i64,
+    pub mime: String,
 }
 
 // ============================================================================
@@ -158,6 +194,9 @@ pub struct Image {
     pub thumbnail: Option<String>,
     pub fits_url: Option<String>,
     pub blob_id: Option<String>,
+    /// `gallery.astra.image` record key (TID), minted at first signed
+    /// publish and reused thereafter; NULL until then.
+    pub rkey: Option<String>,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]

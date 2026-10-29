@@ -251,6 +251,7 @@ mod tests {
             session_key: TEST_KEY,
             processing: Default::default(),
             tetra3_db: None,
+            signer: None,
         });
         (state, tmp)
     }
