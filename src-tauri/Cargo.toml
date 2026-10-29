@@ -107,6 +107,12 @@ pyo3 = { version = "0.29", features = ["auto-initialize"] }
 [dev-dependencies]
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+# AT Protocol lexicon validation for the gallery.astra.* record shapes under
+# ../lexicons (tests/lexicons.rs). Same symlink convention as kith/hoardfs:
+# ~/code/astrophotograph/kenning -> ~/code/embettering/kenning. It must be the
+# same path kith reaches kenning through (`../kenning` from the kith symlink),
+# or cargo sees two different kenning packages and refuses to write a lockfile.
+kenning = { path = "../../kenning" }
 
 [profile.dev]
 opt-level = 2

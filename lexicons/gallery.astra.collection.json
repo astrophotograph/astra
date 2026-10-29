@@ -1,0 +1,89 @@
+{
+  "lexicon": 1,
+  "id": "gallery.astra.collection",
+  "description": "A published astrophotography collection: an ordered set of gallery.astra.image records with a title, optional description and date range, and a visibility rule. Derived from Astra's ShareManifest (viewer/src/types.ts).",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "description": "One published collection. The record key is the collection's publish slug (e.g. `orion-session`), so existing astra.gallery URLs map one-to-one onto at:// URIs; hence `any` rather than `tid`.",
+      "record": {
+        "type": "object",
+        "required": ["title", "createdAt", "updatedAt", "images", "visibility"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxGraphemes": 300,
+            "maxLength": 3000,
+            "description": "Display title. From ShareManifest.collectionName / collections.name."
+          },
+          "description": {
+            "type": "string",
+            "maxGraphemes": 5000,
+            "maxLength": 50000,
+            "description": "Free-text description. From ShareManifest.collectionDescription / collections.description."
+          },
+          "template": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Viewer layout hint, e.g. `messier`. From ShareManifest.template / collections.template. Viewers that do not recognise the value fall back to the default layout."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the collection was created (RFC 3339 / ISO 8601 with time zone). From collections.created_at."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the collection or its membership last changed. From ShareManifest.updatedAt."
+          },
+          "dateRangeStart": {
+            "type": "string",
+            "format": "datetime",
+            "description": "Start of the imaging date range the collection covers, if the author set one. From ShareManifest.dateRangeStart (collections.metadata.dateFilter.start), widened to a full datetime."
+          },
+          "dateRangeEnd": {
+            "type": "string",
+            "format": "datetime",
+            "description": "End of the imaging date range, if set. From ShareManifest.dateRangeEnd (collections.metadata.dateFilter.end)."
+          },
+          "images": {
+            "type": "array",
+            "maxLength": 5000,
+            "items": { "type": "ref", "ref": "#imageRef" },
+            "description": "Ordered member images, each a strong reference to a gallery.astra.image record. From ShareManifest.images; the order is the gallery's display order."
+          },
+          "visibility": {
+            "type": "string",
+            "knownValues": ["public", "unlisted"],
+            "maxLength": 128,
+            "description": "Who may see the collection. `public`: listed on the author's profile; `unlisted`: reachable by URL only. Values of the form `circle:<name>` restrict the collection to a named kith circle of the author, so this is an open string with known values rather than a closed enum. From published_collections.visibility."
+          },
+          "coverImage": {
+            "type": "ref",
+            "ref": "#imageRef",
+            "description": "The image to use as the collection's card/cover. Usually one of `images`; viewers fall back to images[0] when absent."
+          }
+        }
+      }
+    },
+    "imageRef": {
+      "type": "object",
+      "description": "A strong (URI + CID) reference to a gallery.astra.image record, in the same shape as com.atproto.repo.strongRef.",
+      "required": ["uri", "cid"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "at://<did>/gallery.astra.image/<tid> of the referenced image record."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the referenced image record at the time the collection was written."
+        }
+      }
+    }
+  }
+}

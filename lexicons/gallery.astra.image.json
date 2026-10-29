@@ -1,0 +1,183 @@
+{
+  "lexicon": 1,
+  "id": "gallery.astra.image",
+  "description": "One published astrophotograph: preview and thumbnail blobs, optional original, and the astrometry that lets any viewer draw a catalog overlay. Derived from Astra's ManifestImage (viewer/src/types.ts). AT Protocol records carry no floating-point numbers, so every angle, scale and magnitude is an integer in a fixed sub-unit named by the property.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "description": "One image. The record key is a TID assigned at publish time; the publisher keeps the mapping from its own image id to the TID.",
+      "record": {
+        "type": "object",
+        "required": ["filename", "contentType", "createdAt", "favorite", "catalogIds", "preview", "thumbnail", "objects"],
+        "properties": {
+          "filename": {
+            "type": "string",
+            "maxLength": 1024,
+            "description": "Original file name (base name only, no directories). From ManifestImage.filename / images.filename."
+          },
+          "summary": {
+            "type": "string",
+            "maxGraphemes": 3000,
+            "maxLength": 30000,
+            "description": "Author's caption or notes. From ManifestImage.summary / images.summary."
+          },
+          "contentType": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "MIME type of the original capture, e.g. `image/jpeg` or `image/fits`. From ManifestImage.contentType / images.content_type."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the image was added to the library (RFC 3339 with time zone). From ManifestImage.createdAt / images.created_at."
+          },
+          "capturedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the exposure was taken, if known (FITS DATE-OBS). Distinct from createdAt."
+          },
+          "favorite": {
+            "type": "boolean",
+            "description": "Author flagged this image as a favorite. From ManifestImage.favorite / images.favorite."
+          },
+          "catalogIds": {
+            "type": "array",
+            "maxLength": 500,
+            "items": { "type": "string", "maxLength": 64 },
+            "description": "Normalised catalog designations the image depicts, upper-case with spaces removed (`M42`, `NGC1976`). From ManifestImage.catalogIds; may be empty."
+          },
+          "preview": {
+            "type": "blob",
+            "accept": ["image/*"],
+            "description": "Display-size rendition viewers show in the lightbox. Replaces ManifestImage.imagePath."
+          },
+          "thumbnail": {
+            "type": "blob",
+            "accept": ["image/*"],
+            "description": "Small rendition for grids and cards. Replaces ManifestImage.thumbPath."
+          },
+          "original": {
+            "type": "blob",
+            "description": "The full-resolution original (any MIME type, including image/fits). Optional: publishers may withhold it."
+          },
+          "plateSolve": {
+            "type": "ref",
+            "ref": "#plateSolve",
+            "description": "Astrometric solution for the preview's pixel grid, when the image has been plate-solved. From ManifestImage.plateSolve."
+          },
+          "objects": {
+            "type": "array",
+            "maxLength": 2000,
+            "items": { "type": "ref", "ref": "#catalogObject" },
+            "description": "Catalog objects within the field of view, with optional pixel positions for overlay. From ManifestImage.objects; may be empty."
+          },
+          "equipment": {
+            "type": "array",
+            "maxLength": 32,
+            "items": { "type": "ref", "ref": "gallery.astra.equipment#equipmentRef" },
+            "description": "Strong references to the gallery.astra.equipment records used for this capture."
+          }
+        }
+      }
+    },
+    "plateSolve": {
+      "type": "object",
+      "description": "A plate solve: where the image centre points, how big a pixel is, and how the frame is rotated. Mirrors Astra's PlateSolve with floats scaled to integers.",
+      "required": ["centerRaMicroDeg", "centerDecMicroDeg", "pixelScaleMilliArcsec", "rotationMilliDeg", "widthMilliDeg", "heightMilliDeg"],
+      "properties": {
+        "centerRaMicroDeg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 360000000,
+          "description": "Right ascension of the image centre, J2000, in millionths of a degree (degrees x 1e6, rounded). PlateSolve.centerRa 83.822 -> 83822000."
+        },
+        "centerDecMicroDeg": {
+          "type": "integer",
+          "minimum": -90000000,
+          "maximum": 90000000,
+          "description": "Declination of the image centre, J2000, in millionths of a degree (degrees x 1e6, rounded). PlateSolve.centerDec -5.391 -> -5391000."
+        },
+        "pixelScaleMilliArcsec": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Angular size of one pixel in thousandths of an arcsecond (arcsec/px x 1000, rounded). PlateSolve.pixelScale 1.5 -> 1500."
+        },
+        "rotationMilliDeg": {
+          "type": "integer",
+          "minimum": -360000,
+          "maximum": 360000,
+          "description": "Position angle of the frame (east of north) in thousandths of a degree (degrees x 1000, rounded). PlateSolve.rotation 0.5 -> 500."
+        },
+        "widthMilliDeg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 360000,
+          "description": "Field width in thousandths of a degree (degrees x 1000, rounded). PlateSolve.widthDeg 1.2 -> 1200."
+        },
+        "heightMilliDeg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 180000,
+          "description": "Field height in thousandths of a degree (degrees x 1000, rounded). PlateSolve.heightDeg 0.8 -> 800."
+        },
+        "imageWidth": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Width in pixels of the frame the solve and the object pixel positions refer to. PlateSolve.imageWidth (FITS NAXIS1)."
+        },
+        "imageHeight": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Height in pixels of the solved frame. PlateSolve.imageHeight (FITS NAXIS2)."
+        }
+      }
+    },
+    "catalogObject": {
+      "type": "object",
+      "description": "A catalog object in the field of view. Sky position is always present; pixel position is present when the image has been plate-solved. Mirrors Astra's CatalogObject with floats scaled to integers.",
+      "required": ["name", "raMicroDeg", "decMicroDeg"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Catalog designation as displayed, e.g. `M 42` or `NGC 1976`. CatalogObject.name."
+        },
+        "raMicroDeg": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 360000000,
+          "description": "Right ascension, J2000, in millionths of a degree (degrees x 1e6, rounded). CatalogObject.ra."
+        },
+        "decMicroDeg": {
+          "type": "integer",
+          "minimum": -90000000,
+          "maximum": 90000000,
+          "description": "Declination, J2000, in millionths of a degree (degrees x 1e6, rounded). CatalogObject.dec."
+        },
+        "magnitudeMilli": {
+          "type": "integer",
+          "description": "Visual magnitude in thousandths (mag x 1000, rounded); negative for the brightest objects. CatalogObject.magnitude 4.0 -> 4000, -1.46 -> -1460."
+        },
+        "sizeArcsecTenths": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Apparent major-axis size in tenths of an arcsecond (arcsec x 10, i.e. arcmin x 600, rounded). CatalogObject.sizeArcmin 85.0 -> 51000."
+        },
+        "pixelX": {
+          "type": "integer",
+          "description": "Horizontal pixel position of the object centre in the solved frame, rounded to the nearest pixel; may fall outside [0, imageWidth) for objects whose centre is just off-frame. CatalogObject.pixelX."
+        },
+        "pixelY": {
+          "type": "integer",
+          "description": "Vertical pixel position of the object centre in the solved frame, rounded to the nearest pixel. CatalogObject.pixelY."
+        },
+        "radiusPx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Overlay marker radius in pixels of the solved frame, rounded. CatalogObject.radiusPx."
+        }
+      }
+    }
+  }
+}

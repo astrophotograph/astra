@@ -1,0 +1,68 @@
+{
+  "lexicon": 1,
+  "id": "gallery.astra.equipment",
+  "description": "A piece of imaging equipment an author owns: telescope, mount, camera, filter, or an all-in-one preset such as a Seestar. Images reference equipment records by strong reference.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "description": "One equipment item. Derived from the Telescope / Mount / Camera / Filter / GuideScope / GuideCamera shapes in src/lib/astronomy-utils.tsx.",
+      "record": {
+        "type": "object",
+        "required": ["kind", "name", "createdAt"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "knownValues": ["telescope", "mount", "camera", "filter", "preset"],
+            "maxLength": 64,
+            "description": "What sort of equipment this is. `preset` is an integrated smart-telescope profile (e.g. a Seestar S50) that stands in for telescope + mount + camera. Open string so new kinds (guide scopes, focusers) can be added without a schema change."
+          },
+          "name": {
+            "type": "string",
+            "maxGraphemes": 200,
+            "maxLength": 2000,
+            "description": "Display name as the author labels it, e.g. `Seestar S50` or `Redcat 51`."
+          },
+          "make": {
+            "type": "string",
+            "maxGraphemes": 100,
+            "maxLength": 1000,
+            "description": "Manufacturer, e.g. `ZWO`, `William Optics`."
+          },
+          "model": {
+            "type": "string",
+            "maxGraphemes": 100,
+            "maxLength": 1000,
+            "description": "Manufacturer's model designation, e.g. `ASI2600MC Pro`."
+          },
+          "specs": {
+            "type": "unknown",
+            "description": "Free-form specifications, keyed by kind: for a telescope `apertureMm`, `focalLengthMm`, `opticalType`; for a camera `sensorWidthMm`, `sensorHeightMm`, `pixelSizeMicrons`, `resolution`; for a mount or filter `type`. Values must be DAG-CBOR encodable, so dimensions are integers in the unit the key names (microns for pixel size, millimetres otherwise)."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When the record was written (RFC 3339 with time zone)."
+          }
+        }
+      }
+    },
+    "equipmentRef": {
+      "type": "object",
+      "description": "A strong (URI + CID) reference to a gallery.astra.equipment record.",
+      "required": ["uri", "cid"],
+      "properties": {
+        "uri": {
+          "type": "string",
+          "format": "at-uri",
+          "description": "at://<did>/gallery.astra.equipment/<tid> of the referenced record."
+        },
+        "cid": {
+          "type": "string",
+          "format": "cid",
+          "description": "CID of the referenced equipment record at the time the reference was written."
+        }
+      }
+    }
+  }
+}
