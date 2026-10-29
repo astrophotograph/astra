@@ -31,6 +31,7 @@
 pub mod api;
 pub mod api_write;
 pub mod auth;
+pub mod blob;
 pub mod process;
 pub mod solve;
 pub mod webapp;
@@ -326,6 +327,12 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         .route("/{user}/{slug}/manifest.json", get(gallery::gallery_manifest))
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
+        // Bare content-addressed blobs, gated by the publish state of the
+        // image that owns the hash (see blob.rs). `/blob` is a literal
+        // segment, so it outranks the `/{user}` captures above — a mirror
+        // can serve the same bytes at the same relative path.
+        .route("/blob/{blob_id}", get(blob::blob_default))
+        .route("/blob/{blob_id}/{quality}", get(blob::blob_quality))
         // `/`, `/app`, `/app/{*path}`, `/auth/callback` — static segments,
         // so they can never shadow the `/{user}` gallery captures above.
         .merge(webapp::routes(web_dist))

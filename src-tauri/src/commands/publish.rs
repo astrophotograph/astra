@@ -12,9 +12,9 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::collections::fetch_owned_collection;
-use crate::db::models::{Collection, PublishedCollection};
+use crate::db::models::{Collection, Image, PublishedCollection};
 use crate::db::repository;
-use crate::db::schema::{collections, published_collections, users};
+use crate::db::schema::{collection_images, collections, images, published_collections, users};
 use crate::db::DbPool;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,6 +294,50 @@ pub fn resolve_public_collection(
         .map_err(|e| e.to_string())?;
 
     Ok(collection.map(|c| (record, c)))
+}
+
+/// Resolve a content-addressed blob id to an image row whose bytes are
+/// public: the image must be a member of at least one collection that has a
+/// `published_collections` row (public *or* unlisted — the URL is the
+/// capability either way) owned by the image's owner. This is the gate for
+/// the bare `/blob/{blob_id}` route: bytes become fetchable by hash exactly
+/// when a collection containing them is published, and stop being so when
+/// the last such publish record is deleted.
+///
+/// Several image rows can share one blob (the same file imported twice);
+/// any one of them being published proves the bytes are public, and the
+/// bytes are identical by construction. Rows are visited oldest-first so
+/// the served row (and thus the ETag) is stable across requests. `None` →
+/// the caller 404s, whether the id is unknown or merely unpublished.
+pub fn published_image_for_blob(
+    conn: &mut SqliteConnection,
+    blob_id: &str,
+) -> Result<Option<Image>, String> {
+    let candidates: Vec<Image> = images::table
+        .filter(images::blob_id.eq(blob_id))
+        .order((images::created_at.asc(), images::id.asc()))
+        .load(conn)
+        .map_err(|e| e.to_string())?;
+
+    for image in candidates {
+        let member_of = collection_images::table
+            .filter(collection_images::image_id.eq(&image.id))
+            .select(collection_images::collection_id);
+        let published: i64 = published_collections::table
+            .filter(published_collections::user_id.eq(&image.user_id))
+            .filter(published_collections::visibility.eq_any([
+                PublishVisibility::Public.as_str(),
+                PublishVisibility::Unlisted.as_str(),
+            ]))
+            .filter(published_collections::collection_id.eq_any(member_of))
+            .count()
+            .get_result(conn)
+            .map_err(|e| e.to_string())?;
+        if published > 0 {
+            return Ok(Some(image));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) fn user_id_for_username(

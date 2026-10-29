@@ -322,7 +322,7 @@ async fn serve_gallery_asset(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::commands::collections::{create_collection_core, CreateCollectionInput};
     use crate::commands::images::{
@@ -335,7 +335,7 @@ mod tests {
     use std::sync::Mutex;
     use tower::ServiceExt;
 
-    fn tiny_png() -> Vec<u8> {
+    pub(crate) fn tiny_png() -> Vec<u8> {
         let img = image::RgbImage::from_pixel(40, 40, image::Rgb([250, 180, 40]));
         let mut bytes = std::io::Cursor::new(Vec::new());
         image::DynamicImage::ImageRgb8(img)
@@ -344,19 +344,19 @@ mod tests {
         bytes.into_inner()
     }
 
-    struct Fixture {
-        state: Arc<DaemonState>,
+    pub(crate) struct Fixture {
+        pub(crate) state: Arc<DaemonState>,
         _tmp: tempfile::TempDir,
-        public_collection: Collection,
-        unlisted_collection: Collection,
-        private_collection: Collection,
-        image: Image,
-        private_image: Image,
+        pub(crate) public_collection: Collection,
+        pub(crate) unlisted_collection: Collection,
+        pub(crate) private_collection: Collection,
+        pub(crate) image: Image,
+        pub(crate) private_image: Image,
     }
 
     /// alice (@aliceh) with a public, an unlisted, and a private collection;
     /// one HoardFS-backed image in the public one, one image kept private.
-    async fn fixture() -> Fixture {
+    pub(crate) async fn fixture() -> Fixture {
         let tmp = tempfile::tempdir().unwrap();
         let db = test_pool();
         insert_user(&db, "alice");
@@ -479,7 +479,7 @@ mod tests {
         }
     }
 
-    async fn get(router: &axum::Router, uri: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
+    pub(crate) async fn get(router: &axum::Router, uri: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
         let resp = router
             .clone()
             .oneshot(
