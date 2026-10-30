@@ -17,6 +17,13 @@
 //! existing (getRecord — records exist only while their collection is
 //! published). Responses carry `Cache-Control: public, max-age=60` and the
 //! record CID as a strong ETag; a matching `If-None-Match` answers 304.
+//!
+//! Records of a `circle:` collection are stored with `private = 1` and
+//! served only to viewers the kith ACL admits (`acl.rs`, viewer from
+//! [`MaybeViewer`]); denial is a 404 indistinguishable from "no such
+//! record", and admitted responses are `private, no-store`. The public
+//! `sh.kenning.private.stub` that stands in for such a collection is an
+//! ordinary public record here.
 
 use std::sync::Arc;
 
@@ -26,9 +33,13 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 
+use super::acl;
 use super::api::if_none_match_hits;
+use super::auth::MaybeViewer;
 use super::DaemonState;
-use crate::commands::publish::{resolve_public_collection, user_id_for_username};
+use crate::commands::publish::{
+    access_for_published, resolve_public_collection, user_id_for_username, Access,
+};
 use crate::db::models::PublishedRecord;
 use crate::share::records::{self, IMAGE_NSID};
 
@@ -84,29 +95,45 @@ pub async fn gallery_bundle(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug)): Path<(String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
     };
     let db = state.db.clone();
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<Option<(String, String)>, String> {
-            let Some((_, collection)) = resolve_public_collection(&db, &handle, &slug)? else {
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<(String, String, Access)>, String> {
+            let Some((published, collection)) = resolve_public_collection(&db, &handle, &slug)?
+            else {
                 return Ok(None);
             };
             let mut conn = db.get().map_err(|e| e.to_string())?;
+            let access = access_for_published(&mut conn, &published)?;
             let Some(record) = records::stored_collection_record(&mut conn, &collection.id)
                 .map_err(|e| e.to_string())?
             else {
                 return Ok(None);
             };
             let bundle = records::bundle_json(&mut conn, &record)?;
-            Ok(Some((bundle, record.cid)))
-        })
-        .await;
+            Ok(Some((bundle, record.cid, access)))
+        },
+    )
+    .await;
 
     match result {
-        Ok(Ok(Some((body, cid)))) => json_bytes_response(body, &cid, &headers),
+        Ok(Ok(Some((body, cid, access)))) => {
+            match acl::allowed(&state, &access, viewer.0.as_ref()).await {
+                Ok(true) => {}
+                Ok(false) => return not_found(),
+                Err(e) => {
+                    log::error!("gallery bundle acl: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+            let mut response = json_bytes_response(body, &cid, &headers);
+            acl::mark_if_gated(&mut response, &access);
+            response
+        }
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
             log::error!("gallery bundle: {e}");
@@ -122,28 +149,54 @@ pub async fn gallery_bundle(
 /// `GET /@{user}/{slug}/records/{rkey}` — an image record of the gallery's
 /// owner. Records exist only while a collection containing the image is
 /// published, so owner + rkey is the gate; an rkey from another user's
-/// repo 404s.
+/// repo 404s. Both the gallery in the URL and (for a private record) the
+/// record itself must pass the viewer's ACL.
 pub async fn gallery_record(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug, rkey)): Path<(String, String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
     };
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<Option<PublishedRecord>, String> {
-        let Some((published, _)) = resolve_public_collection(&db, &handle, &slug)? else {
-            return Ok(None);
-        };
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        records::stored_record(&mut conn, &published.user_id, IMAGE_NSID, &rkey)
-            .map_err(|e| e.to_string())
-    })
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<(PublishedRecord, Access, Access)>, String> {
+            let Some((published, _)) = resolve_public_collection(&db, &handle, &slug)? else {
+                return Ok(None);
+            };
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let gallery_access = access_for_published(&mut conn, &published)?;
+            let Some(row) =
+                records::stored_record(&mut conn, &published.user_id, IMAGE_NSID, &rkey)
+                    .map_err(|e| e.to_string())?
+            else {
+                return Ok(None);
+            };
+            let record_access = records::access_for_record(&mut conn, &row)?;
+            Ok(Some((row, gallery_access, record_access)))
+        },
+    )
     .await;
 
     match result {
-        Ok(Ok(Some(row))) => json_bytes_response(row.signed_json, &row.cid, &headers),
+        Ok(Ok(Some((row, gallery_access, record_access)))) => {
+            for access in [&gallery_access, &record_access] {
+                match acl::allowed(&state, access, viewer.0.as_ref()).await {
+                    Ok(true) => {}
+                    Ok(false) => return not_found(),
+                    Err(e) => {
+                        log::error!("gallery record acl: {e}");
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                }
+            }
+            let mut response = json_bytes_response(row.signed_json, &row.cid, &headers);
+            acl::mark_if_gated(&mut response, &gallery_access);
+            acl::mark_if_gated(&mut response, &record_access);
+            response
+        }
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
             log::error!("gallery record: {e}");
@@ -173,11 +226,13 @@ fn xrpc_error(status: StatusCode, error: &str, message: String) -> Response {
 
 /// `GET /xrpc/com.atproto.repo.getRecord` → `{ uri, cid, value }`.
 /// `repo` is the author's DID (exact URI lookup) or their username (the
-/// handle stand-in until handles resolve). Unknown → 404 `RecordNotFound`.
+/// handle stand-in until handles resolve). Unknown → 404 `RecordNotFound`,
+/// and so is a private record for a viewer outside its circle.
 pub async fn xrpc_get_record(
     State(state): State<Arc<DaemonState>>,
     Query(params): Query<GetRecordParams>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     let (Some(repo), Some(collection), Some(rkey)) = (
         params.repo.filter(|s| !s.is_empty()),
@@ -201,21 +256,44 @@ pub async fn xrpc_get_record(
     }
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<Option<PublishedRecord>, String> {
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        if repo.starts_with("did:") {
-            let uri = format!("at://{repo}/{collection}/{rkey}");
-            return records::stored_record_by_uri(&mut conn, &uri).map_err(|e| e.to_string());
-        }
-        let Some(user_id) = user_id_for_username(&mut conn, &repo)? else {
-            return Ok(None);
-        };
-        records::stored_record(&mut conn, &user_id, &collection, &rkey).map_err(|e| e.to_string())
-    })
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<(PublishedRecord, Access)>, String> {
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let row = if repo.starts_with("did:") {
+                let uri = format!("at://{repo}/{collection}/{rkey}");
+                records::stored_record_by_uri(&mut conn, &uri).map_err(|e| e.to_string())?
+            } else {
+                let Some(user_id) = user_id_for_username(&mut conn, &repo)? else {
+                    return Ok(None);
+                };
+                records::stored_record(&mut conn, &user_id, &collection, &rkey)
+                    .map_err(|e| e.to_string())?
+            };
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let access = records::access_for_record(&mut conn, &row)?;
+            Ok(Some((row, access)))
+        },
+    )
     .await;
 
     match result {
-        Ok(Ok(Some(row))) => {
+        Ok(Ok(Some((row, access)))) => {
+            match acl::allowed(&state, &access, viewer.0.as_ref()).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    return xrpc_error(
+                        StatusCode::NOT_FOUND,
+                        "RecordNotFound",
+                        "no such record".to_string(),
+                    )
+                }
+                Err(e) => {
+                    log::error!("getRecord acl: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
             let value: serde_json::Value = match serde_json::from_str(&row.signed_json) {
                 Ok(v) => v,
                 Err(e) => {
@@ -228,7 +306,9 @@ pub async fn xrpc_get_record(
                 "cid": row.cid,
                 "value": value.get("record").cloned().unwrap_or(serde_json::Value::Null),
             });
-            json_bytes_response(out.to_string(), &row.cid, &headers)
+            let mut response = json_bytes_response(out.to_string(), &row.cid, &headers);
+            acl::mark_if_gated(&mut response, &access);
+            response
         }
         Ok(Ok(None)) => xrpc_error(
             StatusCode::NOT_FOUND,
@@ -271,7 +351,7 @@ pub(crate) mod tests {
     pub(crate) const DID: &str = "did:plc:z72i7hdynmk6r22z27h6tvur";
 
     /// Resolves exactly one DID to a document naming `astra` → `key`.
-    struct FakeResolver {
+    pub(crate) struct FakeResolver {
         did: Did,
         key: VerifyingKey,
     }
@@ -300,7 +380,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn resolver(f: &Fixture) -> FakeResolver {
+    pub(crate) fn resolver(f: &Fixture) -> FakeResolver {
         FakeResolver {
             did: Did::parse(DID).unwrap(),
             key: f.verifying_key.clone(),
@@ -333,7 +413,7 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    fn stored(f: &Fixture, uri: &str) -> String {
+    pub(crate) fn stored(f: &Fixture, uri: &str) -> String {
         published_records::table
             .find(uri)
             .select(published_records::signed_json)
@@ -350,7 +430,7 @@ pub(crate) mod tests {
             .expect("rkey minted at publish")
     }
 
-    async fn request(
+    pub(crate) async fn request(
         router: &axum::Router,
         method: &str,
         uri: &str,
@@ -375,7 +455,7 @@ pub(crate) mod tests {
         (status, headers, bytes)
     }
 
-    fn json(bytes: &[u8]) -> serde_json::Value {
+    pub(crate) fn json(bytes: &[u8]) -> serde_json::Value {
         serde_json::from_slice(bytes).unwrap()
     }
 

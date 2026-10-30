@@ -15,16 +15,25 @@
 //! whose extractor reads that extension — and responds 500 if the route was
 //! registered outside the authenticated scope, so a misconfigured route
 //! fails loudly instead of silently skipping auth.
+//!
+//! The public gallery routes are not behind the layer but may still want
+//! to know who is asking: [`MaybeViewer`] runs the same credential
+//! resolution ([`resolve_credentials`]) optionally, yielding the viewer's
+//! DID (`users.did`) when a valid PAT, OIDC bearer or session cookie names
+//! a local user with one, and `None` otherwise. It never rejects.
 
 use std::sync::Arc;
 
+use std::convert::Infallible;
+
 use axum::extract::{FromRequestParts, Request, State};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use diesel::prelude::*;
+use kenning::Did;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -221,23 +230,22 @@ pub fn authenticate_session_user(db: &DbPool, user_id: &str) -> Result<AuthedUse
     })
 }
 
-/// Default-deny middleware for the `/api` subtree: authenticates the bearer
-/// credential and inserts [`AuthedUser`]. Routes under this layer cannot
-/// skip authentication.
-///
-/// Three credential types: personal access tokens carry the `astra_` bearer
-/// prefix; other bearer values are OIDC JWTs (rejected unless OIDC is
-/// configured); with no Authorization header, the `astra_session` cookie
-/// (see [`super::session`]) is checked last.
-pub async fn require_auth(
-    State(state): State<Arc<DaemonState>>,
-    mut req: Request,
-    next: Next,
-) -> Response {
-    let Some(token) = bearer_token(req.headers()).map(str::to_owned) else {
+/// Resolve the request's credential to an active user, without deciding
+/// what to do about failure. Three credential types: personal access
+/// tokens carry the `astra_` bearer prefix; other bearer values are OIDC
+/// JWTs (rejected unless OIDC is configured); with no Authorization
+/// header, the `astra_session` cookie (see [`super::session`]) is checked
+/// last. `Missing` when the request carries nothing usable.
+pub async fn resolve_credentials(
+    state: &DaemonState,
+    headers: &HeaderMap,
+) -> Result<AuthedUser, AuthError> {
+    let join = |e: tokio::task::JoinError| AuthError::Db(format!("auth task panicked: {e}"));
+
+    let Some(token) = bearer_token(headers).map(str::to_owned) else {
         // No bearer header — fall back to the browser session cookie.
-        let Some(cookie) = super::session::cookie_from_headers(req.headers()) else {
-            return unauthorized();
+        let Some(cookie) = super::session::cookie_from_headers(headers) else {
+            return Err(AuthError::Missing);
         };
         let Some(user_id) = super::session::verify_cookie_value(
             &state.session_key,
@@ -245,36 +253,19 @@ pub async fn require_auth(
             chrono::Utc::now().timestamp(),
         ) else {
             log::debug!("session cookie rejected (bad signature or expired)");
-            return unauthorized();
+            return Err(AuthError::InvalidToken);
         };
         let db = state.db.clone();
-        return match tokio::task::spawn_blocking(move || {
-            authenticate_session_user(&db, &user_id)
-        })
-        .await
-        {
-            Ok(Ok(user)) => {
-                req.extensions_mut().insert(user);
-                next.run(req).await
-            }
-            Ok(Err(AuthError::Db(e))) => {
-                log::error!("session auth backend error: {e}");
-                server_error()
-            }
-            Ok(Err(reason)) => {
-                log::debug!("session auth rejected: {reason:?}");
-                unauthorized()
-            }
-            Err(e) => {
-                log::error!("session auth task panicked: {e}");
-                server_error()
-            }
-        };
+        return tokio::task::spawn_blocking(move || authenticate_session_user(&db, &user_id))
+            .await
+            .map_err(join)?;
     };
 
-    let result = if token.starts_with("astra_") {
+    if token.starts_with("astra_") {
         let db = state.db.clone();
-        tokio::task::spawn_blocking(move || authenticate(&db, &token)).await
+        tokio::task::spawn_blocking(move || authenticate(&db, &token))
+            .await
+            .map_err(join)?
     } else if let Some(oidc) = state.oidc.clone() {
         match oidc.verify(&token).await {
             Ok(claims) => {
@@ -284,35 +275,98 @@ pub async fn require_auth(
                     super::oidc::resolve_user(&db, &hoardfs, &claims)
                 })
                 .await
+                .map_err(join)?
             }
             Err(reason) => {
                 log::debug!("OIDC token rejected: {reason}");
-                return unauthorized();
+                Err(AuthError::InvalidToken)
             }
         }
     } else {
         log::debug!("JWT presented but OIDC is not configured");
-        return unauthorized();
-    };
+        Err(AuthError::InvalidToken)
+    }
+}
 
-    match result {
-        Ok(Ok(user)) => {
+/// Default-deny middleware for the `/api` subtree: authenticates the bearer
+/// credential ([`resolve_credentials`]) and inserts [`AuthedUser`]. Routes
+/// under this layer cannot skip authentication.
+pub async fn require_auth(
+    State(state): State<Arc<DaemonState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    match resolve_credentials(&state, req.headers()).await {
+        Ok(user) => {
             req.extensions_mut().insert(user);
             next.run(req).await
         }
-        Ok(Err(AuthError::Forbidden(message))) => forbidden(message),
-        Ok(Err(AuthError::Db(e))) => {
+        Err(AuthError::Forbidden(message)) => forbidden(message),
+        Err(AuthError::Db(e)) => {
             log::error!("auth backend error: {e}");
             server_error()
         }
-        Ok(Err(reason)) => {
+        Err(reason) => {
             log::debug!("auth rejected: {reason:?}");
             unauthorized()
         }
-        Err(e) => {
-            log::error!("auth task panicked: {e}");
-            server_error()
+    }
+}
+
+/// The viewer's DID on a public route, if the request authenticates as a
+/// local user who has one. Optional by construction: a missing, invalid or
+/// expired credential, a user without a DID, or a backend hiccup all give
+/// `None` and the route proceeds as anonymous — a public page must never
+/// fail because of a stale cookie.
+#[derive(Debug, Clone)]
+pub struct MaybeViewer(pub Option<Did>);
+
+/// Blocking: `users.did` of a user, parsed.
+fn user_did_parsed(db: &DbPool, user_id: &str) -> Option<Did> {
+    let mut conn = db.get().ok()?;
+    let did: Option<String> = users::table
+        .find(user_id)
+        .select(users::did)
+        .first::<Option<String>>(&mut conn)
+        .optional()
+        .ok()
+        .flatten()
+        .flatten();
+    Did::parse(&did?).ok()
+}
+
+/// [`MaybeViewer`] as a function, for handlers that already hold the
+/// headers.
+pub async fn viewer_did(state: &DaemonState, headers: &HeaderMap) -> Option<Did> {
+    let user = match resolve_credentials(state, headers).await {
+        Ok(user) => user,
+        Err(AuthError::Missing) => return None,
+        Err(AuthError::Db(e)) => {
+            log::warn!("viewer identity unavailable (backend): {e}");
+            return None;
         }
+        Err(reason) => {
+            log::debug!("viewer credential ignored: {reason:?}");
+            return None;
+        }
+    };
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || user_did_parsed(&db, &user.user_id))
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("viewer did task panicked: {e}");
+            None
+        })
+}
+
+impl FromRequestParts<Arc<DaemonState>> for MaybeViewer {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<DaemonState>,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(viewer_did(state, &parts.headers).await))
     }
 }
 

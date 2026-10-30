@@ -20,6 +20,18 @@
 //! Signing is optional: without `ASTRA_SIGNING_KEY_SOURCE` the daemon keeps
 //! serving the legacy live manifest, and a user without a `users.did` keeps
 //! publishing the legacy way too.
+//!
+//! # Circle collections (`visibility = circle:<name>`)
+//!
+//! The records of a circle collection are signed exactly like public ones
+//! but stored with `published_records.private = 1`, so the public routes
+//! serve them only after the kith ACL (`daemon::acl`). In their place the
+//! owner's public collection `sh.kenning.private.stub` carries a signed
+//! [`StubRecord`] at the same rkey (the slug): subject URI + CID, this
+//! host's public URL (`ASTRA_PUBLIC_URL`) and the visibility. An image
+//! that also sits in a public or unlisted published collection keeps a
+//! public record — its bytes are public anyway. See
+//! `kenning/docs/private-store.md`.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -33,10 +45,12 @@ use kenning::envelope::{sign, SignedRecord};
 use kenning::keys::SigningKey;
 use kenning::keystore::{load_signing_key, KeySource};
 use kenning::lexicon::LexiconRegistry;
+use kenning::private::{StubRecord, Visibility, STUB_NSID};
 use kenning::record::{AtUri, BlobRef, Nsid, Record, Rkey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::commands::publish::{self, Access};
 use crate::db::models::{BlobDigest, Collection, Image, PublishedCollection, PublishedRecord};
 use crate::db::schema::{blob_digests, images, published_collections, published_records, users};
 use crate::db::{repository, tenancy, DbPool};
@@ -51,6 +65,10 @@ pub const SIGNING_KEY_SOURCE_ENV: &str = "ASTRA_SIGNING_KEY_SOURCE";
 pub const SIGNING_METHOD_ID_ENV: &str = "ASTRA_SIGNING_METHOD_ID";
 /// Directory holding the `gallery.astra.*.json` lexicons.
 pub const LEXICONS_DIR_ENV: &str = "ASTRA_LEXICONS_DIR";
+/// This daemon's public base URL (`https://astra.gallery`), written into
+/// the `host` of every private-record stub. Required to publish a circle
+/// collection; nothing else reads it.
+pub const PUBLIC_URL_ENV: &str = "ASTRA_PUBLIC_URL";
 pub const DEFAULT_METHOD_ID: &str = "astra";
 
 /// Multicodec `raw` — blob CIDs address the bytes themselves.
@@ -68,6 +86,9 @@ pub struct Signer {
     pub key: SigningKey,
     pub method_id: String,
     pub lexicons: LexiconRegistry,
+    /// `ASTRA_PUBLIC_URL`, the `host` a private-record stub points at.
+    /// None → circle collections cannot be published (clear error).
+    pub public_url: Option<String>,
 }
 
 impl Signer {
@@ -76,7 +97,16 @@ impl Signer {
             key,
             method_id: method_id.into(),
             lexicons,
+            public_url: None,
         }
+    }
+
+    /// Set the public base URL stubs advertise (trailing `/` dropped).
+    pub fn with_public_url(mut self, url: impl Into<String>) -> Self {
+        let url = url.into();
+        let url = url.trim().trim_end_matches('/').to_string();
+        self.public_url = (!url.is_empty()).then_some(url);
+        self
     }
 
     /// Resolve the signer from the environment. `Ok(None)` when
@@ -99,7 +129,7 @@ impl Signer {
         let dir = resolve_lexicons_dir(data_dir)?;
         let lexicons = LexiconRegistry::from_dir(&dir)
             .map_err(|e| format!("loading lexicons from {}: {e}", dir.display()))?;
-        for nsid in [COLLECTION_NSID, IMAGE_NSID] {
+        for nsid in [COLLECTION_NSID, IMAGE_NSID, STUB_NSID] {
             if lexicons
                 .get(&Nsid::new(nsid).expect("static NSID"))
                 .is_none()
@@ -113,7 +143,16 @@ impl Signer {
             lexicons.len(),
             dir.display()
         );
-        Ok(Some(Self::new(key, method_id, lexicons)))
+        let signer = Self::new(key, method_id, lexicons)
+            .with_public_url(std::env::var(PUBLIC_URL_ENV).unwrap_or_default());
+        match &signer.public_url {
+            Some(url) => log::info!("private-record stubs will name this host as {url}"),
+            None => log::warn!(
+                "{PUBLIC_URL_ENV} not set — publishing a circle:<name> collection will fail \
+                 until it is (public and unlisted publishing are unaffected)"
+            ),
+        }
+        Ok(Some(signer))
     }
 }
 
@@ -541,6 +580,7 @@ fn sign_and_store<T: Serialize>(
     collection_id: &str,
     user_id: &str,
     now: NaiveDateTime,
+    private: bool,
 ) -> Result<Signed, SignError> {
     let uri_string = uri.to_string();
     let record = Record::new(uri, body).map_err(|e| e.to_string())?;
@@ -563,6 +603,7 @@ fn sign_and_store<T: Serialize>(
             cid: signed.cid.to_string(),
             signed_json,
             updated_at: now,
+            private,
         },
     })
 }
@@ -582,8 +623,11 @@ pub fn user_did(conn: &mut SqliteConnection, user_id: &str) -> Result<Option<Str
 ///
 /// Returns `Ok(None)` when the user has no DID (legacy publish stays in
 /// effect) and `Err(Other)` when the collection has no publish record.
-/// Blocking: call from `spawn_blocking` inside a tokio runtime — HoardFS
-/// variant fetches are driven through `Handle::current()`.
+/// For a `circle:` collection the collection record and the records of
+/// images not otherwise public are stored private, and a public stub is
+/// stored beside them (requires [`Signer::public_url`]). Blocking: call
+/// from `spawn_blocking` inside a tokio runtime — HoardFS variant fetches
+/// are driven through `Handle::current()`.
 pub fn publish_signed(
     db: &DbPool,
     hoardfs: &Arc<Mutex<hoardfs_volume::HoardFs>>,
@@ -608,6 +652,17 @@ pub fn publish_signed(
         .find(collection_id)
         .first(&mut conn)?;
     let rows: Vec<Image> = repository::get_images_in_collection(&mut conn, collection_id)?;
+
+    let visibility: Visibility = published
+        .visibility
+        .parse()
+        .map_err(|e| format!("publish {} visibility: {e}", published.id))?;
+    let private = visibility.is_private();
+    if private && signer.public_url.is_none() {
+        return Err(SignError::Other(format!(
+            "{PUBLIC_URL_ENV} must be set to publish a {visibility} collection (the stub names this host)"
+        )));
+    }
 
     let now = Utc::now();
     let now_naive = now.naive_utc();
@@ -668,7 +723,18 @@ pub fn publish_signed(
             preview,
             thumbnail,
         );
-        let signed = sign_and_store(signer, uri, body, collection_id, user_id, now_naive)?;
+        // An image also carried by a public/unlisted publish stays public:
+        // its bytes are, so hiding its record would only break that gallery.
+        let image_private = private && !publish::image_in_public_collection(&mut conn, image)?;
+        let signed = sign_and_store(
+            signer,
+            uri,
+            body,
+            collection_id,
+            user_id,
+            now_naive,
+            image_private,
+        )?;
         refs.push(StrongRef {
             uri: signed.row.uri.clone(),
             cid: signed.row.cid.clone(),
@@ -685,12 +751,42 @@ pub fn publish_signed(
     let body = collection_body(&collection, &published, refs, now);
     let signed_collection = sign_and_store(
         signer,
-        collection_uri,
+        collection_uri.clone(),
         body,
         collection_id,
         user_id,
         now_naive,
+        private,
     )?;
+
+    // The public stand-in for a private collection: same rkey, public
+    // collection `sh.kenning.private.stub`, pointing at this host.
+    let stub = if private {
+        let host = signer.public_url.as_deref().expect("checked above");
+        let subject_cid: Cid = signed_collection
+            .row
+            .cid
+            .parse()
+            .map_err(|e| format!("collection cid: {e}"))?;
+        let stub_uri = AtUri::new(
+            did.clone(),
+            StubRecord::nsid(),
+            Rkey::new(&published.slug).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let body = StubRecord::new(collection_uri, &subject_cid, host, visibility.clone());
+        Some(sign_and_store(
+            signer,
+            stub_uri,
+            body,
+            collection_id,
+            user_id,
+            now_naive,
+            false,
+        )?)
+    } else {
+        None
+    };
 
     let result = SignedPublish {
         uri: signed_collection.row.uri.clone(),
@@ -705,6 +801,7 @@ pub fn publish_signed(
         let keep: Vec<&str> = signed_images
             .iter()
             .chain(std::iter::once(&signed_collection))
+            .chain(stub.iter())
             .map(|s| s.row.uri.as_str())
             .collect();
         diesel::delete(
@@ -716,6 +813,7 @@ pub fn publish_signed(
         for s in signed_images
             .iter()
             .chain(std::iter::once(&signed_collection))
+            .chain(stub.iter())
         {
             diesel::replace_into(published_records::table)
                 .values(&s.row)
@@ -725,10 +823,11 @@ pub fn publish_signed(
     })?;
 
     log::info!(
-        "signed publish: {} ({} images, {} skipped) cid {}",
+        "signed publish: {} ({} images, {} skipped{}) cid {}",
         result.uri,
         result.image_count,
         result.skipped_images,
+        if private { ", private + stub" } else { "" },
         result.cid
     );
     Ok(Some(result))
@@ -805,6 +904,48 @@ pub fn stored_record_by_uri(
     uri: &str,
 ) -> QueryResult<Option<PublishedRecord>> {
     published_records::table.find(uri).first(conn).optional()
+}
+
+/// Who may read a stored record. Public rows (`private = 0`, including
+/// every stub) → anyone. A private collection record follows its publish
+/// record; a private image record is readable by anyone allowed for *any*
+/// circle collection of the owner containing the image (the image record
+/// is the same bytes whichever gallery it is reached through).
+pub fn access_for_record(
+    conn: &mut SqliteConnection,
+    record: &PublishedRecord,
+) -> Result<Access, String> {
+    if !record.private {
+        return Ok(Access::Public);
+    }
+    match record.collection.as_str() {
+        COLLECTION_NSID => {
+            let published: Option<PublishedCollection> = published_collections::table
+                .filter(published_collections::collection_id.eq(&record.collection_id))
+                .filter(published_collections::user_id.eq(&record.user_id))
+                .first(conn)
+                .optional()
+                .map_err(|e| e.to_string())?;
+            match published {
+                Some(p) => publish::access_for_published(conn, &p),
+                None => Ok(Access::Circles(Vec::new())),
+            }
+        }
+        IMAGE_NSID => {
+            let image: Option<Image> = images::table
+                .filter(images::user_id.eq(&record.user_id))
+                .filter(images::rkey.eq(&record.rkey))
+                .first(conn)
+                .optional()
+                .map_err(|e| e.to_string())?;
+            match image {
+                Some(image) => publish::access_for_image(conn, &image),
+                None => Ok(Access::Circles(Vec::new())),
+            }
+        }
+        // Unknown private NSID: nobody.
+        _ => Ok(Access::Circles(Vec::new())),
+    }
 }
 
 /// `{ "collection": <SignedRecord>, "images": [<SignedRecord>, ...] }` with

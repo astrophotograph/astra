@@ -22,11 +22,15 @@
 //!
 //! No `AuthedUser`; the gate is the publish state of the blob's image.
 //! `blob_id` must resolve to an image row that is a member of at least one
-//! collection with a `published_collections` row (public or unlisted) owned
-//! by the image's owner — see `publish::published_image_for_blob`.
-//! Otherwise 404, always: unknown id, malformed id, unpublished image, and
-//! unknown quality all look identical from the outside, so the route cannot
-//! be used to probe which hashes exist in someone's private library.
+//! collection with a `published_collections` row owned by the image's
+//! owner — see `publish::published_image_for_blob`. Public or unlisted →
+//! served to anyone (the hash is the capability, like the unlisted URL).
+//! Only circle collections → served to a viewer ([`MaybeViewer`]) the
+//! kith ACL admits for any of them (`acl.rs`), as `private, no-store`.
+//! Otherwise 404, always: unknown id, malformed id, unpublished image,
+//! circle denial and unknown quality all look identical from the outside,
+//! so the route cannot be used to probe which hashes exist in someone's
+//! private library.
 
 use std::sync::Arc;
 
@@ -35,9 +39,11 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hoardfs_core::Quality;
 
+use super::acl;
 use super::api::variant_response;
+use super::auth::MaybeViewer;
 use super::DaemonState;
-use crate::commands::publish::published_image_for_blob;
+use crate::commands::publish::{published_image_for_blob, Access};
 use crate::db::models::Image;
 use crate::db::tenancy;
 use crate::share::records::lookup_blob_cid;
@@ -88,8 +94,9 @@ pub async fn blob_default(
     state: State<Arc<DaemonState>>,
     Path(blob_id): Path<String>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
-    serve_blob(state, blob_id, None, headers).await
+    serve_blob(state, blob_id, None, headers, viewer).await
 }
 
 /// `GET /blob/{blob_id}/{quality}`.
@@ -97,6 +104,7 @@ pub async fn blob_quality(
     state: State<Arc<DaemonState>>,
     Path((blob_id, quality)): Path<(String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     let quality = match BlobQuality::parse(&quality) {
         Some(BlobQuality::Thumbnail) => Quality::Thumbnail,
@@ -104,28 +112,28 @@ pub async fn blob_quality(
         // Originals are never public (matches the gallery routes).
         Some(BlobQuality::Original) | None => return not_found(),
     };
-    serve_blob(state, blob_id, Some(quality), headers).await
+    serve_blob(state, blob_id, Some(quality), headers, viewer).await
 }
 
-/// Resolve the path id to a published image + the quality to serve.
-/// A HoardFS blob id serves `requested` (default preview); a blob CID
-/// serves the rendition it digests, provided `requested` (if any) agrees.
-/// Blocking (diesel).
+/// Resolve the path id to a published image + the quality to serve + the
+/// access rule the caller must still check. A HoardFS blob id serves
+/// `requested` (default preview); a blob CID serves the rendition it
+/// digests, provided `requested` (if any) agrees. Blocking (diesel).
 fn resolve_blob(
     conn: &mut diesel::SqliteConnection,
     id: &str,
     requested: Option<Quality>,
-) -> Result<Option<(Image, Quality)>, String> {
-    if let Some(image) = published_image_for_blob(conn, id)? {
-        return Ok(Some((image, requested.unwrap_or(Quality::Preview))));
+) -> Result<Option<(Image, Quality, Access)>, String> {
+    if let Some((image, access)) = published_image_for_blob(conn, id)? {
+        return Ok(Some((image, requested.unwrap_or(Quality::Preview), access)));
     }
     if id.parse::<ipld_core::cid::Cid>().is_ok() {
         for (blob_id, quality) in lookup_blob_cid(conn, id)? {
             if !requested.as_ref().is_none_or(|r| *r == quality) {
                 continue;
             }
-            if let Some(image) = published_image_for_blob(conn, &blob_id)? {
-                return Ok(Some((image, quality)));
+            if let Some((image, access)) = published_image_for_blob(conn, &blob_id)? {
+                return Ok(Some((image, quality, access)));
             }
         }
     }
@@ -137,6 +145,7 @@ async fn serve_blob(
     blob_id: String,
     requested: Option<Quality>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     if !plausible_blob_id(&blob_id) {
         return not_found();
@@ -150,17 +159,25 @@ async fn serve_blob(
     .await;
 
     match resolved {
-        Ok(Ok(Some((image, quality)))) => {
+        Ok(Ok(Some((image, quality, access)))) => {
+            match acl::allowed(&state, &access, viewer.0.as_ref()).await {
+                Ok(true) => {}
+                Ok(false) => return not_found(),
+                Err(e) => {
+                    log::error!("blob acl: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
             let volume = tenancy::volume_name(&image.user_id);
-            variant_response(
-                state,
-                image,
-                volume,
-                quality,
-                &headers,
-                "public, max-age=3600",
-            )
-            .await
+            let cache = if access.is_public() {
+                "public, max-age=3600"
+            } else {
+                acl::PRIVATE_CACHE_CONTROL
+            };
+            let mut response =
+                variant_response(state, image, volume, quality, &headers, cache).await;
+            acl::mark_if_gated(&mut response, &access);
+            response
         }
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {

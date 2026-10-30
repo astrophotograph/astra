@@ -1,0 +1,12 @@
+-- Circle visibility (kenning private store, docs/private-store.md).
+--
+-- published_collections.visibility gains the third value `circle:<name>`.
+-- The signed records of such a collection are stored in this same table
+-- with `private = 1` and are served only after an ACL check against the
+-- owner's kith circle; a public signed stub (`sh.kenning.private.stub`,
+-- same rkey as the collection, `private = 0`) stands in for them in the
+-- public collection. One table with a flag rather than a parallel
+-- `private_records` table: the row shape is identical and every read path
+-- already goes through `published_records`, so a flag cannot be forgotten
+-- by a query the way a second table can.
+ALTER TABLE published_records ADD COLUMN private INTEGER NOT NULL DEFAULT 0;

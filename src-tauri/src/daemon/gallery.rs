@@ -19,7 +19,8 @@
 //! - `GET /at/{did}/{collection}/{rkey}` — resolver for the `at://` URIs a
 //!   signed gallery advertises (`<link rel="canonical">`): 302 to the
 //!   pretty URL of the gallery (for an image record, the gallery that
-//!   contains it). `{did}` may also be a local username.
+//!   contains it; for a `sh.kenning.private.stub`, the gallery it stands
+//!   in for). `{did}` may also be a local username.
 //!
 //! # Access model
 //!
@@ -28,6 +29,12 @@
 //! galleries resolve only at their exact slug and never appear on the
 //! profile page. Nothing here ever reads a collection or image that the
 //! resolved record doesn't own — probing ids of unpublished content 404s.
+//!
+//! `circle:<name>` galleries add one step: after resolution, the viewer
+//! (optionally identified by [`MaybeViewer`]) is checked against the
+//! owner's kith circle (`acl.rs`); denial is the same 404. Such responses
+//! are marked `private, no-store`. The profile page lists a circle gallery
+//! only to viewers who pass, and never lists the public stub as a gallery.
 
 use std::sync::Arc;
 
@@ -37,16 +44,20 @@ use axum::response::{Html, IntoResponse, Response};
 use diesel::prelude::*;
 use hoardfs_core::Quality;
 
+use super::acl;
 use super::api::variant_response;
+use super::auth::MaybeViewer;
 use super::DaemonState;
 use crate::commands::publish::{
-    list_public_for_user_core, resolve_public_collection, user_id_for_username,
+    access_for_published, list_listable_for_user_core, resolve_public_collection,
+    user_id_for_username, Access,
 };
 use crate::db::models::{Collection, Image, PublishedCollection};
 use crate::db::schema::{published_collections, users};
 use crate::db::{repository, tenancy, DbPool};
 use crate::share::records::{COLLECTION_NSID, IMAGE_NSID};
 use crate::share::{manifest, records, viewer};
+use kenning::private::STUB_NSID;
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, "not found").into_response()
@@ -64,44 +75,119 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Resolve a public gallery or 404. Blocking (diesel).
+/// Resolve a gallery (public, unlisted or circle) with its access rule,
+/// or None. Blocking (diesel). The caller must run [`acl::allowed`] on the
+/// `Access` before serving.
 fn resolve(
     db: &DbPool,
     handle: &str,
     slug: &str,
-) -> Result<Option<(PublishedCollection, Collection)>, String> {
-    resolve_public_collection(db, handle, slug)
+) -> Result<Option<(PublishedCollection, Collection, Access)>, String> {
+    let Some((record, collection)) = resolve_public_collection(db, handle, slug)? else {
+        return Ok(None);
+    };
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let access = access_for_published(&mut conn, &record)?;
+    Ok(Some((record, collection, access)))
 }
+
+/// Blocking resolve + the async ACL: the gallery, or the `None` that both
+/// "no such gallery" and "not yours to see" share (the caller 404s).
+async fn resolve_allowed(
+    state: &DaemonState,
+    handle: String,
+    slug: String,
+    viewer: &MaybeViewer,
+) -> Result<Option<(PublishedCollection, Collection, Access)>, String> {
+    let db = state.db.clone();
+    let hit = tokio::task::spawn_blocking(move || resolve(&db, &handle, &slug))
+        .await
+        .map_err(|e| format!("resolve task: {e}"))??;
+    let Some((record, collection, access)) = hit else {
+        return Ok(None);
+    };
+    if !acl::allowed(state, &access, viewer.0.as_ref()).await? {
+        return Ok(None);
+    }
+    Ok(Some((record, collection, access)))
+}
+
+/// A profile's galleries after the circle ACL: `(publish row, at:// URI
+/// if signed)`, in listing order.
+type ProfileGalleries = Vec<(PublishedCollection, Option<String>)>;
+
+/// The profile page's data once the ACL has run: handle, owner id, DID,
+/// galleries — or None for an unknown user.
+type ProfilePage = Option<(String, String, Option<String>, ProfileGalleries)>;
+
+/// Blocking half of the profile page: handle, owner id, DID and every
+/// listable gallery with its access rule.
+type ProfileCandidates = (
+    String,
+    String,
+    Option<String>,
+    Vec<(PublishedCollection, Option<String>, Access)>,
+);
 
 pub async fn profile_page(
     State(state): State<Arc<DaemonState>>,
     Path(user): Path<String>,
+    viewer: MaybeViewer,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
     };
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        let Some(owner_id) = user_id_for_username(&mut conn, &handle)? else {
-            return Ok(None);
-        };
-        let did = records::user_did(&mut conn, &owner_id)?;
-        drop(conn);
-        let galleries = list_public_for_user_core(&db, &handle)?;
-        // Signed galleries carry their identity-rooted URI as well.
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        let mut listed = Vec::with_capacity(galleries.len());
-        for g in galleries {
-            let uri = records::stored_collection_record(&mut conn, &g.collection_id)
-                .map_err(|e| e.to_string())?
-                .map(|r| r.uri);
-            listed.push((g, uri));
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Option<ProfileCandidates>, String> {
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let Some(owner_id) = user_id_for_username(&mut conn, &handle)? else {
+                return Ok(None);
+            };
+            let did = records::user_did(&mut conn, &owner_id)?;
+            drop(conn);
+            // Public + circle galleries; the circle ones are filtered by the
+            // ACL below. Stubs are records, not publishes, so they never
+            // appear here.
+            let galleries = list_listable_for_user_core(&db, &handle)?;
+            // Signed galleries carry their identity-rooted URI as well.
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let mut listed = Vec::with_capacity(galleries.len());
+            for (g, access) in galleries {
+                let uri = records::stored_collection_record(&mut conn, &g.collection_id)
+                    .map_err(|e| e.to_string())?
+                    .map(|r| r.uri);
+                listed.push((g, uri, access));
+            }
+            Ok(Some((handle, owner_id, did, listed)))
+        })
+        .await;
+
+    // The circle ACL, per candidate, against the live kith store.
+    let result: Result<Result<ProfilePage, String>, _> = match result {
+        Ok(Ok(Some((handle, owner_id, did, candidates)))) => {
+            let mut galleries = Vec::with_capacity(candidates.len());
+            let mut failure = None;
+            for (g, uri, access) in candidates {
+                match acl::allowed(&state, &access, viewer.0.as_ref()).await {
+                    Ok(true) => galleries.push((g, uri)),
+                    Ok(false) => {}
+                    Err(e) => {
+                        failure = Some(e);
+                        break;
+                    }
+                }
+            }
+            match failure {
+                Some(e) => Ok(Err(e)),
+                None => Ok(Ok(Some((handle, owner_id, did, galleries)))),
+            }
         }
-        Ok(Some((handle, owner_id, did, listed)))
-    })
-    .await;
+        Ok(Ok(None)) => Ok(Ok(None)),
+        Ok(Err(e)) => Ok(Err(e)),
+        Err(e) => Err(e),
+    };
 
     match result {
         Ok(Ok(Some((handle, owner_id, did, galleries)))) => {
@@ -158,6 +244,11 @@ pub async fn profile_page(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("public, max-age=60"),
             );
+            // An identified viewer may have been shown circle galleries:
+            // the page is theirs alone.
+            if viewer.0.is_some() {
+                acl::mark_private(&mut response);
+            }
             response
         }
         Ok(Ok(None)) => not_found(),
@@ -175,37 +266,43 @@ pub async fn profile_page(
 pub async fn gallery_page(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug)): Path<(String, String)>,
+    viewer: MaybeViewer,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
     };
 
-    let db = state.db.clone();
-    let slug_owned = slug.clone();
-    let resolved = tokio::task::spawn_blocking(move || {
-        let hit = resolve(&db, &handle, &slug_owned)?;
-        let mut signed = None;
-        if let Some((record, collection)) = &hit {
-            if let Ok(mut conn) = db.get() {
-                // Best-effort view counter; never fails the page.
-                let _ = diesel::update(published_collections::table.find(&record.id))
-                    .set(
-                        published_collections::view_count.eq(published_collections::view_count + 1),
-                    )
-                    .execute(&mut conn);
-                // The stored collection record, when signed: its URI and
-                // CID go into the page head.
-                signed = records::stored_collection_record(&mut conn, &collection.id)
-                    .map_err(|e| e.to_string())?
-                    .map(|r| (r.uri, r.cid));
-            }
+    // Resolve + ACL first; a denied viewer must not even tick the counter.
+    let (record, collection, access) = match resolve_allowed(&state, handle, slug, &viewer).await {
+        Ok(Some(hit)) => hit,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            log::error!("gallery page: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        Ok::<_, String>(hit.map(|hit| (hit, signed)))
+    };
+
+    let db = state.db.clone();
+    let (record_id, collection_id) = (record.id.clone(), collection.id.clone());
+    let resolved = tokio::task::spawn_blocking(move || {
+        let mut signed = None;
+        if let Ok(mut conn) = db.get() {
+            // Best-effort view counter; never fails the page.
+            let _ = diesel::update(published_collections::table.find(&record_id))
+                .set(published_collections::view_count.eq(published_collections::view_count + 1))
+                .execute(&mut conn);
+            // The stored collection record, when signed: its URI and
+            // CID go into the page head.
+            signed = records::stored_collection_record(&mut conn, &collection_id)
+                .map_err(|e| e.to_string())?
+                .map(|r| (r.uri, r.cid));
+        }
+        Ok::<_, String>(signed)
     })
     .await;
 
     match resolved {
-        Ok(Ok(Some(((record, collection), signed)))) => {
+        Ok(Ok(signed)) => {
             let viewer_html = match collection.template.as_deref() {
                 Some("messier") | Some("caldwell") => viewer::CATALOG_VIEWER_HTML,
                 _ => viewer::VIEWER_HTML,
@@ -237,9 +334,9 @@ pub async fn gallery_page(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("public, max-age=300"),
             );
+            acl::mark_if_gated(&mut response, &access);
             response
         }
-        Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
             log::error!("gallery page: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -292,65 +389,83 @@ fn at_uri_link(uri: &str) -> String {
 /// `{did}` is the DID the record was published under (exact URI lookup)
 /// or, as a convenience, a local username (owner + NSID + rkey lookup).
 /// A `gallery.astra.collection` record redirects to its gallery; a
-/// `gallery.astra.image` record to the gallery that contains the image.
-/// Anything that does not resolve to a stored record of a published
-/// collection — unknown DID, rkey, or NSID, a malformed segment — 404s.
+/// `gallery.astra.image` record to the gallery that contains the image; a
+/// `sh.kenning.private.stub` to the gallery it stands in for (the stub is
+/// public, so this resolves for everyone — the gallery itself then 404s
+/// for viewers outside the circle). A *private* record 404s for a viewer
+/// the ACL denies, rather than redirecting: the redirect would confirm
+/// the record exists. Anything that does not resolve to a stored record
+/// of a published collection — unknown DID, rkey, or NSID, a malformed
+/// segment — 404s.
 pub async fn at_resolve(
     State(state): State<Arc<DaemonState>>,
     Path((did, collection, rkey)): Path<(String, String, String)>,
+    viewer: MaybeViewer,
 ) -> Response {
     if kenning::record::Nsid::new(collection.as_str()).is_err()
         || kenning::record::Rkey::new(rkey.as_str()).is_err()
-        || !(collection == COLLECTION_NSID || collection == IMAGE_NSID)
+        || !(collection == COLLECTION_NSID || collection == IMAGE_NSID || collection == STUB_NSID)
     {
         return not_found();
     }
 
     let db = state.db.clone();
-    let result = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        let record = if did.starts_with("did:") {
-            let uri = format!("at://{did}/{collection}/{rkey}");
-            records::stored_record_by_uri(&mut conn, &uri).map_err(|e| e.to_string())?
-        } else {
-            let Some(user_id) = user_id_for_username(&mut conn, &did)? else {
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Option<(String, Access)>, String> {
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let record = if did.starts_with("did:") {
+                let uri = format!("at://{did}/{collection}/{rkey}");
+                records::stored_record_by_uri(&mut conn, &uri).map_err(|e| e.to_string())?
+            } else {
+                let Some(user_id) = user_id_for_username(&mut conn, &did)? else {
+                    return Ok(None);
+                };
+                records::stored_record(&mut conn, &user_id, &collection, &rkey)
+                    .map_err(|e| e.to_string())?
+            };
+            let Some(record) = record else {
                 return Ok(None);
             };
-            records::stored_record(&mut conn, &user_id, &collection, &rkey)
+            let access = records::access_for_record(&mut conn, &record)?;
+            // Records exist only while their collection is published, and the
+            // row names the publish; still, resolve through the publish table so
+            // the redirect target is exactly what `/@user/slug` will accept.
+            let slug: Option<String> = published_collections::table
+                .filter(published_collections::collection_id.eq(&record.collection_id))
+                .filter(published_collections::user_id.eq(&record.user_id))
+                .select(published_collections::slug)
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| e.to_string())?;
+            let username: Option<String> = users::table
+                .find(&record.user_id)
+                .select(users::username)
+                .first::<Option<String>>(&mut conn)
+                .optional()
                 .map_err(|e| e.to_string())?
-        };
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        // Records exist only while their collection is published, and the
-        // row names the publish; still, resolve through the publish table so
-        // the redirect target is exactly what `/@user/slug` will accept.
-        let slug: Option<String> = published_collections::table
-            .filter(published_collections::collection_id.eq(&record.collection_id))
-            .filter(published_collections::user_id.eq(&record.user_id))
-            .select(published_collections::slug)
-            .first(&mut conn)
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let username: Option<String> = users::table
-            .find(&record.user_id)
-            .select(users::username)
-            .first::<Option<String>>(&mut conn)
-            .optional()
-            .map_err(|e| e.to_string())?
-            .flatten();
-        Ok(match (username, slug) {
-            (Some(username), Some(slug)) => Some(format!("/@{username}/{slug}")),
-            _ => None,
+                .flatten();
+            Ok(match (username, slug) {
+                (Some(username), Some(slug)) => Some((format!("/@{username}/{slug}"), access)),
+                _ => None,
+            })
         })
-    })
-    .await;
+        .await;
 
     match result {
         // 302, not axum's `Redirect::to` (303) or `::temporary` (307): the
         // record may be re-signed or move host, so nothing here is permanent.
-        Ok(Ok(Some(location))) => {
-            (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
+        Ok(Ok(Some((location, access)))) => {
+            match acl::allowed(&state, &access, viewer.0.as_ref()).await {
+                Ok(true) => {}
+                Ok(false) => return not_found(),
+                Err(e) => {
+                    log::error!("at resolver acl: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+            let mut response = (StatusCode::FOUND, [(header::LOCATION, location)]).into_response();
+            acl::mark_if_gated(&mut response, &access);
+            response
         }
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
@@ -373,45 +488,55 @@ pub async fn gallery_manifest(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug)): Path<(String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
         return not_found();
     };
 
+    let (_, collection, access) = match resolve_allowed(&state, handle, slug, &viewer).await {
+        Ok(Some(hit)) => hit,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            log::error!("gallery manifest: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
     let db = state.db.clone();
     let result = tokio::task::spawn_blocking(move || -> Result<_, String> {
-        let Some((_, collection)) = resolve(&db, &handle, &slug)? else {
-            return Ok(None);
-        };
         let mut conn = db.get().map_err(|e| e.to_string())?;
         // Signed publish: the stored record is the manifest, unchanged.
         if let Some(record) = records::stored_collection_record(&mut conn, &collection.id)
             .map_err(|e| e.to_string())?
         {
-            return Ok(Some(ManifestBody::Signed(record)));
+            return Ok(ManifestBody::Signed(record));
         }
         let images = repository::get_images_in_collection(&mut conn, &collection.id)
             .map_err(|e| e.to_string())?;
-        Ok(Some(ManifestBody::Legacy(
+        Ok(ManifestBody::Legacy(
             manifest::build_manifest_for_collection(&collection, &images),
-        )))
+        ))
     })
     .await;
 
     match result {
-        Ok(Ok(Some(ManifestBody::Signed(record)))) => {
-            super::records::json_bytes_response(record.signed_json, &record.cid, &headers)
+        Ok(Ok(ManifestBody::Signed(record))) => {
+            let mut response =
+                super::records::json_bytes_response(record.signed_json, &record.cid, &headers);
+            acl::mark_if_gated(&mut response, &access);
+            response
         }
-        Ok(Ok(Some(ManifestBody::Legacy(manifest)))) => {
+        Ok(Ok(ManifestBody::Legacy(manifest))) => {
             let mut response = axum::Json(manifest).into_response();
             // Short: the viewer polls for live updates every 30s.
             response.headers_mut().insert(
                 header::CACHE_CONTROL,
                 header::HeaderValue::from_static("public, max-age=10"),
             );
+            acl::mark_if_gated(&mut response, &access);
             response
         }
-        Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
             log::error!("gallery manifest: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -427,25 +552,29 @@ pub async fn gallery_image(
     state: State<Arc<DaemonState>>,
     path: Path<(String, String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
-    serve_gallery_asset(state, path, headers, Quality::Preview).await
+    serve_gallery_asset(state, path, headers, viewer, Quality::Preview).await
 }
 
 pub async fn gallery_thumb(
     state: State<Arc<DaemonState>>,
     path: Path<(String, String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
 ) -> Response {
-    serve_gallery_asset(state, path, headers, Quality::Thumbnail).await
+    serve_gallery_asset(state, path, headers, viewer, Quality::Thumbnail).await
 }
 
 /// `{file}` is `{image_id}.{ext}` per the manifest paths. The image must be
 /// owned by the gallery's owner AND be a member of the published collection
-/// — an id from someone's unpublished library 404s.
+/// — an id from someone's unpublished library 404s. A circle gallery's
+/// assets go through the same ACL as its page.
 async fn serve_gallery_asset(
     State(state): State<Arc<DaemonState>>,
     Path((user, slug, file)): Path<(String, String, String)>,
     headers: HeaderMap,
+    viewer: MaybeViewer,
     quality: Quality,
 ) -> Response {
     let Some(handle) = handle_from_path(&user).map(str::to_string) else {
@@ -457,11 +586,17 @@ async fn serve_gallery_asset(
         .unwrap_or(&file)
         .to_string();
 
+    let (record, collection, access) = match resolve_allowed(&state, handle, slug, &viewer).await {
+        Ok(Some(hit)) => hit,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            log::error!("gallery asset: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
     let db = state.db.clone();
     let resolved = tokio::task::spawn_blocking(move || -> Result<Option<Image>, String> {
-        let Some((record, collection)) = resolve(&db, &handle, &slug)? else {
-            return Ok(None);
-        };
         let mut conn = db.get().map_err(|e| e.to_string())?;
         let in_collection =
             repository::is_image_in_collection(&mut conn, &collection.id, &image_id)
@@ -477,15 +612,15 @@ async fn serve_gallery_asset(
     match resolved {
         Ok(Ok(Some(image))) => {
             let volume = tenancy::volume_name(&image.user_id);
-            variant_response(
-                state,
-                image,
-                volume,
-                quality,
-                &headers,
-                "public, max-age=3600",
-            )
-            .await
+            let cache = if access.is_public() {
+                "public, max-age=3600"
+            } else {
+                acl::PRIVATE_CACHE_CONTROL
+            };
+            let mut response =
+                variant_response(state, image, volume, quality, &headers, cache).await;
+            acl::mark_if_gated(&mut response, &access);
+            response
         }
         Ok(Ok(None)) => not_found(),
         Ok(Err(e)) => {
@@ -536,7 +671,8 @@ pub(crate) mod tests {
         pub(crate) blob_id: String,
     }
 
-    /// A signer over a fresh secp256k1 key and the checkout's `lexicons/`.
+    /// A signer over a fresh secp256k1 key and the checkout's `lexicons/`,
+    /// naming `https://astra.test` as this host (for private-record stubs).
     pub(crate) fn test_signer() -> records::Signer {
         let key = kenning::keys::SigningKey::generate(kenning::keys::KeyAlgo::Secp256k1);
         let lexicons = kenning::lexicon::LexiconRegistry::from_dir(concat!(
@@ -545,6 +681,7 @@ pub(crate) mod tests {
         ))
         .expect("lexicons load");
         records::Signer::new(key, records::DEFAULT_METHOD_ID, lexicons)
+            .with_public_url("https://astra.test/")
     }
 
     /// alice (@aliceh) with a public, an unlisted, and a private collection;

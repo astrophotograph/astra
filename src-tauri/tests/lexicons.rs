@@ -364,7 +364,9 @@ fn errors(nsid_str: &str, body: &Value) -> Vec<ValidationError> {
 #[test]
 fn registry_loads_the_four_gallery_astra_lexicons() {
     let reg = registry();
-    assert_eq!(reg.len(), 4);
+    // Four gallery.astra.* lexicons plus kenning's private-record stub
+    // (`sh.kenning.private.stub`, published for circle collections).
+    assert_eq!(reg.len(), 5);
     for (id, key) in [
         (COLLECTION, "any"),
         (IMAGE, "tid"),

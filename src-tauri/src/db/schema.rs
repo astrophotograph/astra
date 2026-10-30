@@ -189,6 +189,7 @@ diesel::table! {
         cid -> Text,
         signed_json -> Text,
         updated_at -> Timestamp,
+        private -> Bool,
     }
 }
 

@@ -17,6 +17,7 @@ One file per NSID, all `"lexicon": 1`:
 | `gallery.astra.image` | `tid` | `ManifestImage` (+ blobs for the renditions) |
 | `gallery.astra.equipment` | `tid` | equipment sets (`src/lib/astronomy-utils.tsx`) |
 | `gallery.astra.profile` | `literal:self` | `users` row |
+| `sh.kenning.private.stub` | `any` (the subject's rkey) | kenning's public stand-in for a private record (not a `gallery.astra.*` type; see below) |
 
 "Source" means the manifest shape in `viewer/src/types.ts`, as built by
 `src-tauri/src/share/manifest.rs`, with the DB column it is populated from
@@ -155,6 +156,20 @@ is the literal `self`; `validate_record` rejects any other key.
 | `createdAt` | datetime | `users.created_at` |
 
 All optional: an empty `{ "$type": "gallery.astra.profile" }` is valid.
+
+### `sh.kenning.private.stub` (key `any`)
+
+Not an Astra type: this is kenning's stub for a record held in a host's
+private store (`kenning/docs/private-store.md`), kept here because the
+daemon validates and signs it like the others and `LexiconRegistry` loads
+one directory. When a collection is published with `visibility`
+`circle:<name>`, its `gallery.astra.collection` and image records are
+stored privately and this record is published in the owner's public repo
+**at the same rkey as the collection**: `subject` (at-uri of the private
+collection), `subjectCid` (its CID when the stub was signed), `host`
+(the daemon's `ASTRA_PUBLIC_URL`), `visibility` (the `circle:` string) and
+`updatedAt`. All required. A viewer who resolves the stub knows only that
+the record exists, where it is served, and which circle gates it.
 
 ## Intentionally excluded
 

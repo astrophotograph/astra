@@ -442,7 +442,7 @@ pub async fn publish_collection(
             // Notify followers post-commit, fire-and-forget: fan-out latency
             // and errors never touch the publish response. Unlisted galleries
             // stay quiet.
-            if was_new && record.visibility == PublishVisibility::Public.as_str() {
+            if was_new && record.visibility == crate::commands::publish::PUBLIC {
                 tokio::spawn(super::social_events::emit_new_gallery(
                     state.clone(),
                     record.user_id.clone(),
@@ -453,6 +453,16 @@ pub async fn publish_collection(
             publish_response(record, signed)
         }
         Ok(Err(PublishFailure::Core(e))) if e.starts_with("Collection not found") => not_found(),
+        // `circle:<name>` without a linked DID: the caller's problem, 400.
+        Ok(Err(PublishFailure::Core(e)))
+            if e.starts_with(crate::commands::publish::CIRCLE_NEEDS_DID) =>
+        {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "circle visibility requires a linked DID", "message": e })),
+            )
+                .into_response()
+        }
         Ok(Err(PublishFailure::Core(e))) => internal("publish_collection", e),
         Ok(Err(PublishFailure::Sign(e))) => sign_error_response("publish_collection sign", e),
         Err(e) => internal("publish_collection task", e.to_string()),

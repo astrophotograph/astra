@@ -50,7 +50,7 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 | Route | Auth | Notes |
 |---|---|---|
 | `/healthz` | none | version + db/hoardfs status |
-| `/@user`, `/@user/slug`, assets | none | published collections only |
+| `/@user`, `/@user/slug`, assets | none (optional session/PAT for `circle:` galleries) | published collections only; `circle:<name>` galleries 404 unless the viewer is the owner or in the circle |
 | `/at/{did}/{collection}/{rkey}` | none | 302 to the gallery for a stored signed record |
 | `/api/*` | bearer (PAT or OIDC JWT) | default-deny |
 
@@ -85,7 +85,8 @@ startup that signed publishing is disabled.
 |---|---|
 | `ASTRA_SIGNING_KEY_SOURCE` | Where the app key lives, in kenning `KeySource` form: `ho:<name>` (homelab secret store), `file:<path>` (multikey string, mode 0600) or `env:<VAR>`. Unset → disabled. Set but unloadable → the daemon refuses to start. |
 | `ASTRA_SIGNING_METHOD_ID` | Verification method id the key is registered under in the author's DID document. Default `astra`. |
-| `ASTRA_LEXICONS_DIR` | Directory with the `gallery.astra.*.json` lexicons. Default `$ASTRA_DATA_DIR/lexicons`, falling back to the source checkout's `lexicons/` when running from a build tree. `just deploy-staging` ships the repo's `lexicons/` there, next to `web/`. |
+| `ASTRA_LEXICONS_DIR` | Directory with the `gallery.astra.*.json` lexicons **and `sh.kenning.private.stub.json`** (the daemon refuses to start signing without it). Default `$ASTRA_DATA_DIR/lexicons`, falling back to the source checkout's `lexicons/` when running from a build tree. `just deploy-staging` ships the repo's `lexicons/` there, next to `web/`. |
+| `ASTRA_PUBLIC_URL` | This daemon's public base URL, e.g. `https://astra.gallery`. Written as `host` into every private-record stub (below). Unset → public/unlisted publishing is unaffected, publishing a `circle:` collection fails with a message naming this variable, and the daemon warns once at startup. |
 
 ### Enabling signed publishing
 
@@ -236,6 +237,74 @@ to the gallery that contains the image. Unknown DID, rkey or NSID → 404.
 implement this route**: it is the entry point a link rooted in a DID
 needs on whichever host currently holds the author's records (resolve the
 DID → find the record → send the visitor to the host's own page for it).
+
+### Circle visibility (`circle:<name>`)
+
+Next to `public` and `unlisted`, a collection can be published to a
+[kith](../../../embettering/kith) circle of its owner, e.g. family:
+
+```
+POST /api/collections/{id}/publish  {"visibility": "circle:family"}
+```
+
+The vocabulary is `kenning::Visibility` (`public` | `unlisted` |
+`circle:<name>`, name `1..=64` chars of `[a-z0-9_-]`); the string is stored
+in `published_collections.visibility` as is. The owner must have a linked
+DID (400 otherwise): the mechanism is kenning's private store, see
+`kenning/docs/private-store.md`:
+
+- The collection's signed records are stored in `published_records` with
+  `private = 1` (same table, a flag; migration `circle_visibility`). An
+  image that also sits in a public or unlisted published collection keeps
+  a public record, since its bytes are public anyway.
+- In their place a **public stub** is signed and stored: collection
+  `sh.kenning.private.stub`, same rkey as the collection (the slug), body
+  `{ subject, subjectCid, host: $ASTRA_PUBLIC_URL, visibility, updatedAt }`.
+  It is a normal public record (`getRecord` serves it, it goes in the
+  owner's repo) and says only that a private record with that URI exists
+  at this host; re-publishing refreshes it, unpublishing removes it with
+  the private records.
+- Every route that can expose the collection checks the viewer **on each
+  request** against the live kith store, in this order: gallery page,
+  `manifest.json`, `bundle.json`, `records/{rkey}`, `images/` and
+  `thumbs/`, `/xrpc/com.atproto.repo.getRecord` for a private record,
+  `/at/...` for a private record, and `/blob/{cid}` (served if *any*
+  public/unlisted published collection references the blob, else if the
+  viewer passes for *any* circle collection that does, else 404). Denial
+  is always **404**, never 403, so a stranger cannot tell private from
+  nonexistent. Admitted responses carry `Cache-Control: private, no-store`
+  and `Vary: Cookie, Authorization`.
+- The viewer is identified from the existing credentials, optionally: a
+  PAT or OIDC bearer, or the `astra_session` cookie, resolved to a local
+  user and then to `users.did`. No credential, a bad or expired one, or a
+  user without a DID all count as anonymous (never a 401 on a public
+  route). Magic-link sessions for people without accounts are a separate,
+  later leaf.
+- Membership = a kith edge actor → `(user, viewer)` of kind
+  `circle:<name>`, where both ids are local `users.id` (kith ids in Astra
+  are user ids, mapped from DIDs through `users.did`). The owner always
+  passes. A DID with no local account is a member of nothing.
+- The profile page lists a circle gallery only to viewers who pass, and
+  never lists the stub. The stub's own `/at/` URI redirects (302) to the
+  gallery URL like any record — the gallery then 404s for outsiders.
+- Unlisted blobs stay fetchable by CID for anyone (the hash is the
+  capability, exactly like the unlisted URL).
+
+**Creating the circle edge.** There is no circle-management route yet
+(the kith adapter leaf adds one); until then the edge is written by the
+admin directly, e.g. with `sqlite3 $ASTRA_DATA_DIR/astra.db`:
+
+```sql
+INSERT OR REPLACE INTO kith_edges
+  (actor_id, target_kind, target_id, edge_kind, weight, metadata, created_at)
+VALUES ('<owner users.id>', 'user', '<viewer users.id>', 'circle:family',
+        1.0, '{}', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+```
+
+Deleting the row removes access on the next request; nothing is cached.
+The viewer needs a local account with a DID (`PUT /api/me/did`, or set
+`users.did` for a custodial account) and a way to log in (OIDC session or
+a PAT).
 
 ### Handle on the profile page
 

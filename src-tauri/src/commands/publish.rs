@@ -1,15 +1,25 @@
-//! Server-side publish model: a user's collection is public (or unlisted)
-//! at `@username/slug`, recorded in `published_collections` daemon state —
-//! replacing the Cloudflare worker's `shares/{id}` + `user-shares/` KV
-//! records.
+//! Server-side publish model: a user's collection is public, unlisted or
+//! shared with a kith circle at `@username/slug`, recorded in
+//! `published_collections` daemon state — replacing the Cloudflare worker's
+//! `shares/{id}` + `user-shares/` KV records.
 //!
 //! Core fns only (no Tauri wrappers yet — the desktop publish flow moves to
 //! daemon push in a later leaf). The daemon exposes these under
 //! `/api/collections/{id}/publish`; `resolve_public_collection` is what the
 //! public gallery page calls.
+//!
+//! # Visibility and access
+//!
+//! `published_collections.visibility` holds a [`kenning::Visibility`]
+//! string: `public`, `unlisted` or `circle:<name>`. The first two are
+//! served to anyone (listing differs); a `circle:` collection is served
+//! only to its owner and to members of that kith circle, decided per
+//! request by `daemon::acl` from the [`Access`] value the helpers here
+//! compute from the database. Nothing in this module talks to kith; it
+//! only says *which* circles would grant access.
 
 use diesel::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use super::collections::fetch_owned_collection;
 use crate::db::models::{Collection, Image, PublishedCollection};
@@ -17,30 +27,112 @@ use crate::db::repository;
 use crate::db::schema::{collection_images, collections, images, published_collections, users};
 use crate::db::DbPool;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PublishVisibility {
-    /// Listed on the owner's public profile and resolvable by URL.
-    Public,
-    /// Resolvable by URL only; absent from public listings.
-    Unlisted,
+/// Who may see a published collection. This is kenning's host visibility
+/// vocabulary (`public` | `unlisted` | `circle:<name>`), serialized as that
+/// string; it is what `published_collections.visibility` stores and what
+/// the publish API accepts (`"visibility": "circle:family"`).
+pub type PublishVisibility = kenning::private::Visibility;
+
+/// `published_collections.visibility` spellings of the two public values,
+/// for SQL filters.
+pub const PUBLIC: &str = "public";
+pub const UNLISTED: &str = "unlisted";
+
+/// One kith circle that would grant access to some content: the owner's
+/// DID and the circle name (`circle:<name>` edge from owner to viewer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CircleGrant {
+    pub owner_did: String,
+    pub circle: String,
 }
 
-impl PublishVisibility {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Unlisted => "unlisted",
-        }
-    }
+/// What it takes to see a piece of published content, as computed from the
+/// database (no kith lookup yet — `daemon::acl::allowed` does that).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Access {
+    /// Referenced by at least one public or unlisted publish: anyone.
+    Public,
+    /// Referenced only by circle publishes: a member of any listed circle,
+    /// or the owner. Empty → nobody (an owner without a DID cannot have
+    /// circle galleries, see [`publish_collection_core`], so this is only
+    /// defensive).
+    Circles(Vec<CircleGrant>),
+}
 
-    pub fn parse(s: &str) -> Result<Self, String> {
-        match s {
-            "public" => Ok(Self::Public),
-            "unlisted" => Ok(Self::Unlisted),
-            other => Err(format!("unknown publish visibility '{other}'")),
+impl Access {
+    pub fn is_public(&self) -> bool {
+        matches!(self, Self::Public)
+    }
+}
+
+/// The access rule of one publish record.
+pub fn access_for_published(
+    conn: &mut SqliteConnection,
+    published: &PublishedCollection,
+) -> Result<Access, String> {
+    let visibility: PublishVisibility = published
+        .visibility
+        .parse()
+        .map_err(|e| format!("publish {} visibility: {e}", published.id))?;
+    match visibility.circle_name() {
+        None => Ok(Access::Public),
+        Some(circle) => {
+            let grants = crate::share::records::user_did(conn, &published.user_id)?
+                .map(|owner_did| CircleGrant {
+                    owner_did,
+                    circle: circle.to_string(),
+                })
+                .into_iter()
+                .collect();
+            Ok(Access::Circles(grants))
         }
     }
+}
+
+/// The access rule of an image: public if any public/unlisted published
+/// collection of its owner contains it, else the union of the circles of
+/// the circle collections that do. `Circles(vec![])` when it is in no
+/// published collection at all.
+pub fn access_for_image(conn: &mut SqliteConnection, image: &Image) -> Result<Access, String> {
+    let member_of = collection_images::table
+        .filter(collection_images::image_id.eq(&image.id))
+        .select(collection_images::collection_id);
+    let publishes: Vec<PublishedCollection> = published_collections::table
+        .filter(published_collections::user_id.eq(&image.user_id))
+        .filter(published_collections::collection_id.eq_any(member_of))
+        .order(published_collections::published_at.asc())
+        .load(conn)
+        .map_err(|e| e.to_string())?;
+    let mut grants = Vec::new();
+    for published in &publishes {
+        match access_for_published(conn, published)? {
+            Access::Public => return Ok(Access::Public),
+            Access::Circles(more) => grants.extend(more),
+        }
+    }
+    grants.dedup();
+    Ok(Access::Circles(grants))
+}
+
+/// Whether a public or unlisted published collection of the image's owner
+/// contains the image — the record-level twin of the blob rule: such an
+/// image's signed record is public even when a circle collection also
+/// carries it.
+pub fn image_in_public_collection(
+    conn: &mut SqliteConnection,
+    image: &Image,
+) -> Result<bool, String> {
+    let member_of = collection_images::table
+        .filter(collection_images::image_id.eq(&image.id))
+        .select(collection_images::collection_id);
+    let n: i64 = published_collections::table
+        .filter(published_collections::user_id.eq(&image.user_id))
+        .filter(published_collections::visibility.eq_any([PUBLIC, UNLISTED]))
+        .filter(published_collections::collection_id.eq_any(member_of))
+        .count()
+        .get_result(conn)
+        .map_err(|e| e.to_string())?;
+    Ok(n > 0)
 }
 
 /// Slug rules identical to the legacy worker publish path (`share.rs`), so
@@ -57,10 +149,15 @@ pub fn slugify(name: &str) -> String {
         .join("-")
 }
 
+/// Error prefix of [`publish_collection_core`] when a `circle:` visibility
+/// is requested by a user without a linked DID (a 400, not a 500).
+pub const CIRCLE_NEEDS_DID: &str = "circle visibility requires a linked DID";
+
 /// Publish a collection (idempotent upsert). First publish picks a
 /// collision-safe slug from the collection name (or `slug_override`);
 /// re-publishing keeps the existing slug stable and refreshes title,
-/// visibility, and `updated_at`.
+/// visibility, and `updated_at`. `circle:<name>` requires the owner to have
+/// a DID ([`CIRCLE_NEEDS_DID`]).
 pub fn publish_collection_core(
     db: &DbPool,
     user_id: &str,
@@ -73,6 +170,17 @@ pub fn publish_collection_core(
     let collection = fetch_owned_collection(&mut conn, user_id, collection_id)?
         .ok_or_else(|| format!("Collection not found: {collection_id}"))?;
 
+    // A circle gallery is private records + a public stub under the
+    // owner's DID, and its ACL compares DIDs; without one there is nothing
+    // to gate on. Callers map this prefix to 400.
+    if visibility.is_private() && crate::share::records::user_did(&mut conn, user_id)?.is_none() {
+        return Err(format!(
+            "{CIRCLE_NEEDS_DID}: link one with PUT /api/me/did before publishing '{}' as {visibility}",
+            collection.name
+        ));
+    }
+    let visibility = visibility.to_string();
+
     let existing: Option<PublishedCollection> = published_collections::table
         .filter(published_collections::collection_id.eq(collection_id))
         .first(&mut conn)
@@ -83,7 +191,7 @@ pub fn publish_collection_core(
         diesel::update(published_collections::table.find(&existing.id))
             .set((
                 published_collections::title.eq(&collection.name),
-                published_collections::visibility.eq(visibility.as_str()),
+                published_collections::visibility.eq(&visibility),
                 published_collections::updated_at.eq(chrono::Utc::now().naive_utc()),
             ))
             .execute(&mut conn)
@@ -126,7 +234,7 @@ pub fn publish_collection_core(
             published_collections::user_id.eq(user_id),
             published_collections::slug.eq(&slug),
             published_collections::title.eq(&collection.name),
-            published_collections::visibility.eq(visibility.as_str()),
+            published_collections::visibility.eq(&visibility),
         ))
         .execute(&mut conn)
         .map_err(|e| e.to_string())?;
@@ -183,23 +291,32 @@ pub fn get_publish_status_core(
         .map_err(|e| e.to_string())
 }
 
-/// Public (not unlisted) galleries for a profile page, newest first.
-pub fn list_public_for_user_core(
+/// Every gallery that *could* appear on a profile page, newest first:
+/// public ones plus `circle:` ones. Unlisted never lists. The caller runs
+/// the ACL on each circle row (`daemon::acl`) before showing it; anonymous
+/// viewers end up with exactly the public ones.
+pub fn list_listable_for_user_core(
     db: &DbPool,
     username: &str,
-) -> Result<Vec<PublishedCollection>, String> {
+) -> Result<Vec<(PublishedCollection, Access)>, String> {
     let mut conn = db.get().map_err(|e| e.to_string())?;
 
     let Some(user_id) = user_id_for_username(&mut conn, username)? else {
         return Ok(Vec::new());
     };
 
-    published_collections::table
+    let rows: Vec<PublishedCollection> = published_collections::table
         .filter(published_collections::user_id.eq(&user_id))
-        .filter(published_collections::visibility.eq(PublishVisibility::Public.as_str()))
+        .filter(published_collections::visibility.ne(UNLISTED))
         .order(published_collections::published_at.desc())
         .load(&mut conn)
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rows.into_iter()
+        .map(|row| {
+            let access = access_for_published(&mut conn, &row)?;
+            Ok((row, access))
+        })
+        .collect()
 }
 
 /// A recent public gallery for the landing-page discovery strip.
@@ -228,7 +345,7 @@ pub fn list_recent_public_core(
     let mut conn = db.get().map_err(|e| e.to_string())?;
 
     let records: Vec<PublishedCollection> = published_collections::table
-        .filter(published_collections::visibility.eq(PublishVisibility::Public.as_str()))
+        .filter(published_collections::visibility.eq(PUBLIC))
         .order(published_collections::published_at.desc())
         .limit(limit)
         .offset(offset)
@@ -269,7 +386,10 @@ pub fn list_recent_public_core(
 }
 
 /// Resolve `@username/slug` to the publish record and its collection.
-/// Unlisted galleries resolve too — the URL is the capability.
+/// Unlisted galleries resolve too — the URL is the capability. Circle
+/// galleries resolve as well: the caller MUST run the ACL
+/// ([`access_for_published`] + `daemon::acl::allowed`) before serving
+/// anything, and 404 on denial.
 pub fn resolve_public_collection(
     db: &DbPool,
     username: &str,
@@ -301,48 +421,46 @@ pub fn resolve_public_collection(
     Ok(collection.map(|c| (record, c)))
 }
 
-/// Resolve a content-addressed blob id to an image row whose bytes are
-/// public: the image must be a member of at least one collection that has a
-/// `published_collections` row (public *or* unlisted — the URL is the
-/// capability either way) owned by the image's owner. This is the gate for
-/// the bare `/blob/{blob_id}` route: bytes become fetchable by hash exactly
-/// when a collection containing them is published, and stop being so when
-/// the last such publish record is deleted.
+/// Resolve a content-addressed blob id to an image row whose bytes may be
+/// served, plus the [`Access`] rule for them: the image must be a member of
+/// at least one collection that has a `published_collections` row owned by
+/// the image's owner. Public or unlisted → `Access::Public` (the URL is the
+/// capability either way; unlisted blobs serve to anyone with the CID).
+/// Circle-only → `Access::Circles` for the gate in `daemon::acl` to decide
+/// per viewer. This is the gate for the bare `/blob/{blob_id}` route:
+/// bytes become fetchable by hash exactly when a collection containing
+/// them is published, and stop being so when the last such publish record
+/// is deleted.
 ///
 /// Several image rows can share one blob (the same file imported twice);
 /// any one of them being published proves the bytes are public, and the
 /// bytes are identical by construction. Rows are visited oldest-first so
-/// the served row (and thus the ETag) is stable across requests. `None` →
-/// the caller 404s, whether the id is unknown or merely unpublished.
+/// the served row (and thus the ETag) is stable across requests; a public
+/// row wins over a circle-only one. `None` → the caller 404s, whether the
+/// id is unknown or merely unpublished.
 pub fn published_image_for_blob(
     conn: &mut SqliteConnection,
     blob_id: &str,
-) -> Result<Option<Image>, String> {
+) -> Result<Option<(Image, Access)>, String> {
     let candidates: Vec<Image> = images::table
         .filter(images::blob_id.eq(blob_id))
         .order((images::created_at.asc(), images::id.asc()))
         .load(conn)
         .map_err(|e| e.to_string())?;
 
+    let mut circle_only: Option<(Image, Access)> = None;
     for image in candidates {
-        let member_of = collection_images::table
-            .filter(collection_images::image_id.eq(&image.id))
-            .select(collection_images::collection_id);
-        let published: i64 = published_collections::table
-            .filter(published_collections::user_id.eq(&image.user_id))
-            .filter(published_collections::visibility.eq_any([
-                PublishVisibility::Public.as_str(),
-                PublishVisibility::Unlisted.as_str(),
-            ]))
-            .filter(published_collections::collection_id.eq_any(member_of))
-            .count()
-            .get_result(conn)
-            .map_err(|e| e.to_string())?;
-        if published > 0 {
-            return Ok(Some(image));
+        match access_for_image(conn, &image)? {
+            Access::Public => return Ok(Some((image, Access::Public))),
+            Access::Circles(grants) if grants.is_empty() => {}
+            access => {
+                if circle_only.is_none() {
+                    circle_only = Some((image, access));
+                }
+            }
         }
     }
-    Ok(None)
+    Ok(circle_only)
 }
 
 pub(crate) fn user_id_for_username(
@@ -412,8 +530,7 @@ pub fn migrate_legacy_publish_metadata(db: &DbPool) -> Result<usize, String> {
                 published_collections::user_id.eq(&collection.user_id),
                 published_collections::slug.eq(&slug),
                 published_collections::title.eq(&collection.name),
-                published_collections::visibility
-                    .eq(PublishVisibility::Public.as_str()),
+                published_collections::visibility.eq(PUBLIC),
                 published_collections::published_at.eq(published_at),
             ))
             .execute(&mut conn)
@@ -532,16 +649,19 @@ mod tests {
         publish_collection_core(&db, "alice", &unl_c.id, PublishVisibility::Unlisted, None)
             .unwrap();
 
-        let listed = list_public_for_user_core(&db, "aliceh").unwrap();
+        let listed = list_listable_for_user_core(&db, "aliceh").unwrap();
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].slug, "showcase");
+        assert_eq!(listed[0].0.slug, "showcase");
+        assert_eq!(listed[0].1, Access::Public);
 
         // The unlisted URL still works — the link is the capability.
         assert!(resolve_public_collection(&db, "aliceh", "drafts")
             .unwrap()
             .is_some());
         // Unknown profile resolves to nothing.
-        assert!(list_public_for_user_core(&db, "ghost").unwrap().is_empty());
+        assert!(list_listable_for_user_core(&db, "ghost")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

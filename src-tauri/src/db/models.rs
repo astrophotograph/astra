@@ -50,7 +50,8 @@ pub struct PublishedCollection {
     pub slug: String,
     /// Collection name snapshot at publish time.
     pub title: String,
-    /// `public` or `unlisted` — see `commands::publish::PublishVisibility`.
+    /// `public`, `unlisted` or `circle:<name>` — `kenning::Visibility`
+    /// (see `commands::publish::PublishVisibility`).
     pub visibility: String,
     pub published_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
@@ -100,6 +101,10 @@ pub struct PublishedRecord {
     /// The exact JSON bytes of the `SignedRecord`.
     pub signed_json: String,
     pub updated_at: NaiveDateTime,
+    /// A record of a `circle:` collection: served only after the kith ACL
+    /// (`daemon::acl`), never listed, never relayed. The public stub for it
+    /// is a separate row with `private = false`.
+    pub private: bool,
 }
 
 /// Digest of one HoardFS variant rendition, as a `BlobRef` needs it.

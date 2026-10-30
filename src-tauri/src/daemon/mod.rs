@@ -25,9 +25,12 @@
 //! request extension — default-deny: a route nested there cannot skip
 //! authentication. Handlers declare `user: AuthedUser` and pass
 //! `user.user_id` to core fns explicitly; there is no "current user"
-//! global. The public surface is `/healthz` and (later) the public gallery
-//! pages — nothing else.
+//! global. The public surface is `/healthz` and the public gallery pages —
+//! nothing else. Those pages may still *optionally* identify the viewer
+//! ([`auth::MaybeViewer`]) to decide whether a `circle:` gallery is shown
+//! ([`acl`]); denial there is a 404, never a 401/403.
 
+pub mod acl;
 pub mod api;
 pub mod api_write;
 pub mod auth;
@@ -333,7 +336,9 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         .route("/healthz", get(healthz))
         .nest("/api", api)
         // Public gallery surface: `{user}` carries the leading `@`; handlers
-        // 404 anything else. Gated by publish-record resolution, not auth.
+        // 404 anything else. Gated by publish-record resolution, not auth —
+        // plus the kith circle ACL (acl.rs) for `circle:` galleries, which
+        // reads the viewer's credential optionally and 404s on denial.
         .route("/{user}", get(gallery::profile_page))
         .route("/{user}/{slug}", get(gallery::gallery_page))
         .route("/{user}/{slug}/", get(gallery::gallery_page))
@@ -351,6 +356,7 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         )
         // `at://` resolver: the identity-rooted URI a signed gallery
         // advertises (`<link rel="canonical">`) → 302 to the pretty URL.
+        // A private-record stub URI redirects to its subject's gallery too.
         .route("/at/{did}/{collection}/{rkey}", get(gallery::at_resolve))
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))

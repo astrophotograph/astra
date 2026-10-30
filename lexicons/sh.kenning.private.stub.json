@@ -1,0 +1,45 @@
+{
+  "lexicon": 1,
+  "id": "sh.kenning.private.stub",
+  "description": "Public stand-in for a record held in a host's private store (kenning docs/private-store.md). Published in the owner's public repo at the same record key as the private record it refers to, so the reference is portable and survives a host move; the private record itself is served by `host` only after that host's access check.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "any",
+      "description": "One private record's public stub. Same rkey as the subject (for Astra: the collection's publish slug). A newer stub at the same rkey (later updatedAt) supersedes an older one, e.g. after moving hosts.",
+      "record": {
+        "type": "object",
+        "required": ["subject", "subjectCid", "host", "visibility", "updatedAt"],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "URI of the private record this stub stands in for, e.g. at://<did>/gallery.astra.collection/<slug>."
+          },
+          "subjectCid": {
+            "type": "string",
+            "format": "cid",
+            "description": "CID of the private record when the stub was signed, so a viewer with access can detect a stale host copy."
+          },
+          "host": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "Base URL of the host that currently serves the private record (Astra: ASTRA_PUBLIC_URL)."
+          },
+          "visibility": {
+            "type": "string",
+            "knownValues": ["public", "unlisted"],
+            "maxLength": 128,
+            "description": "kenning Visibility string that gates the subject; for a stub this is always a private value, `circle:<name>`."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this stub was written. Later wins."
+          }
+        }
+      }
+    }
+  }
+}
