@@ -19,6 +19,15 @@ Environment=ASTRA_DATA_DIR=/var/lib/astra/data
 # SPA client id. Unset, only personal access tokens authenticate.
 #Environment=ASTRA_OIDC_ISSUER=https://auth.example.com
 #Environment=ASTRA_OIDC_CLIENT_ID=<client-id>
+# Signed publishing (optional; docs/hosting.md "Enabling signed publishing").
+# The key file must be mode 0600 and owned by `astra`; create it as that
+# user with `kenning keygen --out file:/var/lib/astra/signing.key`. Set but
+# unloadable (missing file, wrong mode, no lexicons) → the daemon refuses
+# to start. ASTRA_LEXICONS_DIR is optional: the default already resolves
+# $ASTRA_DATA_DIR/lexicons, which `just deploy-staging` ships.
+# Environment=ASTRA_SIGNING_KEY_SOURCE=file:/var/lib/astra/signing.key
+# Environment=ASTRA_SIGNING_METHOD_ID=astra
+# Environment=ASTRA_LEXICONS_DIR=/var/lib/astra/data/lexicons
 ExecStart=/opt/astra/bin/astra_daemon
 Restart=on-failure
 RestartSec=5

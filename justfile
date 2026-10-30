@@ -1,7 +1,12 @@
 # Astra build & dev tasks
 
-# Python 3.12 for PyO3 (Linuxbrew opt/ symlink — survives patch bumps)
-export PYO3_PYTHON := "/home/linuxbrew/.linuxbrew/bin/python3.12"
+# Python for PyO3. An exported PYO3_PYTHON wins; otherwise the first
+# interpreter that exists, preferring Linuxbrew 3.12 (the historical dev
+# setup), then the system 3.12/3.13 (Debian python3-dev ships headers and
+# libpython in the linker path), then whatever python3 is on PATH.
+export PYO3_PYTHON := env_var_or_default("PYO3_PYTHON", `for p in /home/linuxbrew/.linuxbrew/bin/python3.12 /usr/bin/python3.12 /usr/bin/python3.13 /usr/bin/python3; do if [ -x "$p" ]; then echo "$p"; exit 0; fi; done; command -v python3.12 || command -v python3.13 || command -v python3`)
+# Linuxbrew's libpython dir, for the Linuxbrew interpreter above. Harmless
+# when the directory does not exist (the dynamic linker skips it).
 export LD_LIBRARY_PATH := "/home/linuxbrew/.linuxbrew/opt/python@3.12/lib:" + env_var_or_default("LD_LIBRARY_PATH", "")
 
 # System pkg-config (Linuxbrew otherwise hides /usr/lib pkgconfig)
@@ -74,8 +79,9 @@ verify-variants *ARGS:
 daemon *ARGS:
     cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
 
-# Rebuild the release daemon + web bundle and deploy into the `astra` Incus VM
-# (hekaton). Build happens here (glibc-compatible Debian 13 on both ends);
+# Rebuild the release daemon + web bundle and deploy them plus lexicons/ (as
+# /var/lib/astra/data/lexicons, for signed publishing) into the `astra` Incus
+# VM (hekaton). Build happens here (glibc-compatible Debian 13 on both ends);
 # the VM never needs a toolchain.
 deploy-staging:
     cd src-tauri && cargo build --release --bin astra_daemon
@@ -85,6 +91,9 @@ deploy-staging:
     incus exec astra -- rm -rf /var/lib/astra/data/dist-web
     incus file push -r --quiet dist-web astra/var/lib/astra/data/
     incus exec astra -- sh -c 'rm -rf /var/lib/astra/data/web && mv /var/lib/astra/data/dist-web /var/lib/astra/data/web && chown -R astra:astra /var/lib/astra/data/web'
+    incus exec astra -- sh -c 'rm -rf /var/lib/astra/data/lexicons.new && mkdir /var/lib/astra/data/lexicons.new'
+    incus file push -r --quiet lexicons astra/var/lib/astra/data/lexicons.new/
+    incus exec astra -- sh -c 'rm -rf /var/lib/astra/data/lexicons && mv /var/lib/astra/data/lexicons.new/lexicons /var/lib/astra/data/lexicons && rmdir /var/lib/astra/data/lexicons.new && chown -R astra:astra /var/lib/astra/data/lexicons'
     incus file push {{deploy_dir}}/astra-daemon.service {{deploy_dir}}/astra-tunnel.service astra/etc/systemd/system/ --mode 0644
     incus exec astra -- sh -c 'systemctl daemon-reload && systemctl enable astra-daemon astra-tunnel >/dev/null 2>&1; systemctl restart astra-daemon astra-tunnel'
     sleep 3 && curl -sf https://staging.astra.gallery/healthz && echo
