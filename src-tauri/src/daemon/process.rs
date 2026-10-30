@@ -1280,6 +1280,8 @@ mod tests {
             processing: Default::default(),
             tetra3_db: None,
             handles: Default::default(),
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
             signer: Some(Arc::new(crate::daemon::gallery::tests::test_signer())),
         });
 
