@@ -247,7 +247,7 @@ pub async fn xrpc_get_record(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::commands::images::add_image_to_collection_core;
     use crate::commands::publish::{
@@ -268,7 +268,7 @@ mod tests {
     use sha2::Digest;
     use tower::ServiceExt;
 
-    const DID: &str = "did:plc:z72i7hdynmk6r22z27h6tvur";
+    pub(crate) const DID: &str = "did:plc:z72i7hdynmk6r22z27h6tvur";
 
     /// Resolves exactly one DID to a document naming `astra` → `key`.
     struct FakeResolver {
@@ -307,7 +307,7 @@ mod tests {
         }
     }
 
-    fn link_did(f: &Fixture) {
+    pub(crate) fn link_did(f: &Fixture) {
         diesel::update(users::table.find("alice"))
             .set(users::did.eq(Some(DID)))
             .execute(&mut f.state.db.get().unwrap())
@@ -316,7 +316,7 @@ mod tests {
 
     /// Run `publish_signed` the way the handlers do (blocking, inside the
     /// runtime).
-    async fn sign_publish(f: &Fixture, collection_id: &str) -> Option<SignedPublish> {
+    pub(crate) async fn sign_publish(f: &Fixture, collection_id: &str) -> Option<SignedPublish> {
         let state = f.state.clone();
         let id = collection_id.to_string();
         tokio::task::spawn_blocking(move || {
@@ -341,7 +341,7 @@ mod tests {
             .unwrap()
     }
 
-    fn image_rkey(f: &Fixture) -> String {
+    pub(crate) fn image_rkey(f: &Fixture) -> String {
         images_table::table
             .find(&f.image.id)
             .select(images_table::rkey)
@@ -629,6 +629,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            handles: Default::default(),
             signer: None,
         });
         link_did(&f);

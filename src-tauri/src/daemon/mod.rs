@@ -37,6 +37,7 @@ pub mod records;
 pub mod solve;
 pub mod webapp;
 pub mod gallery;
+pub mod handles;
 pub mod identity;
 pub mod ingest;
 pub mod kith_store;
@@ -127,6 +128,9 @@ pub struct DaemonState {
     /// (`ho:<name>|file:<path>|env:<VAR>`), `ASTRA_SIGNING_METHOD_ID`
     /// (default `astra`), `ASTRA_LEXICONS_DIR`.
     pub signer: Option<Arc<crate::share::records::Signer>>,
+    /// DID resolver + per-DID cache of the verified handle shown on the
+    /// profile page (`handles.rs`). Default: the network resolver.
+    pub handles: handles::HandleCache,
 }
 
 impl DaemonState {
@@ -345,6 +349,9 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/xrpc/com.atproto.repo.getRecord",
             get(records::xrpc_get_record),
         )
+        // `at://` resolver: the identity-rooted URI a signed gallery
+        // advertises (`<link rel="canonical">`) → 302 to the pretty URL.
+        .route("/at/{did}/{collection}/{rkey}", get(gallery::at_resolve))
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
         // Bare content-addressed blobs, gated by the publish state of the
@@ -566,6 +573,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         session_key,
         processing: Default::default(),
         tetra3_db,
+        handles: handles::HandleCache::default(),
         signer,
     })
 }

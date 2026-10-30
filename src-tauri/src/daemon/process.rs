@@ -649,6 +649,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            handles: Default::default(),
             signer: None,
         });
         (state, tmp, alice, bob, image)
@@ -1346,6 +1347,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: Some(db_file),
+            handles: Default::default(),
             signer: None,
         });
         let router = crate::daemon::router(with_db);

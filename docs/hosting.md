@@ -51,6 +51,7 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 |---|---|---|
 | `/healthz` | none | version + db/hoardfs status |
 | `/@user`, `/@user/slug`, assets | none | published collections only |
+| `/at/{did}/{collection}/{rkey}` | none | 302 to the gallery for a stored signed record |
 | `/api/*` | bearer (PAT or OIDC JWT) | default-deny |
 
 ## Deploying
@@ -116,9 +117,53 @@ re-signs every published collection that contains the image.
 | `GET /@user/slug/records/{rkey}` | one `gallery.astra.image` SignedRecord |
 | `GET /xrpc/com.atproto.repo.getRecord?repo=&collection=&rkey=` | `{ uri, cid, value }`; `repo` is the DID or the username |
 | `GET /blob/{cid}[/{quality}]` | rendition bytes by the blob CID a record carries (CIDv1 raw + sha256); the HoardFS `blake3:` id form still works |
+| `GET /at/{did}/{collection}/{rkey}` | `302` to the pretty gallery URL for a stored record (see below); `{did}` may be a local username |
 
 Record responses carry `Cache-Control: public, max-age=60` and the record
 CID as ETag (`If-None-Match` → 304). The viewer still polls every 30 s;
 for a signed gallery the body (and CID) only changes when the daemon
 re-signs — on publish, on a sync push of a published collection, and on
 an asset upload — not when a row is edited in place.
+
+### Canonical `at://` URI and the resolver route
+
+The pretty URL (`astra.gallery/@erewhon/orion-session`) is a resolver, not
+the identity: it names this host, and a gallery moved to another daemon
+(or a mirror) is a different URL. The record URI
+`at://<did>/gallery.astra.collection/<slug>` is rooted in the author's
+DID and survives a host move, so a **signed** gallery page advertises it
+in `<head>` next to the existing `<base>`:
+
+```html
+<link rel="canonical" href="at://did:plc:…/gallery.astra.collection/orion-session">
+<meta name="kenning:did" content="did:plc:…">
+<meta name="kenning:cid" content="bafyrei…">
+<meta name="kenning:uri" content="at://did:plc:…/gallery.astra.collection/orion-session">
+```
+
+`kenning:cid` is the CID of the collection record the page was rendered
+for (the same value `manifest.json` returns as its ETag). An unsigned
+gallery emits none of these. The viewer shows the same URI with a copy
+button under the gallery title, and the profile page lists it beside each
+signed public gallery.
+
+`GET /at/{did}/{collection}/{rkey}` turns the URI back into a page: strip
+`at://`, prefix `/at/`. A `gallery.astra.collection` record redirects
+(302) to `/@{username}/{slug}`; a `gallery.astra.image` record redirects
+to the gallery that contains the image. Unknown DID, rkey or NSID → 404.
+`{did}` may also be a local username for convenience. **Mirrors should
+implement this route**: it is the entry point a link rooted in a DID
+needs on whichever host currently holds the author's records (resolve the
+DID → find the record → send the visitor to the host's own page for it).
+
+### Handle on the profile page
+
+`GET /@{username}` shows the user's DID when one is linked and, when it
+can be verified, their handle. The daemon resolves the DID document
+(`kenning::HttpResolver`: plc.directory or `did:web`), takes the
+`alsoKnownAs` handles, and shows the first one that resolves (DNS TXT or
+`/.well-known/atproto-did`) back to the same DID — a claim in the
+document alone proves nothing. The result is cached per DID for one hour
+(one minute after a timeout or transport failure) and a request waits at
+most 2 s for the resolver before rendering the DID alone.
+

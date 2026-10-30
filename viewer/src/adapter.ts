@@ -218,6 +218,7 @@ export function manifestFromBundle(bundle: Bundle): ShareManifest {
     images,
     dateRangeStart: toDate(c.dateRangeStart),
     dateRangeEnd: toDate(c.dateRangeEnd),
+    atUri: bundle.collection.uri,
   };
 }
 

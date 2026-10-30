@@ -71,6 +71,36 @@ a:hover { text-decoration: underline; }
 
 .header .meta span { display: flex; align-items: center; gap: 0.35rem; }
 
+/* Signed galleries: the canonical at:// URI + copy button. */
+.header .identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  color: #6b7280;
+}
+
+.header .identity .at-uri {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #8891a4;
+  word-break: break-all;
+  user-select: all;
+}
+
+.header .identity .copy-btn {
+  padding: 0.25rem 0.6rem;
+  background: #111525;
+  border: 1px solid #1e2336;
+  border-radius: 6px;
+  color: #6b7280;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.header .identity .copy-btn:hover { border-color: #6366f1; color: #c8cdd8; }
+
 .progress-section { margin-top: 0.75rem; }
 
 .progress-bar {

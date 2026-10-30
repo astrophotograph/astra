@@ -44,6 +44,12 @@ export interface ShareManifest {
   images: ManifestImage[];
   dateRangeStart: string | null;
   dateRangeEnd: string | null;
+  /**
+   * The collection's identity-rooted `at://did/gallery.astra.collection/rkey`
+   * URI. Only a signed gallery (bundle / signed collection record) has one;
+   * the legacy live manifest never does.
+   */
+  atUri?: string;
 }
 
 export type SortMode = "date-desc" | "date-asc" | "name-asc" | "name-desc";

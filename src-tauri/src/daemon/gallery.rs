@@ -13,7 +13,13 @@
 //! - `GET /@{username}/{slug}/images/{file}` + `/thumbs/{file}` — HoardFS
 //!   variant bytes with `Cache-Control: public` (the hot artifacts
 //!   Cloudflare caches at the edge) and blob-id ETags.
-//! - `GET /@{username}` — minimal profile page listing public galleries.
+//! - `GET /@{username}` — minimal profile page listing public galleries,
+//!   with the user's DID and verified handle (`handles.rs`) when linked,
+//!   and each signed gallery's `at://` URI.
+//! - `GET /at/{did}/{collection}/{rkey}` — resolver for the `at://` URIs a
+//!   signed gallery advertises (`<link rel="canonical">`): 302 to the
+//!   pretty URL of the gallery (for an image record, the gallery that
+//!   contains it). `{did}` may also be a local username.
 //!
 //! # Access model
 //!
@@ -37,8 +43,9 @@ use crate::commands::publish::{
     list_public_for_user_core, resolve_public_collection, user_id_for_username,
 };
 use crate::db::models::{Collection, Image, PublishedCollection};
-use crate::db::schema::published_collections;
+use crate::db::schema::{published_collections, users};
 use crate::db::{repository, tenancy, DbPool};
+use crate::share::records::{COLLECTION_NSID, IMAGE_NSID};
 use crate::share::{manifest, records, viewer};
 
 fn not_found() -> Response {
@@ -80,22 +87,51 @@ pub async fn profile_page(
         let Some(owner_id) = user_id_for_username(&mut conn, &handle)? else {
             return Ok(None);
         };
+        let did = records::user_did(&mut conn, &owner_id)?;
         drop(conn);
         let galleries = list_public_for_user_core(&db, &handle)?;
-        Ok(Some((handle, owner_id, galleries)))
+        // Signed galleries carry their identity-rooted URI as well.
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        let mut listed = Vec::with_capacity(galleries.len());
+        for g in galleries {
+            let uri = records::stored_collection_record(&mut conn, &g.collection_id)
+                .map_err(|e| e.to_string())?
+                .map(|r| r.uri);
+            listed.push((g, uri));
+        }
+        Ok(Some((handle, owner_id, did, listed)))
     })
     .await;
 
     match result {
-        Ok(Ok(Some((handle, owner_id, galleries)))) => {
+        Ok(Ok(Some((handle, owner_id, did, galleries)))) => {
+            // Bounded by the cache's timeout; a slow resolver costs at most
+            // that once per DID per retry window, then the page shows the
+            // DID alone.
+            let verified = match &did {
+                Some(did) => state.handles.verified_handle(did).await,
+                None => None,
+            };
+            let identity = match &did {
+                Some(did) => format!(
+                    r#"<p class="identity">{handle}<code class="did">{did}</code></p>"#,
+                    handle = verified
+                        .as_deref()
+                        .map(|h| format!(r#"<span class="handle">@{}</span> · "#, html_escape(h)))
+                        .unwrap_or_default(),
+                    did = html_escape(did),
+                ),
+                None => String::new(),
+            };
             let items: String = galleries
                 .iter()
-                .map(|g| {
+                .map(|(g, uri)| {
                     format!(
-                        r#"<li><a href="/@{handle}/{slug}">{title}</a></li>"#,
+                        r#"<li><a href="/@{handle}/{slug}">{title}</a>{at}</li>"#,
                         handle = html_escape(&handle),
                         slug = html_escape(&g.slug),
                         title = html_escape(&g.title),
+                        at = uri.as_deref().map(at_uri_link).unwrap_or_default(),
                     )
                 })
                 .collect();
@@ -105,8 +141,10 @@ pub async fn profile_page(
                  <title>@{h} — Astra Gallery</title>\
                  <style>body{{font-family:system-ui;background:#0b1020;color:#e6e8f0;\
                  max-width:640px;margin:4rem auto;padding:0 1rem}}a{{color:#8ab4ff}}\
-                 li{{margin:.5rem 0}}</style></head>\
-                 <body><h1>@{h}</h1>{widget}{list}</body></html>",
+                 li{{margin:.5rem 0}}code{{font-size:.85em;color:#9aa3b8;word-break:break-all}}\
+                 .identity{{color:#9aa3b8}}.handle{{color:#e6e8f0}}\
+                 .at-uri{{display:block;margin-top:.15rem}}</style></head>\
+                 <body><h1>@{h}</h1>{identity}{widget}{list}</body></html>",
                 h = html_escape(&handle),
                 widget = super::social_widgets::embed(&owner_id, &handle),
                 list = if items.is_empty() {
@@ -146,35 +184,45 @@ pub async fn gallery_page(
     let slug_owned = slug.clone();
     let resolved = tokio::task::spawn_blocking(move || {
         let hit = resolve(&db, &handle, &slug_owned)?;
-        if let Some((record, _)) = &hit {
-            // Best-effort view counter; never fails the page.
+        let mut signed = None;
+        if let Some((record, collection)) = &hit {
             if let Ok(mut conn) = db.get() {
+                // Best-effort view counter; never fails the page.
                 let _ = diesel::update(published_collections::table.find(&record.id))
                     .set(
-                        published_collections::view_count
-                            .eq(published_collections::view_count + 1),
+                        published_collections::view_count.eq(published_collections::view_count + 1),
                     )
                     .execute(&mut conn);
+                // The stored collection record, when signed: its URI and
+                // CID go into the page head.
+                signed = records::stored_collection_record(&mut conn, &collection.id)
+                    .map_err(|e| e.to_string())?
+                    .map(|r| (r.uri, r.cid));
             }
         }
-        Ok::<_, String>(hit)
+        Ok::<_, String>(hit.map(|hit| (hit, signed)))
     })
     .await;
 
     match resolved {
-        Ok(Ok(Some((record, collection)))) => {
+        Ok(Ok(Some(((record, collection), signed)))) => {
             let viewer_html = match collection.template.as_deref() {
                 Some("messier") | Some("caldwell") => viewer::CATALOG_VIEWER_HTML,
                 _ => viewer::VIEWER_HTML,
             };
             // The viewer fetches manifest.json and image paths relatively;
             // anchor them regardless of a trailing slash in the request URL.
-            let base = format!(
+            let mut head = format!(
                 "<head><base href=\"/@{}/{}/\">",
                 html_escape(&user[1..]),
                 html_escape(&record.slug)
             );
-            let body = viewer_html.replacen("<head>", &base, 1);
+            // Signed: the identity-rooted URI is the canonical one — the
+            // pretty URL is a resolver for it and may move hosts.
+            if let Some((uri, cid)) = &signed {
+                head.push_str(&canonical_head_tags(uri, cid));
+            }
+            let body = viewer_html.replacen("<head>", &head, 1);
             // Follow widget + bell for the publisher, floated over the
             // viewer chrome. Identical markup for every viewer — per-viewer
             // state hydrates client-side, so the cache headers stay valid.
@@ -198,6 +246,119 @@ pub async fn gallery_page(
         }
         Err(e) => {
             log::error!("gallery page task: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `<link rel="canonical">` plus the `kenning:*` meta tags for a signed
+/// collection record. Empty when the URI is not well formed (never the
+/// case for a stored record; kept total so a bad row cannot break a page).
+fn canonical_head_tags(uri: &str, cid: &str) -> String {
+    let Ok(parsed) = uri.parse::<kenning::record::AtUri>() else {
+        return String::new();
+    };
+    format!(
+        r#"<link rel="canonical" href="{uri}"><meta name="kenning:did" content="{did}"><meta name="kenning:cid" content="{cid}"><meta name="kenning:uri" content="{uri}">"#,
+        uri = html_escape(uri),
+        did = html_escape(parsed.did()),
+        cid = html_escape(cid),
+    )
+}
+
+/// The `/at/...` resolver path for an `at://` URI.
+fn at_resolver_path(uri: &str) -> Option<String> {
+    uri.strip_prefix("at://").map(|rest| format!("/at/{rest}"))
+}
+
+/// `<code><a href="/at/...">at://...</a></code>`, the secondary link on
+/// the profile page's gallery list.
+fn at_uri_link(uri: &str) -> String {
+    match at_resolver_path(uri) {
+        Some(path) => format!(
+            r#"<code class="at-uri"><a href="{path}">{uri}</a></code>"#,
+            path = html_escape(&path),
+            uri = html_escape(uri),
+        ),
+        None => format!(
+            r#"<code class="at-uri">{uri}</code>"#,
+            uri = html_escape(uri)
+        ),
+    }
+}
+
+/// `GET /at/{did}/{collection}/{rkey}` → 302 to `/@{username}/{slug}`.
+///
+/// `{did}` is the DID the record was published under (exact URI lookup)
+/// or, as a convenience, a local username (owner + NSID + rkey lookup).
+/// A `gallery.astra.collection` record redirects to its gallery; a
+/// `gallery.astra.image` record to the gallery that contains the image.
+/// Anything that does not resolve to a stored record of a published
+/// collection — unknown DID, rkey, or NSID, a malformed segment — 404s.
+pub async fn at_resolve(
+    State(state): State<Arc<DaemonState>>,
+    Path((did, collection, rkey)): Path<(String, String, String)>,
+) -> Response {
+    if kenning::record::Nsid::new(collection.as_str()).is_err()
+        || kenning::record::Rkey::new(rkey.as_str()).is_err()
+        || !(collection == COLLECTION_NSID || collection == IMAGE_NSID)
+    {
+        return not_found();
+    }
+
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        let record = if did.starts_with("did:") {
+            let uri = format!("at://{did}/{collection}/{rkey}");
+            records::stored_record_by_uri(&mut conn, &uri).map_err(|e| e.to_string())?
+        } else {
+            let Some(user_id) = user_id_for_username(&mut conn, &did)? else {
+                return Ok(None);
+            };
+            records::stored_record(&mut conn, &user_id, &collection, &rkey)
+                .map_err(|e| e.to_string())?
+        };
+        let Some(record) = record else {
+            return Ok(None);
+        };
+        // Records exist only while their collection is published, and the
+        // row names the publish; still, resolve through the publish table so
+        // the redirect target is exactly what `/@user/slug` will accept.
+        let slug: Option<String> = published_collections::table
+            .filter(published_collections::collection_id.eq(&record.collection_id))
+            .filter(published_collections::user_id.eq(&record.user_id))
+            .select(published_collections::slug)
+            .first(&mut conn)
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let username: Option<String> = users::table
+            .find(&record.user_id)
+            .select(users::username)
+            .first::<Option<String>>(&mut conn)
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+        Ok(match (username, slug) {
+            (Some(username), Some(slug)) => Some(format!("/@{username}/{slug}")),
+            _ => None,
+        })
+    })
+    .await;
+
+    match result {
+        // 302, not axum's `Redirect::to` (303) or `::temporary` (307): the
+        // record may be re-signed or move host, so nothing here is permanent.
+        Ok(Ok(Some(location))) => {
+            (StatusCode::FOUND, [(header::LOCATION, location)]).into_response()
+        }
+        Ok(Ok(None)) => not_found(),
+        Ok(Err(e)) => {
+            log::error!("at resolver: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(e) => {
+            log::error!("at resolver task: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -308,8 +469,7 @@ async fn serve_gallery_asset(
         if !in_collection {
             return Ok(None);
         }
-        let image = repository::get_image_by_id(&mut conn, &image_id)
-            .map_err(|e| e.to_string())?;
+        let image = repository::get_image_by_id(&mut conn, &image_id).map_err(|e| e.to_string())?;
         Ok(image.filter(|i| i.user_id == record.user_id))
     })
     .await;
@@ -405,7 +565,9 @@ pub(crate) mod tests {
             .unwrap();
         hfs.set_variant_pipeline(hoardfs_variant::VariantPipeline::new().with_image_generator());
         tenancy::ensure_user_volume(&hfs, "alice").unwrap();
-        hfs.put_file("user-alice", "/g/m31.png", &tiny_png()).await.unwrap();
+        hfs.put_file("user-alice", "/g/m31.png", &tiny_png())
+            .await
+            .unwrap();
         let blob_id = hfs
             .get_file_info("user-alice", "/g/m31.png")
             .unwrap()
@@ -504,6 +666,7 @@ pub(crate) mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            handles: Default::default(),
             signer: Some(Arc::new(signer)),
         });
         Fixture {
@@ -618,8 +781,7 @@ pub(crate) mod tests {
         let f = fixture().await;
         let router = crate::daemon::router(f.state.clone());
 
-        let (status, headers, body) =
-            get(&router, "/@aliceh/andromeda-nights/manifest.json").await;
+        let (status, headers, body) = get(&router, "/@aliceh/andromeda-nights/manifest.json").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
             headers.get(header::CACHE_CONTROL).unwrap(),
@@ -669,7 +831,12 @@ pub(crate) mod tests {
             headers.get(header::CACHE_CONTROL).unwrap(),
             "public, max-age=3600"
         );
-        let etag = headers.get(header::ETAG).unwrap().to_str().unwrap().to_string();
+        let etag = headers
+            .get(header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         assert!(etag.contains("blake3:"));
 
         let resp = router
@@ -700,5 +867,213 @@ pub(crate) mod tests {
             .first(&mut f.state.db.get().unwrap())
             .unwrap();
         assert!(count >= 1);
+    }
+
+    use crate::daemon::handles::tests::{FakeResolver, HandleAnswer};
+    use crate::daemon::handles::HandleCache;
+    use crate::daemon::records::tests::{image_rkey, link_did, sign_publish, DID};
+    use std::time::Duration;
+
+    /// The fixture's state with a different handle cache (fake resolver).
+    fn state_with_handles(f: &Fixture, handles: HandleCache) -> Arc<DaemonState> {
+        Arc::new(DaemonState {
+            db: f.state.db.clone(),
+            hoardfs: f.state.hoardfs.clone(),
+            oidc: None,
+            limits: Default::default(),
+            session_key: [7u8; 32],
+            processing: Default::default(),
+            tetra3_db: None,
+            signer: f.state.signer.clone(),
+            handles,
+        })
+    }
+
+    fn fake_handles(handles: Vec<&'static str>, answer: HandleAnswer) -> HandleCache {
+        HandleCache::new(
+            FakeResolver::new(handles, answer),
+            Duration::from_millis(100),
+        )
+    }
+
+    async fn html(router: &axum::Router, uri: &str) -> String {
+        let (status, _, body) = get(router, uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        String::from_utf8(body).unwrap()
+    }
+
+    /// A signed gallery page advertises its identity-rooted URI in the
+    /// head (canonical link + `kenning:*` meta); a legacy one does not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gallery_page_canonical_at_uri_only_when_signed() {
+        let f = fixture().await;
+        let router = crate::daemon::router(f.state.clone());
+
+        let page = html(&router, "/@aliceh/andromeda-nights").await;
+        assert!(page.contains(r#"<base href="/@aliceh/andromeda-nights/">"#));
+        assert!(!page.contains(r#"rel="canonical""#));
+        assert!(!page.contains("kenning:"));
+
+        link_did(&f);
+        let result = sign_publish(&f, &f.public_collection.id).await.unwrap();
+        let uri = format!("at://{DID}/{COLLECTION_NSID}/andromeda-nights");
+        assert_eq!(result.uri, uri);
+
+        let page = html(&router, "/@aliceh/andromeda-nights").await;
+        assert!(page.contains(r#"<base href="/@aliceh/andromeda-nights/">"#));
+        assert!(page.contains(&format!(r#"<link rel="canonical" href="{uri}">"#)));
+        assert!(page.contains(&format!(r#"<meta name="kenning:did" content="{DID}">"#)));
+        assert!(page.contains(&format!(
+            r#"<meta name="kenning:cid" content="{}">"#,
+            result.cid
+        )));
+        assert!(page.contains(&format!(r#"<meta name="kenning:uri" content="{uri}">"#)));
+        // All of it inside <head>, once.
+        let head_end = page.find("</head>").unwrap();
+        assert!(page.find(r#"rel="canonical""#).unwrap() < head_end);
+        assert_eq!(page.matches(r#"rel="canonical""#).count(), 1);
+
+        // The unsigned (unlisted, no record) gallery of the same user is
+        // untouched.
+        let page = html(&router, "/@aliceh/drafts").await;
+        assert!(!page.contains(r#"rel="canonical""#));
+    }
+
+    /// Profile: handle + DID when a claimed handle resolves back to the
+    /// DID; DID only on mismatch, resolver failure, or timeout; no DID →
+    /// the page is unchanged. Signed public galleries list their `at://`
+    /// URI, unsigned ones do not.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn profile_shows_did_and_verified_handle() {
+        let f = fixture().await;
+
+        // No DID linked: no identity block, regardless of resolver.
+        let state = state_with_handles(
+            &f,
+            fake_handles(vec!["alice.example.com"], HandleAnswer::Did(DID)),
+        );
+        let page = html(&crate::daemon::router(state), "/@aliceh").await;
+        assert!(!page.contains("did:plc:"));
+        assert!(!page.contains("alice.example.com"));
+        assert!(!page.contains(r#"class="identity""#));
+        assert!(!page.contains("at://"));
+
+        link_did(&f);
+        sign_publish(&f, &f.public_collection.id).await.unwrap();
+        sign_publish(&f, &f.unlisted_collection.id).await.unwrap();
+
+        // Verified handle: shown alongside the DID; the first verifying
+        // claim wins and junk claims are skipped.
+        let state = state_with_handles(
+            &f,
+            fake_handles(
+                vec!["not a handle", "alice.example.com", "alt.example.com"],
+                HandleAnswer::Did(DID),
+            ),
+        );
+        let page = html(&crate::daemon::router(state), "/@aliceh").await;
+        assert!(page.contains(r#"<span class="handle">@alice.example.com</span>"#));
+        assert!(!page.contains("alt.example.com"));
+        assert!(page.contains(&format!(r#"<code class="did">{DID}</code>"#)));
+        // The public signed gallery lists its at:// URI, linked through
+        // the resolver route; the unlisted one stays unlisted.
+        let uri = format!("at://{DID}/{COLLECTION_NSID}/andromeda-nights");
+        assert!(page.contains(&format!(
+            r#"<code class="at-uri"><a href="/at/{DID}/{COLLECTION_NSID}/andromeda-nights">{uri}</a></code>"#
+        )));
+        assert!(!page.contains("drafts"));
+
+        // Handle resolves to someone else's DID: DID only.
+        let state = state_with_handles(
+            &f,
+            fake_handles(
+                vec!["alice.example.com"],
+                HandleAnswer::Did("did:plc:ewvi7nxzyoun6zhxrhs64oiz"),
+            ),
+        );
+        let page = html(&crate::daemon::router(state), "/@aliceh").await;
+        assert!(page.contains(&format!(r#"<code class="did">{DID}</code>"#)));
+        assert!(!page.contains("alice.example.com"));
+
+        // Resolver errors: DID only.
+        let state = state_with_handles(
+            &f,
+            fake_handles(vec!["alice.example.com"], HandleAnswer::Transport),
+        );
+        let page = html(&crate::daemon::router(state), "/@aliceh").await;
+        assert!(page.contains(DID));
+        assert!(!page.contains("alice.example.com"));
+
+        // Resolver hangs: the page still renders (within the timeout),
+        // DID only.
+        let state = state_with_handles(
+            &f,
+            fake_handles(vec!["alice.example.com"], HandleAnswer::Hang),
+        );
+        let started = std::time::Instant::now();
+        let page = html(&crate::daemon::router(state), "/@aliceh").await;
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(page.contains(DID));
+        assert!(!page.contains("alice.example.com"));
+    }
+
+    /// `/at/{did}/{collection}/{rkey}` redirects known records to the
+    /// pretty gallery URL and 404s everything else.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn at_resolver_redirects_known_records() {
+        let f = fixture().await;
+        let router = crate::daemon::router(f.state.clone());
+        let collection_path = format!("/at/{DID}/{COLLECTION_NSID}/andromeda-nights");
+
+        // Nothing signed yet: 404.
+        let (status, _, _) = get(&router, &collection_path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        link_did(&f);
+        sign_publish(&f, &f.public_collection.id).await.unwrap();
+        let rkey = image_rkey(&f);
+
+        // Collection record → its gallery.
+        let (status, headers, _) = get(&router, &collection_path).await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert_eq!(
+            headers.get(header::LOCATION).unwrap(),
+            "/@aliceh/andromeda-nights"
+        );
+
+        // Image record → the gallery that contains it.
+        let (status, headers, _) = get(&router, &format!("/at/{DID}/{IMAGE_NSID}/{rkey}")).await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert_eq!(
+            headers.get(header::LOCATION).unwrap(),
+            "/@aliceh/andromeda-nights"
+        );
+
+        // Local username in place of the DID.
+        let (status, headers, _) = get(
+            &router,
+            &format!("/at/aliceh/{COLLECTION_NSID}/andromeda-nights"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FOUND);
+        assert_eq!(
+            headers.get(header::LOCATION).unwrap(),
+            "/@aliceh/andromeda-nights"
+        );
+        let (status, _, _) = get(&router, &format!("/at/aliceh/{IMAGE_NSID}/{rkey}")).await;
+        assert_eq!(status, StatusCode::FOUND);
+
+        // Unknown DID, unknown username, unknown rkey, foreign NSID, bad rkey.
+        for path in [
+            format!("/at/did:plc:ewvi7nxzyoun6zhxrhs64oiz/{COLLECTION_NSID}/andromeda-nights"),
+            format!("/at/ghost/{COLLECTION_NSID}/andromeda-nights"),
+            format!("/at/{DID}/{COLLECTION_NSID}/nope"),
+            format!("/at/{DID}/{IMAGE_NSID}/andromeda-nights"),
+            format!("/at/{DID}/app.bsky.feed.post/andromeda-nights"),
+            format!("/at/{DID}/{COLLECTION_NSID}/.."),
+        ] {
+            let (status, _, _) = get(&router, &path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        }
     }
 }

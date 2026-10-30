@@ -724,6 +724,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            handles: Default::default(),
             signer: None,
         });
         (state, tmp, alice_token, bob_token, image)
