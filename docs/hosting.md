@@ -31,9 +31,13 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 
 ## Daemon requirements
 
-- The binary is nearly static (libc/libm/libgcc only — the Python bridge
-  is desktop-only and links out), so building on a glibc-compatible host
-  and copying the binary works.
+- The daemon binary is built from the same crate as the desktop app and
+  links the desktop GTK/WebKit stack plus `libpython3.13` (the Python
+  bridge is used for plate solving and processing). Build on a glibc host
+  with the same Python minor version and install the runtime on the VM:
+  `apt install --no-install-recommends libwebkit2gtk-4.1-0 libgtk-3-0
+  libpython3.13` (done on the astra VM 2026-10-30). Splitting the daemon
+  into its own crate so it links only libc is tracked in Forge.
 - `ASTRA_DATA_DIR` must be writable by the `astra` user; the web bundle
   is served from `$ASTRA_DATA_DIR/web` and must exist **at startup** for
   the `/` and `/app` routes to mount.
