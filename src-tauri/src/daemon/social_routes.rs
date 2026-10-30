@@ -8,7 +8,9 @@
 //! follow edges, never who.
 //!
 //! Kith `UserId` is the daemon `users.id` (`AuthedUser.user_id`), never the
-//! raw OIDC subject — no aliasing layer.
+//! raw OIDC subject — no aliasing layer. A follow by a user with a DID is
+//! stored as a signed `sh.kith.graph.edge` statement when the daemon has a
+//! signer (`signed_edges.rs`); the follow response says whether it was.
 
 use std::sync::Arc;
 
@@ -18,12 +20,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use kith::error::KithError;
-use kith::types::{EntityId, EntityKind, PageRequest, UserId};
+use kith::types::{Edge, EdgeKind, EntityId, EntityKind, PageRequest, UserId};
 use serde::Deserialize;
 use serde_json::json;
 
 use super::auth::AuthedUser;
-use super::DaemonState;
+use super::{signed_edges, DaemonState};
 
 const DEFAULT_PAGE_LIMIT: u32 = 20;
 const MAX_PAGE_LIMIT: u32 = 100;
@@ -114,7 +116,9 @@ impl PageParams {
 }
 
 /// POST /api/social/follow — follow a user/object/collection and
-/// auto-subscribe to its events (worker parity).
+/// auto-subscribe to its events (worker parity). 200 `{"signed": bool}`:
+/// true when the edge was stored as a signed statement by the caller's
+/// DID (`signed_edges::write_edge`), false for a plain edge.
 pub async fn follow(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
@@ -126,10 +130,21 @@ pub async fn follow(
     let actor = UserId(user.user_id);
     let target = EntityId::new(kind, body.target_id);
 
-    // Self-follow / follow-while-blocked surface as InvalidInput → 400.
-    if let Err(e) = state.social().follow(&actor, &target).await {
-        return kith_error("social follow", e);
+    // The checks `SocialGraph::follow` makes, here because the write goes
+    // through the signing path: self-follow and follow-while-blocked → 400.
+    if target == EntityId::user(&actor) {
+        return bad_request("cannot follow yourself");
     }
+    match state.social().is_blocked(&actor, &target).await {
+        Ok(true) => return bad_request("cannot follow a blocked entity — unblock first"),
+        Ok(false) => {}
+        Err(e) => return kith_error("social follow", e),
+    }
+    let edge = Edge::new(actor.clone(), target.clone(), EdgeKind::Follow);
+    let signed = match signed_edges::write_edge(&state, &edge).await {
+        Ok(signed) => signed,
+        Err(e) => return signed_edges::error_response("social follow", e),
+    };
 
     // Auto-subscribe, idempotently: a second follow (or a follow after a
     // manual subscribe) must not stack subscriptions.
@@ -151,7 +166,7 @@ pub async fn follow(
         Err(e) => return kith_error("social auto-subscribe", e),
     }
 
-    StatusCode::NO_CONTENT.into_response()
+    Json(json!({ "signed": signed })).into_response()
 }
 
 /// DELETE /api/social/follow — unfollow and drop the auto-subscription.
@@ -552,8 +567,8 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["following"], false);
 
-        // Follow → 204.
-        let (status, _) = send(
+        // Follow → 200; unsigned (alice has no DID, no signer configured).
+        let (status, body) = send(
             &router,
             "POST",
             "/api/social/follow",
@@ -561,7 +576,8 @@ mod tests {
             Some(follow_body("user", "bob")),
         )
         .await;
-        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["signed"], false);
 
         let (_, body) = send(
             &router,
@@ -659,7 +675,7 @@ mod tests {
                 Some(follow_body("object", "M42")),
             )
             .await;
-            assert_eq!(status, StatusCode::NO_CONTENT);
+            assert_eq!(status, StatusCode::OK);
         }
         let subs = state.kith().subscriptions_for(&alice).await.unwrap();
         assert_eq!(subs.len(), 1);
@@ -700,7 +716,7 @@ mod tests {
             Some(follow_body("user", "bob")),
         )
         .await;
-        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(status, StatusCode::OK);
         state
             .social()
             .follow(&UserId::from("bob"), &EntityId::user(&UserId::from("alice")))

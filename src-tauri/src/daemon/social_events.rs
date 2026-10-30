@@ -220,7 +220,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert_eq!(resp.status(), StatusCode::OK);
 
         let alice_token = mint_token(&state.db, "alice", "test").unwrap().token;
         let publish = |token: String| {

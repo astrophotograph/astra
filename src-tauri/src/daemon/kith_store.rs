@@ -9,6 +9,32 @@
 //! the two stores. Pre-codec serde-JSON rows are rewritten by the
 //! `kith_canonical_kinds` migration.
 //!
+//! # Signed edges and the id mapping
+//!
+//! Kith ids in Astra are local `users.id` values (never DIDs) — every row
+//! key, count and the circle ACL (`acl.rs`) work on them. Signed edges
+//! (`kith::signed`, kith's `kenning` feature) need the statement's actor to
+//! be a DID, so this adapter **deviates by design from kith's own
+//! `SqliteStore`**, which keys signed rows by the DID in the envelope:
+//!
+//! - The row stays keyed by the `users.id` triple
+//!   `(actor_id, target_kind, target_id, edge_kind)`; the signed envelope is
+//!   kept beside it in the nullable `signed_json` column (migration
+//!   `kith_signed_edges`).
+//! - Inside the envelope the `EdgeRecord` body carries DIDs: `actor` is the
+//!   acting user's `users.did`, and for a `user` target `target.id` is the
+//!   target user's `users.did` (a user target without a DID is not signed).
+//!   Topic/object/collection targets keep their ids as is.
+//! - [`GraphStore::add_signed_edge`] therefore takes the **local-id edge**
+//!   as its `verified` argument, not the DID-keyed edge `verify_edge`
+//!   returns: callers (`daemon/signed_edges.rs`) verify the envelope, then
+//!   hand this store the `users.id` edge to write. [`GraphStore::signed_edge`]
+//!   is keyed by the same `users.id` triple.
+//! - A plain [`GraphStore::add_edge`] on an existing row is an upsert that
+//!   leaves `signed_json` (and `created_at`) alone, so an unsigned re-follow
+//!   never downgrades a signed statement; `remove_edge` deletes the row,
+//!   envelope included.
+//!
 //! Every method runs its Diesel work inside `tokio::task::spawn_blocking`:
 //! pooled r2d2 connections must not be held across await points.
 
@@ -16,6 +42,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use kith::error::{KithError, Result};
+use kith::signed::SignedEdge;
 use kith::storage::{GraphStore, NotificationSink, NotificationStore, SubscriptionStore};
 use kith::types::{
     Edge, EdgeKind, EntityId, EntityKind, Event, Notification, Subscription, SubscriptionFilter,
@@ -34,6 +61,60 @@ pub struct AstraKithStore {
 impl AstraKithStore {
     pub fn new(pool: DbPool) -> Self {
         Self { pool }
+    }
+
+    /// The edges of one kind made by `actor`, each with whether it is
+    /// stored signed — the circle-management listing needs both without a
+    /// per-member `signed_edge` round trip. Oldest first.
+    pub async fn following_with_signed(
+        &self,
+        actor: &UserId,
+        kind: &EdgeKind,
+    ) -> Result<Vec<(Edge, bool)>> {
+        let pool = self.pool.clone();
+        let actor = actor.0.clone();
+        let edge_kind = encode_edge_kind(kind);
+
+        run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
+            kith_edges::table
+                .filter(kith_edges::actor_id.eq(actor))
+                .filter(kith_edges::edge_kind.eq(edge_kind))
+                .order(kith_edges::created_at.asc())
+                .load::<EdgeRow>(&mut conn)
+                .map_err(storage_err)?
+                .into_iter()
+                .map(|row| {
+                    let signed = row.is_signed();
+                    row.into_edge().map(|edge| (edge, signed))
+                })
+                .collect()
+        })
+        .await
+    }
+
+    /// Circle names with member counts for `actor`, sorted by name.
+    pub async fn circle_counts(&self, actor: &UserId) -> Result<Vec<(String, u64)>> {
+        let pool = self.pool.clone();
+        let actor = actor.0.clone();
+
+        run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
+            let kinds: Vec<String> = kith_edges::table
+                .filter(kith_edges::actor_id.eq(actor))
+                .filter(kith_edges::edge_kind.like("circle:%"))
+                .select(kith_edges::edge_kind)
+                .load(&mut conn)
+                .map_err(storage_err)?;
+            let mut counts: std::collections::BTreeMap<String, u64> = Default::default();
+            for kind in &kinds {
+                if let EdgeKind::Circle(name) = decode_edge_kind(kind)? {
+                    *counts.entry(name).or_default() += 1;
+                }
+            }
+            Ok(counts.into_iter().collect())
+        })
+        .await
     }
 }
 
@@ -83,9 +164,16 @@ struct EdgeRow {
     weight: f64,
     metadata: Option<String>,
     created_at: String,
+    /// The signed envelope, when the edge was stored signed.
+    signed_json: Option<String>,
 }
 
 impl EdgeRow {
+    /// Whether the row carries a signed envelope.
+    fn is_signed(&self) -> bool {
+        self.signed_json.is_some()
+    }
+
     fn into_edge(self) -> Result<Edge> {
         Ok(Edge {
             actor: UserId(self.actor_id),
@@ -116,6 +204,55 @@ impl GraphStore for AstraKithStore {
 
         run_blocking(move || {
             let mut conn = pool.get().map_err(storage_err)?;
+            // Upsert, not REPLACE: a repeat add refreshes weight/metadata
+            // but keeps the original created_at and — the point — any
+            // signed envelope already on the row (module docs).
+            diesel::insert_into(kith_edges::table)
+                .values((
+                    kith_edges::actor_id.eq(actor),
+                    kith_edges::target_kind.eq(target_kind),
+                    kith_edges::target_id.eq(target_id),
+                    kith_edges::edge_kind.eq(edge_kind),
+                    kith_edges::weight.eq(weight),
+                    kith_edges::metadata.eq(metadata.clone()),
+                    kith_edges::created_at.eq(created_at),
+                ))
+                .on_conflict((
+                    kith_edges::actor_id,
+                    kith_edges::target_kind,
+                    kith_edges::target_id,
+                    kith_edges::edge_kind,
+                ))
+                .do_update()
+                .set((
+                    kith_edges::weight.eq(weight),
+                    kith_edges::metadata.eq(metadata),
+                ))
+                .execute(&mut conn)
+                .map_err(storage_err)?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Store a verified signed edge. `verified` is the **local-id** edge
+    /// (`users.id` actor/target), per the module docs; `signed` is the
+    /// DID-bodied envelope kept beside it. Replaces any existing row with
+    /// the same key: the signed statement supersedes an unsigned one.
+    async fn add_signed_edge(&self, signed: &SignedEdge, verified: &Edge) -> Result<()> {
+        let pool = self.pool.clone();
+        let actor = verified.actor.0.clone();
+        let target_kind = encode_entity_kind(&verified.target.kind);
+        let target_id = verified.target.id.clone();
+        let edge_kind = encode_edge_kind(&verified.kind);
+        let weight = verified.weight as f64;
+        let metadata = serde_json::to_string(&verified.metadata).map_err(storage_err)?;
+        let created_at = verified.created_at.to_rfc3339();
+        let signed_json = serde_json::to_string(signed)
+            .map_err(|e| storage_err(format!("encode signed edge: {e}")))?;
+
+        run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
             diesel::replace_into(kith_edges::table)
                 .values((
                     kith_edges::actor_id.eq(actor),
@@ -125,12 +262,49 @@ impl GraphStore for AstraKithStore {
                     kith_edges::weight.eq(weight),
                     kith_edges::metadata.eq(metadata),
                     kith_edges::created_at.eq(created_at),
+                    kith_edges::signed_json.eq(Some(signed_json)),
                 ))
                 .execute(&mut conn)
                 .map_err(storage_err)?;
             Ok(())
         })
         .await
+    }
+
+    /// The envelope stored for the `users.id`-keyed edge, or `None` when
+    /// the edge is missing or was added unsigned.
+    async fn signed_edge(
+        &self,
+        actor: &UserId,
+        target: &EntityId,
+        kind: &EdgeKind,
+    ) -> Result<Option<SignedEdge>> {
+        let pool = self.pool.clone();
+        let actor = actor.0.clone();
+        let target_kind = encode_entity_kind(&target.kind);
+        let target_id = target.id.clone();
+        let edge_kind = encode_edge_kind(kind);
+
+        let json = run_blocking(move || {
+            let mut conn = pool.get().map_err(storage_err)?;
+            kith_edges::table
+                .filter(kith_edges::actor_id.eq(actor))
+                .filter(kith_edges::target_kind.eq(target_kind))
+                .filter(kith_edges::target_id.eq(target_id))
+                .filter(kith_edges::edge_kind.eq(edge_kind))
+                .select(kith_edges::signed_json)
+                .first::<Option<String>>(&mut conn)
+                .optional()
+                .map(Option::flatten)
+                .map_err(storage_err)
+        })
+        .await?;
+        match json {
+            None => Ok(None),
+            Some(json) => serde_json::from_str(&json)
+                .map(Some)
+                .map_err(|e| storage_err(format!("decode signed edge: {e}"))),
+        }
     }
 
     async fn remove_edge(&self, actor: &UserId, target: &EntityId, kind: &EdgeKind) -> Result<()> {
@@ -1119,5 +1293,187 @@ mod tests {
 
         // Following a blocked entity is rejected.
         assert!(graph.follow(&alice(), &bob_entity()).await.is_err());
+    }
+
+    // ---- signed edges -----------------------------------------------------
+
+    const ALICE_DID: &str = "did:plc:z72i7hdynmk6r22z27h6tvur";
+    const BOB_DID: &str = "did:plc:ewvi7nxzyoun6zhxrhs64oiz";
+
+    /// A signed follow whose envelope body says `ALICE_DID → BOB_DID`, plus
+    /// the local-id edge (`alice → bob`) it is stored under.
+    fn signed_follow() -> (SignedEdge, Edge, kenning::keys::VerifyingKey) {
+        let key = kenning::keys::SigningKey::generate(kenning::keys::KeyAlgo::Secp256k1);
+        let did_edge = Edge::new(
+            UserId::did(ALICE_DID).unwrap(),
+            EntityId::user(&UserId::did(BOB_DID).unwrap()),
+            EdgeKind::Follow,
+        );
+        let signed = kith::signed::sign_edge(&did_edge, None, "astra", &key).unwrap();
+        let local = Edge {
+            actor: alice(),
+            target: bob_entity(),
+            kind: EdgeKind::Follow,
+            weight: did_edge.weight,
+            created_at: did_edge.created_at,
+            metadata: Default::default(),
+        };
+        (signed, local, key.verifying_key())
+    }
+
+    #[tokio::test]
+    async fn signed_edge_round_trip_keyed_by_local_ids() {
+        let store = store();
+        let (signed, local, key) = signed_follow();
+
+        store.add_signed_edge(&signed, &local).await.unwrap();
+
+        // Plain queries see the local-id row.
+        assert!(store
+            .edge_exists(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap());
+        assert_eq!(store.count_followers(&bob_entity()).await.unwrap(), 1);
+
+        // The envelope comes back by the same local triple and verifies;
+        // its body carries the DIDs.
+        let back = store
+            .signed_edge(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap()
+            .expect("stored signed");
+        assert_eq!(back, signed);
+        let verified = kith::signed::verify_edge_with_key(&back, &key).unwrap();
+        assert_eq!(verified.actor.0, ALICE_DID);
+        assert_eq!(verified.target.id, BOB_DID);
+
+        // Nothing under the DID-keyed triple: this adapter keys by users.id.
+        assert!(store
+            .signed_edge(
+                &UserId::did(ALICE_DID).unwrap(),
+                &EntityId::user(&UserId::did(BOB_DID).unwrap()),
+                &EdgeKind::Follow
+            )
+            .await
+            .unwrap()
+            .is_none());
+
+        // An unsigned edge has no envelope.
+        store
+            .add_edge(&Edge::new(carol(), bob_entity(), EdgeKind::Follow))
+            .await
+            .unwrap();
+        assert!(store
+            .signed_edge(&carol(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn plain_add_edge_keeps_signed_envelope_and_remove_drops_it() {
+        let store = store();
+        let (signed, local, _) = signed_follow();
+        store.add_signed_edge(&signed, &local).await.unwrap();
+
+        // A repeat unsigned add (e.g. SocialGraph::follow) is a no-op for
+        // the envelope and the row count.
+        store
+            .add_edge(&Edge::new(alice(), bob_entity(), EdgeKind::Follow))
+            .await
+            .unwrap();
+        assert!(store
+            .signed_edge(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            store
+                .followers(&bob_entity(), &EdgeKind::Follow)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let listed = store
+            .following_with_signed(&alice(), &EdgeKind::Follow)
+            .await
+            .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].1, "listed as signed");
+
+        store
+            .remove_edge(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap();
+        assert!(store
+            .signed_edge(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn circle_counts_group_by_name() {
+        let store = store();
+        for (target, name) in [
+            (bob_entity(), "family"),
+            (m42(), "family"),
+            (bob_entity(), "astro"),
+        ] {
+            store
+                .add_edge(&Edge::new(alice(), target, EdgeKind::Circle(name.into())))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            store.circle_counts(&alice()).await.unwrap(),
+            vec![("astro".to_string(), 1), ("family".to_string(), 2)]
+        );
+        assert!(store.circle_counts(&bob()).await.unwrap().is_empty());
+    }
+
+    /// The `kith_signed_edges` migration lands on a table that already has
+    /// rows: roll it back, write a legacy (pre-column) row, re-apply, and
+    /// the adapter reads the row as an unsigned edge.
+    #[tokio::test]
+    async fn signed_edges_migration_applies_over_existing_rows() {
+        use diesel::sql_query;
+        use diesel_migrations::MigrationHarness;
+
+        let pool = crate::db::test_support::test_pool();
+        {
+            let mut conn = pool.get().unwrap();
+            conn.revert_last_migration(crate::db::MIGRATIONS).unwrap();
+            sql_query(
+                "INSERT INTO kith_edges (actor_id, target_kind, target_id, edge_kind, weight, metadata, created_at) \
+                 VALUES ('alice', 'user', 'bob', 'circle:family', 1.0, '{}', '2026-01-01T00:00:00Z')",
+            )
+            .execute(&mut conn)
+            .unwrap();
+            conn.run_pending_migrations(crate::db::MIGRATIONS).unwrap();
+        }
+
+        let store = AstraKithStore::new(pool);
+        let kind = EdgeKind::Circle("family".into());
+        assert!(store
+            .edge_exists(&alice(), &bob_entity(), &kind)
+            .await
+            .unwrap());
+        assert!(store
+            .signed_edge(&alice(), &bob_entity(), &kind)
+            .await
+            .unwrap()
+            .is_none());
+        let listed = store.following_with_signed(&alice(), &kind).await.unwrap();
+        assert!(!listed[0].1, "legacy row is unsigned");
+        // And a signed write now works on the migrated table.
+        let (signed, local, _) = signed_follow();
+        store.add_signed_edge(&signed, &local).await.unwrap();
+        assert!(store
+            .signed_edge(&alice(), &bob_entity(), &EdgeKind::Follow)
+            .await
+            .unwrap()
+            .is_some());
     }
 }

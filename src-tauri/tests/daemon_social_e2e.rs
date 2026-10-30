@@ -121,7 +121,11 @@ async fn follow_publish_notify_slice() {
     let resp = api
         .post("/api/social/follow", &alice, Some(target("user", "bob")))
         .await;
-    assert_eq!(resp.status(), 204);
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.json::<serde_json::Value>().await.unwrap()["signed"],
+        false
+    );
     let body = api
         .get(
             "/api/social/is-following?target_kind=user&target_id=bob",
@@ -138,7 +142,7 @@ async fn follow_publish_notify_slice() {
     let resp = api
         .post("/api/social/follow", &carol, Some(target("user", "bob")))
         .await;
-    assert_eq!(resp.status(), 204);
+    assert_eq!(resp.status(), 200);
     state
         .social()
         .block(

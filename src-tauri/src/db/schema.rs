@@ -110,6 +110,7 @@ diesel::table! {
         weight -> Double,
         metadata -> Nullable<Text>,
         created_at -> Text,
+        signed_json -> Nullable<Text>,
     }
 }
 

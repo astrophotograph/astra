@@ -50,6 +50,13 @@ impl HandleCache {
         }
     }
 
+    /// The DID resolver itself, for callers that verify signatures against
+    /// a DID document (`signed_edges.rs`). Shares the network client and,
+    /// in tests, the fake.
+    pub fn resolver(&self) -> Arc<dyn Resolver> {
+        self.resolver.clone()
+    }
+
     /// The first handle the DID's document claims that resolves back to
     /// the DID, or `None` when there is none, the DID does not resolve, or
     /// the resolver did not answer within the timeout. Cached per DID.

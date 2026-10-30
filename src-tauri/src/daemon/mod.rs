@@ -35,7 +35,9 @@ pub mod api;
 pub mod api_write;
 pub mod auth;
 pub mod blob;
+pub mod circles;
 pub mod process;
+pub mod signed_edges;
 pub mod records;
 pub mod solve;
 pub mod webapp;
@@ -324,6 +326,8 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/admin/sessions/{user_id}",
             axum::routing::delete(magic_link::admin_revoke_sessions),
         )
+        // Circle management (circles.rs): who is in my `circle:<name>`.
+        .nest("/circles", circles::routes())
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -380,6 +384,13 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         // advertises (`<link rel="canonical">`) → 302 to the pretty URL.
         // A private-record stub URI redirects to its subject's gallery too.
         .route("/at/{did}/{collection}/{rkey}", get(gallery::at_resolve))
+        // Signed social-graph edges for indexers (signed_edges.rs):
+        // `/@user/graph/follow/user/{id}`, `/@user/graph/circle%3Afamily/...`.
+        // Public for follows; circle edges only to owner or member.
+        .route(
+            "/{user}/graph/{kind}/{target_kind}/{target_id}",
+            get(signed_edges::graph_edge),
+        )
         .route("/{user}/{slug}/images/{file}", get(gallery::gallery_image))
         .route("/{user}/{slug}/thumbs/{file}", get(gallery::gallery_thumb))
         // Bare content-addressed blobs, gated by the publish state of the

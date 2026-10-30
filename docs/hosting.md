@@ -328,21 +328,73 @@ DID (400 otherwise): the mechanism is kenning's private store, see
 - Unlisted blobs stay fetchable by CID for anyone (the hash is the
   capability, exactly like the unlisted URL).
 
-**Creating the circle edge.** There is no circle-management route yet
-(the kith adapter leaf adds one); until then the edge is written by the
-admin directly, e.g. with `sqlite3 $ASTRA_DATA_DIR/astra.db`:
+**Managing circle members.** Circles have no table of their own: a circle
+exists exactly as long as it has members, each an edge actor → `(user,
+member)` of kind `circle:<name>`. The owner manages them over the authed
+API (PAT or OIDC bearer, or the session cookie); names follow
+`kenning::Visibility` (`[a-z0-9_-]`, 1..=64 chars) and anything else is a
+400:
 
-```sql
-INSERT OR REPLACE INTO kith_edges
-  (actor_id, target_kind, target_id, edge_kind, weight, metadata, created_at)
-VALUES ('<owner users.id>', 'user', '<viewer users.id>', 'circle:family',
-        1.0, '{}', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+```
+GET    /api/circles                            → {"circles":[{"name":"family","members":2}]}
+GET    /api/circles/family                     → {"name":"family","members":[{"user_id","did","signed","created_at"}]}  (404 if empty)
+PUT    /api/circles/family/members/<users.id>  → {"signed":true|false}   (404 unknown user, 400 self)
+DELETE /api/circles/family/members/<users.id>  → 204
 ```
 
-Deleting the row removes access on the next request; nothing is cached.
-The viewer needs a local account with a DID (`PUT /api/me/did`, or set
-`users.did` for a custodial account) and a way to log in (OIDC session or
-a PAT).
+Removal takes effect on the member's next request; nothing is cached. The
+member needs a local account (`users.id`) with a DID (`PUT /api/me/did`, or
+set `users.did` for a custodial account) and a way to log in (OIDC session
+or a PAT) — a member without a DID is stored but can never pass the ACL,
+which compares DIDs. Writing `kith_edges` rows by hand is no longer needed
+and loses the signature described next.
+
+### Signed social edges (`kith_edges.signed_json`)
+
+Follows (`POST /api/social/follow`) and circle memberships are, when they
+can be, **signed statements by the acting user's DID**: a kith
+`sh.kith.graph.edge` record (`kith/lexicons/sh.kith.graph.edge.json`) in a
+kenning envelope signed with the daemon's `ASTRA_SIGNING_KEY_SOURCE` key
+under `ASTRA_SIGNING_METHOD_ID`, verified against the actor's DID document
+before it is stored. Three things must hold, otherwise the edge is stored
+plain and the write response says `"signed": false`: the daemon has a
+signer, the actor has a linked DID, and a `user` target has a DID too
+(object/collection targets keep their ids). A plain edge works exactly as
+before — the graph, counts and the circle ACL do not care.
+
+The id mapping is deliberate and differs from kith's own SQLite adapter:
+`kith_edges` rows stay keyed by local `users.id` (`actor_id`, `target_id`),
+so every existing query is unchanged, while the envelope in the nullable
+`signed_json` column (migration `kith_signed_edges`) carries the DIDs —
+`actor` is the actor's `users.did`, `target.id` the target user's
+`users.did`. The record URI is `at://<actor DID>/sh.kith.graph.edge/<tid>`.
+Repeating a follow or membership that is already signed keeps the original
+statement (same URI); repeating one stored plain upgrades it when it can
+now be signed. Deleting the row (unfollow, member removal) deletes the
+statement.
+
+An indexer, or the users themselves, read a statement from the public
+route
+
+```
+GET /@{user}/graph/{kind}/{target_kind}/{target_id}
+```
+
+where `{user}` is `@username` or `@did:…`, `{kind}` is kith's text codec
+(`follow`, or `circle:family` URL-encoded as `circle%3Afamily`), and a
+`user` target id may be the local id or the DID. The body is the stored
+envelope JSON. `follow` edges are public (`Cache-Control: public,
+max-age=60`). `circle:*` edges reveal membership, so they are served only
+to the circle's owner or the member named, identified like any circle
+viewer (session cookie or bearer → `users.did`), with `Cache-Control:
+private, no-store`. Any other kind, an unknown user, a missing or unsigned
+edge, or a viewer who may not see it is a 404 — never a 403.
+
+If the signing key is not the `ASTRA_SIGNING_METHOD_ID` key in the actor's
+DID document, follows and circle writes by that user fail with a 500 and
+nothing is written (the daemon log names the verification error); the user
+must publish the host's public key in their DID document, exactly as for
+signed publishing.
 
 ### Magic-link sign-in for custodial viewers
 
