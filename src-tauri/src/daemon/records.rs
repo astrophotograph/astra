@@ -595,6 +595,9 @@ pub(crate) mod tests {
         assert_eq!(status, StatusCode::OK);
         // A CID names one rendition: plant a digest row that only the
         // thumbnail carries and ask for it as a preview.
+        // The planted row names the blob HoardFS really serves for the
+        // thumbnail (the original: a 40x40 source gets no renditions), so
+        // the serving guard trusts it without hashing.
         let fake_cid = records::raw_cid(b"not the preview").0.to_string();
         diesel::replace_into(crate::db::schema::blob_digests::table)
             .values(crate::db::models::BlobDigest {
@@ -604,6 +607,7 @@ pub(crate) mod tests {
                 sha256: "00".into(),
                 size: 1,
                 mime: "image/jpeg".into(),
+                variant_blob_id: Some(f.blob_id.clone()),
             })
             .execute(&mut f.state.db.get().unwrap())
             .unwrap();

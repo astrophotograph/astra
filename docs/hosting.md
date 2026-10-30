@@ -195,6 +195,37 @@ Images whose asset has not been uploaded yet are left out of the records
 re-sign; the asset upload path (`PUT /api/push/images/{id}/asset`)
 re-signs every published collection that contains the image.
 
+### Blob digests follow the bytes
+
+A record references its preview and thumbnail by the sha256 CID of the
+rendition bytes, cached per `(blob, quality)` in `blob_digests` together
+with the HoardFS variant blob id the hash was taken from. Renditions can
+be regenerated in place (server-side processing, a re-pushed asset, a
+desktop import of already-known content), so the cache is kept honest in
+three places rather than trusted:
+
+- **Every variant write path invalidates.** `POST /api/images/{id}/process`
+  and `PUT /api/push/images/{id}/asset` drop the digests of the rewritten
+  renditions and immediately re-sign every published collection that
+  contains the image (logged at info: `variant change (preview+thumbnail)
+  on blob …: re-signed N published collection(s)`). The desktop import and
+  library-migration commands have no daemon state, so they only drop the
+  digests; the next daemon publish re-hashes.
+- **Publishing re-checks.** `publish_signed` trusts a cached digest only
+  while HoardFS still lists the same variant blob for that quality (a
+  metadata lookup, no hashing); otherwise it re-hashes the bytes first.
+- **Serving by CID re-checks.** `GET /blob/{cid}` runs the same variant
+  identity check before serving a digest hit. If the rendition was
+  rewritten behind the daemon's back (bytes no longer hash to the CID),
+  the bytes are hashed once, the row is replaced, the containing
+  collections are re-signed, and the stale CID answers 404 — the records
+  already carry the new CID. Requests by HoardFS `blake3:` id skip the
+  check: they name the source, not the rendition bytes.
+
+The fast path never reads or hashes variant bytes; hashing happens once
+per rendition change, and once for each digest row written before the
+`variant_blob_id` column existed (those are backfilled on first use).
+
 ### Public routes added
 
 | Route | Body |
@@ -209,8 +240,10 @@ re-signs every published collection that contains the image.
 Record responses carry `Cache-Control: public, max-age=60` and the record
 CID as ETag (`If-None-Match` → 304). The viewer still polls every 30 s;
 for a signed gallery the body (and CID) only changes when the daemon
-re-signs — on publish, on a sync push of a published collection, and on
-an asset upload — not when a row is edited in place.
+re-signs — on publish, on a sync push of a published collection, on an
+asset upload, on server-side processing of a published image, and when
+`/blob/{cid}` finds a rendition that no longer hashes to its CID — not
+when a row is edited in place.
 
 ### Canonical `at://` URI and the resolver route
 

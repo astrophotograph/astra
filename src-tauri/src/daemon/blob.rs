@@ -18,6 +18,18 @@
 //! Responses carry the same blob-id ETag and `Cache-Control: public` as the
 //! gallery assets (via [`variant_response`]).
 //!
+//! # Digest freshness (CID requests only)
+//!
+//! A CID promises bytes with that hash, but `blob_digests` is a cache and
+//! processing can regenerate a rendition under it. Before a CID hit is
+//! served, [`verify_blob_digest`] checks that the row still names the
+//! variant blob HoardFS currently lists for that quality (a metadata
+//! query, no hashing). If not, the bytes are hashed once and the row
+//! replaced; when the hash changed the old CID 404s, and the published
+//! collections containing the image are re-signed so their records carry
+//! the new CID ([`resign_for_blob`]). Requests by HoardFS blob id skip all
+//! of this: they name the source, not the rendition bytes.
+//!
 //! # Access model
 //!
 //! No `AuthedUser`; the gate is the publish state of the blob's image.
@@ -43,10 +55,13 @@ use super::acl;
 use super::api::variant_response;
 use super::auth::MaybeViewer;
 use super::DaemonState;
+use crate::commands::hoardfs::resolve_hfs_path;
 use crate::commands::publish::{published_image_for_blob, Access};
 use crate::db::models::Image;
 use crate::db::tenancy;
-use crate::share::records::lookup_blob_cid;
+use crate::share::records::{
+    lookup_blob_cid_rows, resign_for_blob, verify_blob_digest, DigestCheck,
+};
 
 /// Quality segment of `/blob/{blob_id}/{quality}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,26 +133,86 @@ pub async fn blob_quality(
 /// Resolve the path id to a published image + the quality to serve + the
 /// access rule the caller must still check. A HoardFS blob id serves
 /// `requested` (default preview); a blob CID serves the rendition it
-/// digests, provided `requested` (if any) agrees. Blocking (diesel).
+/// digests, provided `requested` (if any) agrees and the digest is still
+/// that of the bytes HoardFS holds (see the module docs). A stale hit is
+/// refreshed and skipped; the blob ids whose digests went stale come back
+/// alongside so the caller can re-sign once `conn` is released (the pool
+/// may be a single connection). Blocking (diesel + HoardFS); runs inside
+/// the runtime so HoardFS calls can be driven with `block_on`.
+type ResolvedBlob = (Option<(Image, Quality, Access)>, Vec<String>);
+
 fn resolve_blob(
+    state: &DaemonState,
     conn: &mut diesel::SqliteConnection,
     id: &str,
     requested: Option<Quality>,
-) -> Result<Option<(Image, Quality, Access)>, String> {
+) -> Result<ResolvedBlob, String> {
     if let Some((image, access)) = published_image_for_blob(conn, id)? {
-        return Ok(Some((image, requested.unwrap_or(Quality::Preview), access)));
+        return Ok((
+            Some((image, requested.unwrap_or(Quality::Preview), access)),
+            Vec::new(),
+        ));
     }
-    if id.parse::<ipld_core::cid::Cid>().is_ok() {
-        for (blob_id, quality) in lookup_blob_cid(conn, id)? {
-            if !requested.as_ref().is_none_or(|r| *r == quality) {
-                continue;
+    if id.parse::<ipld_core::cid::Cid>().is_err() {
+        return Ok((None, Vec::new()));
+    }
+    let rt = tokio::runtime::Handle::current();
+    let mut found = None;
+    let mut stale_blobs: Vec<String> = Vec::new();
+    for (row, quality) in lookup_blob_cid_rows(conn, id)? {
+        if !requested.as_ref().is_none_or(|r| *r == quality) {
+            continue;
+        }
+        // Unpublished blobs are never touched (no I/O, no probing signal).
+        let Some((image, access)) = published_image_for_blob(conn, &row.blob_id)? else {
+            continue;
+        };
+        let Some(hfs_path) = resolve_hfs_path(&image) else {
+            continue;
+        };
+        let volume = tenancy::volume_name(&image.user_id);
+        match verify_blob_digest(
+            conn,
+            &state.hoardfs,
+            &rt,
+            &volume,
+            &hfs_path,
+            &row,
+            &quality,
+        )? {
+            DigestCheck::Fresh => {
+                found = Some((image, quality, access));
+                break;
             }
-            if let Some((image, access)) = published_image_for_blob(conn, &blob_id)? {
-                return Ok(Some((image, quality, access)));
+            DigestCheck::Stale { new_cid } => {
+                log::info!(
+                    "blob {id} ({}, {}) is stale: bytes now digest to {new_cid}",
+                    row.blob_id,
+                    row.quality
+                );
+                if !stale_blobs.contains(&row.blob_id) {
+                    stale_blobs.push(row.blob_id.clone());
+                }
             }
         }
     }
-    Ok(None)
+    Ok((found, stale_blobs))
+}
+
+/// Records referencing a stale CID follow the bytes right away, so the
+/// next bundle fetch carries the CID that now serves. Best-effort.
+fn resign_stale(state: &DaemonState, stale_blobs: Vec<String>) {
+    for blob_id in stale_blobs {
+        if let Err(e) = resign_for_blob(
+            &state.db,
+            &state.hoardfs,
+            state.signer.as_deref(),
+            &blob_id,
+            "stale digest served by CID",
+        ) {
+            log::warn!("re-sign after stale blob digest on {blob_id} failed: {e}");
+        }
+    }
 }
 
 async fn serve_blob(
@@ -151,10 +226,13 @@ async fn serve_blob(
         return not_found();
     }
 
-    let db = state.db.clone();
+    let state_for_lookup = state.clone();
     let resolved = tokio::task::spawn_blocking(move || {
-        let mut conn = db.get().map_err(|e| e.to_string())?;
-        resolve_blob(&mut conn, &blob_id, requested)
+        let mut conn = state_for_lookup.db.get().map_err(|e| e.to_string())?;
+        let (found, stale) = resolve_blob(&state_for_lookup, &mut conn, &blob_id, requested)?;
+        drop(conn);
+        resign_stale(&state_for_lookup, stale);
+        Ok::<_, String>(found)
     })
     .await;
 
@@ -428,6 +506,264 @@ mod tests {
         // Extra trailing segments don't match any route.
         let (status, _, _) = get(&router, &format!("/blob/{id}/preview/extra")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    // --- digest freshness (share::records) ---
+
+    fn sha256_of(bytes: &[u8]) -> [u8; 32] {
+        use sha2::Digest;
+        sha2::Sha256::digest(bytes).into()
+    }
+
+    /// `(preview CID, thumbnail CID)` the stored image record carries.
+    fn published_cids(f: &crate::daemon::gallery::tests::Fixture) -> (String, String) {
+        use crate::daemon::records::tests::image_rkey;
+        let rkey = image_rkey(f);
+        let row = crate::share::records::stored_record(
+            &mut f.state.db.get().unwrap(),
+            "alice",
+            crate::share::records::IMAGE_NSID,
+            &rkey,
+        )
+        .unwrap()
+        .expect("image record stored");
+        let v: serde_json::Value = serde_json::from_str(&row.signed_json).unwrap();
+        let link = |q: &str| {
+            v.pointer(&format!("/record/{q}/ref/$link"))
+                .and_then(|l| l.as_str())
+                .unwrap()
+                .to_string()
+        };
+        (link("preview"), link("thumbnail"))
+    }
+
+    fn digest_rows(
+        f: &crate::daemon::gallery::tests::Fixture,
+    ) -> Vec<crate::db::models::BlobDigest> {
+        use crate::db::schema::blob_digests;
+        blob_digests::table
+            .filter(blob_digests::blob_id.eq(&f.blob_id))
+            .order(blob_digests::quality.asc())
+            .load(&mut f.state.db.get().unwrap())
+            .unwrap()
+    }
+
+    fn variant_blob(f: &crate::daemon::gallery::tests::Fixture, quality: Quality) -> String {
+        f.state
+            .hoardfs
+            .lock()
+            .unwrap()
+            .list_variants("user-alice", "/g/m31.png")
+            .unwrap()
+            .into_iter()
+            .find(|v| v.quality == quality)
+            .map(|v| v.variant_blob_id)
+            .expect("variant exists")
+    }
+
+    /// Rewrite both renditions directly in HoardFS, bypassing every hook.
+    fn tamper(f: &crate::daemon::gallery::tests::Fixture, preview: &[u8], thumb: &[u8]) {
+        tokio::task::block_in_place(|| {
+            let hfs = f.state.hoardfs.lock().unwrap();
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(hfs.add_variant(
+                "user-alice",
+                "/g/m31.png",
+                Quality::Preview,
+                preview,
+                "image/jpeg",
+            ))
+            .unwrap();
+            rt.block_on(hfs.add_variant(
+                "user-alice",
+                "/g/m31.png",
+                Quality::Thumbnail,
+                thumb,
+                "image/jpeg",
+            ))
+            .unwrap();
+        });
+    }
+
+    /// Variant bytes changed behind the daemon's back: the next CID request
+    /// 404s, the digest rows are refreshed to the new bytes, and the signed
+    /// records now reference (and serve) the new CIDs.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_cid_404s_refreshes_digest_and_resigns() {
+        use crate::daemon::records::tests::{link_did, sign_publish};
+        let f = fixture().await;
+        link_did(&f);
+        sign_publish(&f, &f.public_collection.id).await.unwrap();
+        let router = crate::daemon::router(f.state.clone());
+        let (old_preview, old_thumb) = published_cids(&f);
+
+        // Fresh digest: served, and the bytes hash to the CID.
+        let (status, _, body) = get(&router, &format!("/blob/{old_preview}/preview")).await;
+        assert_eq!(status, StatusCode::OK);
+        let cid: ipld_core::cid::Cid = old_preview.parse().unwrap();
+        assert_eq!(cid.hash().digest(), &sha256_of(&body)[..]);
+        // The 40x40 fixture source gets no renditions: HoardFS serves the
+        // original at both qualities, so that is the identity recorded.
+        let rows = digest_rows(&f);
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|r| r.variant_blob_id.as_deref() == Some(f.blob_id.as_str())));
+
+        let new_preview = b"tampered preview bytes".to_vec();
+        let new_thumb = b"tampered thumbnail bytes".to_vec();
+        tamper(&f, &new_preview, &new_thumb);
+
+        // Old CIDs name nothing any more, however they are addressed.
+        let (status, _, _) = get(&router, &format!("/blob/{old_preview}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, _) = get(&router, &format!("/blob/{old_preview}/preview")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, _) = get(&router, &format!("/blob/{old_thumb}/thumbnail")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Digest rows: still exactly one per quality, now of the new bytes
+        // and naming the variant blobs HoardFS holds.
+        let rows = digest_rows(&f);
+        assert_eq!(rows.len(), 2);
+        let preview_row = rows.iter().find(|r| r.quality == "preview").unwrap();
+        let thumb_row = rows.iter().find(|r| r.quality == "thumbnail").unwrap();
+        let (exp_preview_cid, exp_preview_sha) = crate::share::records::raw_cid(&new_preview);
+        assert_eq!(preview_row.cid, exp_preview_cid.to_string());
+        assert_eq!(preview_row.sha256, hex::encode(exp_preview_sha));
+        assert_eq!(preview_row.size, new_preview.len() as i64);
+        assert_eq!(
+            preview_row.variant_blob_id.as_deref(),
+            Some(variant_blob(&f, Quality::Preview).as_str())
+        );
+        assert_eq!(
+            thumb_row.cid,
+            crate::share::records::raw_cid(&new_thumb).0.to_string()
+        );
+        assert_eq!(
+            thumb_row.variant_blob_id.as_deref(),
+            Some(variant_blob(&f, Quality::Thumbnail).as_str())
+        );
+
+        // The re-sign hook fired: the stored record carries the new CIDs,
+        // and they serve the new bytes.
+        let (np, nt) = published_cids(&f);
+        assert_ne!(np, old_preview);
+        assert_eq!(np, preview_row.cid);
+        assert_eq!(nt, thumb_row.cid);
+        let (status, _, body) = get(&router, &format!("/blob/{np}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, new_preview);
+        let (status, _, body) = get(&router, &format!("/blob/{nt}/thumbnail")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, new_thumb);
+        // The collection record was re-signed too (its image ref changed).
+        let n: i64 = {
+            use crate::db::schema::published_records;
+            published_records::table
+                .filter(published_records::collection_id.eq(&f.public_collection.id))
+                .count()
+                .get_result(&mut f.state.db.get().unwrap())
+                .unwrap()
+        };
+        assert_eq!(n, 2);
+    }
+
+    /// A digest row from before `variant_blob_id` existed (NULL) is hashed
+    /// once on first use: still served when the bytes match, and backfilled
+    /// (here with the original's blob id — no renditions for a tiny source)
+    /// so the next request takes the metadata-only path.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn legacy_digest_row_is_verified_once_and_backfilled() {
+        use crate::daemon::records::tests::{link_did, sign_publish};
+        use crate::db::schema::blob_digests;
+        let f = fixture().await;
+        link_did(&f);
+        sign_publish(&f, &f.public_collection.id).await.unwrap();
+        let router = crate::daemon::router(f.state.clone());
+        let (preview, _) = published_cids(&f);
+
+        diesel::update(blob_digests::table.filter(blob_digests::blob_id.eq(&f.blob_id)))
+            .set(blob_digests::variant_blob_id.eq(None::<String>))
+            .execute(&mut f.state.db.get().unwrap())
+            .unwrap();
+
+        let (status, _, body) = get(&router, &format!("/blob/{preview}/preview")).await;
+        assert_eq!(status, StatusCode::OK);
+        let cid: ipld_core::cid::Cid = preview.parse().unwrap();
+        assert_eq!(cid.hash().digest(), &sha256_of(&body)[..]);
+        let row = digest_rows(&f)
+            .into_iter()
+            .find(|r| r.quality == "preview")
+            .unwrap();
+        assert_eq!(row.cid, preview, "matching bytes keep the CID");
+        assert_eq!(row.variant_blob_id.as_deref(), Some(f.blob_id.as_str()));
+        // The record was not re-signed for a row that merely lacked identity.
+        assert_eq!(published_cids(&f).0, preview);
+    }
+
+    /// The desktop-only treatment: drop the rows, no re-sign.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn drop_variant_digests_forgets_only_named_renditions() {
+        use crate::daemon::records::tests::{link_did, sign_publish};
+        use crate::share::records::{drop_variant_digests, on_variant_written, PUBLIC_RENDITIONS};
+        let f = fixture().await;
+        link_did(&f);
+        sign_publish(&f, &f.public_collection.id).await.unwrap();
+        assert_eq!(digest_rows(&f).len(), 2);
+        let before = published_cids(&f);
+
+        let dropped = drop_variant_digests(
+            &mut f.state.db.get().unwrap(),
+            &f.blob_id,
+            &[Quality::Preview],
+        )
+        .unwrap();
+        assert_eq!(dropped, 1);
+        assert_eq!(
+            digest_rows(&f)
+                .iter()
+                .map(|r| r.quality.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thumbnail"]
+        );
+        // Non-public renditions are not digest rows: nothing to drop.
+        assert_eq!(
+            drop_variant_digests(&mut f.state.db.get().unwrap(), &f.blob_id, &[Quality::Full])
+                .unwrap(),
+            0
+        );
+
+        // The choke point without a signer drops and stops.
+        let state = f.state.clone();
+        let blob = f.blob_id.clone();
+        let resigned = tokio::task::spawn_blocking(move || {
+            on_variant_written(&state.db, &state.hoardfs, None, &blob, &PUBLIC_RENDITIONS)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(resigned, 0);
+        assert!(digest_rows(&f).is_empty());
+        assert_eq!(published_cids(&f), before);
+
+        // With the signer it re-signs: rows are back, one per quality.
+        let state = f.state.clone();
+        let blob = f.blob_id.clone();
+        let resigned = tokio::task::spawn_blocking(move || {
+            on_variant_written(
+                &state.db,
+                &state.hoardfs,
+                state.signer.as_deref(),
+                &blob,
+                &PUBLIC_RENDITIONS,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(resigned, 1);
+        assert_eq!(digest_rows(&f).len(), 2);
     }
 
     /// `/blob/...` must win over the `/{user}` / `/{user}/{slug}` captures.

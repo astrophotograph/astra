@@ -17,6 +17,14 @@
 //! variant's digest in `blob_digests`, which is also what resolves
 //! `GET /blob/{cid}` back to a HoardFS blob + quality.
 //!
+//! A cached digest is only as good as the bytes it was taken from, and
+//! processing can regenerate a rendition in place. Every variant write
+//! goes through [`on_variant_written`] (drop the digests, re-sign the
+//! containing published collections); each row also remembers the HoardFS
+//! variant blob id it hashed, so a republish ([`variant_digest`]) and the
+//! blob route ([`verify_blob_digest`]) can tell a stale row from a fresh
+//! one with a metadata lookup and re-hash only when it has gone stale.
+//!
 //! Signing is optional: without `ASTRA_SIGNING_KEY_SOURCE` the daemon keeps
 //! serving the legacy live manifest, and a user without a `users.did` keeps
 //! publishing the legacy way too.
@@ -377,9 +385,77 @@ impl BlobDigest {
     }
 }
 
+/// The two renditions records reference and `/blob/{cid}` serves.
+pub const PUBLIC_RENDITIONS: [Quality; 2] = [Quality::Preview, Quality::Thumbnail];
+
+fn renditions_label(qualities: &[Quality]) -> String {
+    qualities
+        .iter()
+        .filter_map(quality_name)
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
+/// HoardFS's own identity for the bytes it serves as `quality` of a file:
+/// the blob id (blake3) of the variant `get_file_quality` would pick —
+/// the exact quality, else the first of its fallback chain — or of the
+/// original when no rendition exists (small sources, see
+/// `hoardfs_variant`). Metadata queries only; no bytes are read.
+fn served_identity(
+    hfs: &hoardfs_volume::HoardFs,
+    volume: &str,
+    hfs_path: &str,
+    quality: &Quality,
+) -> Result<String, String> {
+    let variants = hfs
+        .list_variants(volume, hfs_path)
+        .map_err(|e| format!("variants of {hfs_path}: {e}"))?;
+    for q in quality.fallback_chain() {
+        if let Some(v) = variants.iter().find(|v| v.quality == q) {
+            return Ok(v.variant_blob_id.clone());
+        }
+    }
+    Ok(hfs
+        .get_file_info(volume, hfs_path)
+        .map_err(|e| format!("file info of {hfs_path}: {e}"))?
+        .current_version
+        .blob_id)
+}
+
+/// A cached digest row is trusted only while HoardFS still serves the
+/// blob it was computed from. Rows from before `variant_blob_id` existed
+/// (None) are never trusted blindly: they are hashed once and backfilled.
+fn digest_is_current(row: &BlobDigest, current: &str) -> bool {
+    row.variant_blob_id.as_deref() == Some(current)
+}
+
+/// Hash `bytes` into a `blob_digests` row for `(blob_id, quality)`.
+fn digest_row(
+    blob_id: &str,
+    quality: &str,
+    bytes: &[u8],
+    mime: String,
+    variant_blob_id: Option<String>,
+) -> BlobDigest {
+    let (cid, digest) = raw_cid(bytes);
+    BlobDigest {
+        blob_id: blob_id.to_string(),
+        quality: quality.to_string(),
+        cid: cid.to_string(),
+        sha256: hex::encode(digest),
+        size: bytes.len() as i64,
+        mime,
+        variant_blob_id,
+    }
+}
+
 /// Digest of one variant's bytes, cached in `blob_digests` per
-/// (blob, quality). The first call per rendition fetches the bytes from
-/// HoardFS (blocking; `rt` drives the async HoardFS API).
+/// (blob, quality). The bytes are fetched from HoardFS and hashed
+/// (blocking; `rt` drives the async HoardFS API) the first time a
+/// rendition is published and again whenever the cached row no longer
+/// names the variant blob HoardFS currently holds — i.e. after the
+/// rendition was regenerated — so a republish always carries the CID of
+/// the bytes `/blob/{cid}` will serve.
 fn variant_digest(
     conn: &mut SqliteConnection,
     hoardfs: &Arc<Mutex<hoardfs_volume::HoardFs>>,
@@ -395,26 +471,27 @@ fn variant_digest(
         .first(conn)
         .optional()
         .map_err(|e| e.to_string())?;
-    if let Some(d) = cached {
-        return Ok(d);
-    }
 
-    let (bytes, _served, mime) = {
+    let (bytes, mime, current) = {
         let hfs = hoardfs
             .lock()
             .map_err(|_| "HoardFS lock poisoned".to_string())?;
-        rt.block_on(hfs.get_file_quality(volume, hfs_path, quality))
-            .map_err(|e| format!("variant {name} of {hfs_path}: {e}"))?
+        let current = served_identity(&hfs, volume, hfs_path, &quality)?;
+        if let Some(d) = cached {
+            if digest_is_current(&d, &current) {
+                return Ok(d);
+            }
+            log::info!(
+                "blob digest for {blob_id} {name} is stale (variant {} -> {current}): re-hashing",
+                d.variant_blob_id.as_deref().unwrap_or("unknown")
+            );
+        }
+        let (bytes, _served, mime) = rt
+            .block_on(hfs.get_file_quality(volume, hfs_path, quality))
+            .map_err(|e| format!("variant {name} of {hfs_path}: {e}"))?;
+        (bytes, mime, current)
     };
-    let (cid, digest) = raw_cid(&bytes);
-    let row = BlobDigest {
-        blob_id: blob_id.to_string(),
-        quality: name.to_string(),
-        cid: cid.to_string(),
-        sha256: hex::encode(digest),
-        size: bytes.len() as i64,
-        mime,
-    };
+    let row = digest_row(blob_id, name, &bytes, mime, Some(current));
     diesel::replace_into(blob_digests::table)
         .values(&row)
         .execute(conn)
@@ -422,14 +499,159 @@ fn variant_digest(
     Ok(row)
 }
 
-/// Resolve a blob CID (as a record's `ref.$link` carries it) to the HoardFS
-/// blob ids and qualities whose bytes digest to it. Usually one hit; two
-/// when a small original yields byte-identical preview and thumbnail
-/// renditions. Empty for unknown CIDs. Preview sorts first.
-pub fn lookup_blob_cid(
+/// Outcome of [`verify_blob_digest`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DigestCheck {
+    /// The bytes HoardFS serves for this rendition still hash to the row's
+    /// CID (checked by variant identity, or by re-hashing when the row had
+    /// no variant identity yet — it has one now).
+    Fresh,
+    /// The rendition was rewritten behind the digest: the row now carries
+    /// the digest of the current bytes, and the old CID names nothing.
+    Stale { new_cid: String },
+}
+
+/// Serving-time guard for `GET /blob/{cid}`: is `row` (a `blob_digests`
+/// hit for the CID) still the digest of what HoardFS serves for that
+/// rendition? Cheap path: the row's `variant_blob_id` equals the variant
+/// blob HoardFS currently lists for the quality — one metadata query, no
+/// bytes read, no hashing. Otherwise (regenerated variant, or a row from
+/// before the column existed) the bytes are fetched and hashed once and
+/// the row replaced; a changed hash is reported as [`DigestCheck::Stale`]
+/// so the caller can 404 the old CID and trigger a re-sign.
+pub fn verify_blob_digest(
+    conn: &mut SqliteConnection,
+    hoardfs: &Arc<Mutex<hoardfs_volume::HoardFs>>,
+    rt: &tokio::runtime::Handle,
+    volume: &str,
+    hfs_path: &str,
+    row: &BlobDigest,
+    quality: &Quality,
+) -> Result<DigestCheck, String> {
+    let (bytes, mime, current) = {
+        let hfs = hoardfs
+            .lock()
+            .map_err(|_| "HoardFS lock poisoned".to_string())?;
+        let current = served_identity(&hfs, volume, hfs_path, quality)?;
+        if digest_is_current(row, &current) {
+            return Ok(DigestCheck::Fresh);
+        }
+        let (bytes, _served, mime) = rt
+            .block_on(hfs.get_file_quality(volume, hfs_path, quality.clone()))
+            .map_err(|e| format!("variant {} of {hfs_path}: {e}", row.quality))?;
+        (bytes, mime, current)
+    };
+    let fresh = digest_row(&row.blob_id, &row.quality, &bytes, mime, Some(current));
+    diesel::replace_into(blob_digests::table)
+        .values(&fresh)
+        .execute(conn)
+        .map_err(|e| e.to_string())?;
+    if fresh.cid == row.cid {
+        Ok(DigestCheck::Fresh)
+    } else {
+        log::warn!(
+            "blob digest for {} {} was stale: {} now digests to {}",
+            row.blob_id,
+            row.quality,
+            row.cid,
+            fresh.cid
+        );
+        Ok(DigestCheck::Stale { new_cid: fresh.cid })
+    }
+}
+
+/// Forget the cached digests of `blob_id` for `qualities` (pass
+/// [`PUBLIC_RENDITIONS`] for all). The next publish or `/blob/{cid}`
+/// lookup re-hashes the bytes. This is the whole treatment on paths with
+/// no daemon state (desktop Tauri commands): the daemon re-sign that
+/// recomputes the digests happens on the next publish.
+pub fn drop_variant_digests(
+    conn: &mut SqliteConnection,
+    blob_id: &str,
+    qualities: &[Quality],
+) -> Result<usize, String> {
+    let names: Vec<&str> = qualities.iter().filter_map(quality_name).collect();
+    if names.is_empty() {
+        return Ok(0);
+    }
+    diesel::delete(
+        blob_digests::table
+            .filter(blob_digests::blob_id.eq(blob_id))
+            .filter(blob_digests::quality.eq_any(&names)),
+    )
+    .execute(conn)
+    .map_err(|e| e.to_string())
+}
+
+/// Re-sign every published collection containing an image whose asset is
+/// `blob_id` (any owner), so the records' blob references follow the
+/// bytes. `Ok(0)` without a signer. Blocking; needs a tokio runtime
+/// (see [`publish_signed`]).
+pub fn resign_for_blob(
+    db: &DbPool,
+    hoardfs: &Arc<Mutex<hoardfs_volume::HoardFs>>,
+    signer: Option<&Signer>,
+    blob_id: &str,
+    reason: &str,
+) -> Result<usize, String> {
+    let Some(signer) = signer else {
+        return Ok(0);
+    };
+    let owners: Vec<(String, String)> = {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        images::table
+            .filter(images::blob_id.eq(blob_id))
+            .select((images::id, images::user_id))
+            .load(&mut conn)
+            .map_err(|e| e.to_string())?
+    };
+    let mut n = 0;
+    for (image_id, user_id) in owners {
+        let k = resign_collections_with_image(db, hoardfs, signer, &user_id, &image_id)?;
+        if k > 0 {
+            log::info!(
+                "{reason} on blob {blob_id}: re-signed {k} published collection(s) containing image {image_id}"
+            );
+        }
+        n += k;
+    }
+    Ok(n)
+}
+
+/// The one choke point for "a HoardFS rendition of `blob_id` was
+/// (re)written": drop the cached digests for `qualities` and, with a
+/// signer, re-sign every published collection containing an image backed
+/// by the blob (which recomputes the digests and stores records carrying
+/// the new CIDs). Returns the number of collections re-signed. Blocking;
+/// call from `spawn_blocking` with the HoardFS lock released.
+pub fn on_variant_written(
+    db: &DbPool,
+    hoardfs: &Arc<Mutex<hoardfs_volume::HoardFs>>,
+    signer: Option<&Signer>,
+    blob_id: &str,
+    qualities: &[Quality],
+) -> Result<usize, String> {
+    {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        drop_variant_digests(&mut conn, blob_id, qualities)?;
+    }
+    resign_for_blob(
+        db,
+        hoardfs,
+        signer,
+        blob_id,
+        &format!("variant change ({})", renditions_label(qualities)),
+    )
+}
+
+/// `blob_digests` rows whose CID is `cid` (as a record's `ref.$link`
+/// carries it), each with its parsed quality. Usually one; two when a
+/// small original yields byte-identical preview and thumbnail renditions.
+/// Empty for unknown CIDs. Preview sorts first.
+pub fn lookup_blob_cid_rows(
     conn: &mut SqliteConnection,
     cid: &str,
-) -> Result<Vec<(String, Quality)>, String> {
+) -> Result<Vec<(BlobDigest, Quality)>, String> {
     let hits: Vec<BlobDigest> = blob_digests::table
         .filter(blob_digests::cid.eq(cid))
         .order(blob_digests::quality.asc())
@@ -437,7 +659,7 @@ pub fn lookup_blob_cid(
         .map_err(|e| e.to_string())?;
     Ok(hits
         .into_iter()
-        .filter_map(|d| quality_from_name(&d.quality).map(|q| (d.blob_id, q)))
+        .filter_map(|d| quality_from_name(&d.quality).map(|q| (d, q)))
         .collect())
 }
 

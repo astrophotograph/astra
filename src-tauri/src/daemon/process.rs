@@ -293,6 +293,9 @@ pub async fn process_image(
     // Record the processing on the image row; bumping updated_at busts the
     // versioned preview/thumbnail URLs and the variant ETag
     let db = state.db.clone();
+    let hoardfs_for_hook = state.hoardfs.clone();
+    let signer_for_hook = state.signer.clone();
+    let blob_for_hook = image.blob_id.clone();
     let record_id = id.clone();
     let applied = serde_json::to_value(&processed.applied).unwrap_or_default();
     let applied_for_row = applied.clone();
@@ -324,10 +327,29 @@ pub async fn process_image(
             ))
             .execute(&mut conn)
             .map_err(|e| e.to_string())?;
-        images::table
+        let image = images::table
             .find(&record_id)
             .first::<Image>(&mut conn)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        drop(conn);
+
+        // The preview/thumbnail renditions were rewritten: their cached
+        // digests are stale and any signed record referencing them must
+        // follow the bytes (share::records). Best-effort, logged.
+        if let Some(blob_id) = blob_for_hook.as_deref() {
+            if let Err(e) = crate::share::records::on_variant_written(
+                &db,
+                &hoardfs_for_hook,
+                signer_for_hook.as_deref(),
+                blob_id,
+                &crate::share::records::PUBLIC_RENDITIONS,
+            ) {
+                log::warn!(
+                    "process {record_id}: digest invalidation after variant rewrite failed: {e}"
+                );
+            }
+        }
+        Ok::<_, String>(image)
     })
     .await;
 
@@ -1233,6 +1255,206 @@ mod tests {
         assert_eq!(result["processingParams"]["saturation"], 2.0);
         let (_, _, saturated) = request(&router, "GET", &alice, &preview_uri, None).await;
         assert_ne!(after, saturated);
+    }
+
+    /// Server-side processing rewrites the preview/thumbnail variants of a
+    /// published, signed image: the old blob CIDs retire, the records are
+    /// re-signed with the new CIDs, and those serve bytes that hash to them.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn processing_resigns_records_and_retires_old_blob_cids() {
+        use crate::commands::collections::{create_collection_core, CreateCollectionInput};
+        use crate::commands::images::add_image_to_collection_core;
+        use crate::commands::publish::{publish_collection_core, PublishVisibility};
+        use crate::db::schema::{blob_digests, images as images_table, users};
+        use crate::share::records;
+        use diesel::prelude::*;
+        use sha2::Digest;
+
+        let (seeded_state, _tmp, alice, _bob, image) = seeded().await;
+        let state = Arc::new(DaemonState {
+            db: seeded_state.db.clone(),
+            hoardfs: seeded_state.hoardfs.clone(),
+            oidc: None,
+            limits: Default::default(),
+            session_key: [7u8; 32],
+            processing: Default::default(),
+            tetra3_db: None,
+            handles: Default::default(),
+            signer: Some(Arc::new(crate::daemon::gallery::tests::test_signer())),
+        });
+
+        // Publish the FITS image in a signed public collection.
+        let collection = create_collection_core(
+            &state.db,
+            "alice",
+            CreateCollectionInput {
+                name: "Orion".to_string(),
+                description: None,
+                visibility: None,
+                template: None,
+                tags: None,
+            },
+        )
+        .unwrap();
+        add_image_to_collection_core(&state.db, "alice", &image.id, &collection.id).unwrap();
+        publish_collection_core(
+            &state.db,
+            "alice",
+            &collection.id,
+            PublishVisibility::Public,
+            None,
+        )
+        .unwrap();
+        diesel::update(users::table.find("alice"))
+            .set(users::did.eq(Some(crate::daemon::records::tests::DID)))
+            .execute(&mut state.db.get().unwrap())
+            .unwrap();
+        let signed = {
+            let state = state.clone();
+            let cid = collection.id.clone();
+            tokio::task::spawn_blocking(move || {
+                records::publish_signed(
+                    &state.db,
+                    &state.hoardfs,
+                    state.signer.as_ref().unwrap(),
+                    "alice",
+                    &cid,
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("alice has a DID")
+        };
+        assert_eq!(signed.image_count, 1);
+
+        let blob_id: String = images_table::table
+            .find(&image.id)
+            .select(images_table::blob_id)
+            .first::<Option<String>>(&mut state.db.get().unwrap())
+            .unwrap()
+            .unwrap();
+        let published_cids = || -> (String, String) {
+            let rkey: String = images_table::table
+                .find(&image.id)
+                .select(images_table::rkey)
+                .first::<Option<String>>(&mut state.db.get().unwrap())
+                .unwrap()
+                .unwrap();
+            let row = records::stored_record(
+                &mut state.db.get().unwrap(),
+                "alice",
+                records::IMAGE_NSID,
+                &rkey,
+            )
+            .unwrap()
+            .unwrap();
+            let v: serde_json::Value = serde_json::from_str(&row.signed_json).unwrap();
+            let link = |q: &str| {
+                v.pointer(&format!("/record/{q}/ref/$link"))
+                    .and_then(|l| l.as_str())
+                    .unwrap()
+                    .to_string()
+            };
+            (link("preview"), link("thumbnail"))
+        };
+        let digest_rows = || -> Vec<crate::db::models::BlobDigest> {
+            blob_digests::table
+                .filter(blob_digests::blob_id.eq(&blob_id))
+                .order(blob_digests::quality.asc())
+                .load(&mut state.db.get().unwrap())
+                .unwrap()
+        };
+        let hashes_to = |cid: &str, body: &[u8]| {
+            let cid: ipld_core::cid::Cid = cid.parse().unwrap();
+            let digest: [u8; 32] = sha2::Sha256::digest(body).into();
+            cid.hash().digest() == &digest[..]
+        };
+
+        let router = crate::daemon::router(state.clone());
+        // (The small synthetic FITS yields byte-identical renditions, so
+        // the two CIDs may coincide; everything below holds either way.)
+        let (old_preview, old_thumb) = published_cids();
+        let (status, _, body) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/blob/{old_preview}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(hashes_to(&old_preview, &body));
+
+        // The real write path: Apply (MTF) rewrites both renditions.
+        let (status, _, body) = request(
+            &router,
+            "POST",
+            &alice,
+            &format!("/api/images/{}/process", image.id),
+            Some(serde_json::json!({
+                "stretchMethod": "mtf",
+                "bgPercent": 0.25,
+                "sigma": 2.0
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+
+        // Old CIDs are gone from the index and the records.
+        let (status, _, _) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/blob/{old_preview}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _, _) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/blob/{old_thumb}/thumbnail"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (new_preview, new_thumb) = published_cids();
+        assert_ne!(new_preview, old_preview);
+        assert_ne!(new_thumb, old_thumb);
+
+        // The new CIDs serve bytes that hash to them.
+        let (status, _, body) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/blob/{new_preview}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(hashes_to(&new_preview, &body));
+        let (status, _, body) = request(
+            &router,
+            "GET",
+            &alice,
+            &format!("/blob/{new_thumb}/thumbnail"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(hashes_to(&new_thumb, &body));
+
+        // Exactly one digest row per quality, each naming the current bytes.
+        let rows = digest_rows();
+        assert_eq!(
+            rows.iter().map(|r| r.quality.as_str()).collect::<Vec<_>>(),
+            vec!["preview", "thumbnail"]
+        );
+        assert_eq!(rows[0].cid, new_preview);
+        assert_eq!(rows[1].cid, new_thumb);
+        assert!(rows.iter().all(|r| r.variant_blob_id.is_some()));
     }
 
     // --- /plate-solve endpoint guards (handler in daemon::solve, sharing

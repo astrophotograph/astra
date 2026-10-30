@@ -503,6 +503,14 @@ pub async fn put_image_asset(
             ))
             .execute(&mut conn)
             .map_err(|e| e.to_string())?;
+        // put_file regenerated the renditions of `stored_blob` (a re-push
+        // of already-known content rewrites them in place): forget their
+        // cached digests so the re-sign below hashes the bytes it has.
+        crate::share::records::drop_variant_digests(
+            &mut conn,
+            &stored_blob,
+            &crate::share::records::PUBLIC_RENDITIONS,
+        )?;
         drop(conn);
 
         // The bytes behind a published image changed (or arrived): re-sign

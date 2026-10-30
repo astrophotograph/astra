@@ -186,6 +186,19 @@ pub async fn import_images_hoardfs(
 
                 // Create Astra image record
                 let mut conn = state.db.get().map_err(|e| e.to_string())?;
+                // register_external regenerates the renditions of an
+                // already-known blob in place: any cached digests of them
+                // are stale (no daemon state here, so no re-sign — the
+                // next daemon publish re-hashes).
+                if let Some(b) = blob_id.as_deref() {
+                    if let Err(e) = crate::share::records::drop_variant_digests(
+                        &mut conn,
+                        b,
+                        &crate::share::records::PUBLIC_RENDITIONS,
+                    ) {
+                        log::warn!("import {filename}: dropping blob digests failed: {e}");
+                    }
+                }
                 let image_id = uuid::Uuid::new_v4().to_string();
                 let new_image = NewImage {
                     id: image_id.clone(),
@@ -573,6 +586,21 @@ pub fn migrate_library_core(
                         continue;
                     }
                 };
+
+                // Same as the import path: the blob's renditions were just
+                // (re)generated, so forget their cached digests.
+                if let Some(b) = blob_id.as_deref() {
+                    if let Err(e) = crate::share::records::drop_variant_digests(
+                        &mut conn,
+                        b,
+                        &crate::share::records::PUBLIC_RENDITIONS,
+                    ) {
+                        log::warn!(
+                            "migrate {}: dropping blob digests failed: {e}",
+                            image.filename
+                        );
+                    }
+                }
 
                 let mut existing_meta: serde_json::Value = image.metadata.as_ref()
                     .and_then(|m| serde_json::from_str(m).ok())

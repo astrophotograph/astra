@@ -120,6 +120,11 @@ pub struct BlobDigest {
     pub sha256: String,
     pub size: i64,
     pub mime: String,
+    /// HoardFS blob id (blake3) of the bytes this digest was taken from:
+    /// the variant blob, or the original when the file has no rendition
+    /// at this quality. The freshness check behind `GET /blob/{cid}` and
+    /// republish. None on rows written before the column existed.
+    pub variant_blob_id: Option<String>,
 }
 
 // ============================================================================

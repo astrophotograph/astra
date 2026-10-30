@@ -172,6 +172,7 @@ diesel::table! {
         sha256 -> Text,
         size -> BigInt,
         mime -> Text,
+        variant_blob_id -> Nullable<Text>,
     }
 }
 
