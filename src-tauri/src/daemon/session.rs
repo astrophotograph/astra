@@ -6,10 +6,12 @@
 //! the email claim invite-matching needs) through the same invite-gated
 //! [`super::oidc::resolve_user`] path as bearer JWTs, then sets an HttpOnly
 //! cookie `astra_session=<user_id_b64>.<exp>.<hmac>` signed with a key
-//! generated once into `{data_dir}/session-key` (0600). No session table —
-//! the cookie is self-authenticating and [`super::auth::require_auth`]
-//! re-checks the user's status on every request, so disabling a user kills
-//! their sessions immediately.
+//! generated once into `{data_dir}/session-key` (0600). No session table
+//! for OIDC logins — the cookie is self-authenticating and
+//! [`super::auth::require_auth`] re-checks the user's status on every
+//! request, so disabling a user kills their sessions immediately. Magic-link
+//! sign-in (`super::magic_link`) reuses this cookie with a `sess:<id>`
+//! subject backed by a `viewer_sessions` row (sliding, revocable).
 //!
 //! These two routes are registered AFTER the auth layer in
 //! `daemon::router` (axum layers only wrap routes added before them) —
@@ -108,7 +110,7 @@ pub fn cookie_from_headers(headers: &HeaderMap) -> Option<String> {
         .find_map(|pair| pair.strip_prefix(prefix.as_str()).map(str::to_string))
 }
 
-fn set_cookie(value: &str, max_age: i64) -> String {
+pub(crate) fn set_cookie(value: &str, max_age: i64) -> String {
     format!("{COOKIE_NAME}={value}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax")
 }
 
@@ -199,8 +201,16 @@ pub async fn create_session(
     response
 }
 
-/// `DELETE /api/session` — clears the cookie (stateless server side).
-pub async fn destroy_session() -> Response {
+/// `DELETE /api/session` — clears the cookie. The OIDC cookie is stateless;
+/// a magic-link viewer session row (`super::magic_link`) is deleted too.
+pub async fn destroy_session(
+    State(state): State<Arc<DaemonState>>,
+    headers: HeaderMap,
+) -> Response {
+    let _ = tokio::task::spawn_blocking(move || {
+        super::magic_link::revoke_cookie_session(&state, &headers)
+    })
+    .await;
     let mut response = StatusCode::NO_CONTENT.into_response();
     if let Ok(value) = set_cookie("", 0).parse() {
         response.headers_mut().insert(header::SET_COOKIE, value);
@@ -253,6 +263,8 @@ mod tests {
             tetra3_db: None,
             handles: Default::default(),
             signer: None,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         (state, tmp)
     }

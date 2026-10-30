@@ -20,7 +20,9 @@
 //! to know who is asking: [`MaybeViewer`] runs the same credential
 //! resolution ([`resolve_credentials`]) optionally, yielding the viewer's
 //! DID (`users.did`) when a valid PAT, OIDC bearer or session cookie names
-//! a local user with one, and `None` otherwise. It never rejects.
+//! a local user with one, and `None` otherwise. It never rejects. The
+//! session cookie is either the stateless OIDC one or a magic-link viewer
+//! session ([`super::magic_link`]); both arrive as `astra_session`.
 
 use std::sync::Arc;
 
@@ -247,7 +249,7 @@ pub async fn resolve_credentials(
         let Some(cookie) = super::session::cookie_from_headers(headers) else {
             return Err(AuthError::Missing);
         };
-        let Some(user_id) = super::session::verify_cookie_value(
+        let Some(subject) = super::session::verify_cookie_value(
             &state.session_key,
             &cookie,
             chrono::Utc::now().timestamp(),
@@ -256,7 +258,19 @@ pub async fn resolve_credentials(
             return Err(AuthError::InvalidToken);
         };
         let db = state.db.clone();
-        return tokio::task::spawn_blocking(move || authenticate_session_user(&db, &user_id))
+        // A magic-link cookie names a `viewer_sessions` row (sliding
+        // expiry, revocable); the OIDC cookie names the user directly.
+        if let Some(session_id) = subject
+            .strip_prefix(super::magic_link::SESSION_SUBJECT_PREFIX)
+            .map(str::to_owned)
+        {
+            return tokio::task::spawn_blocking(move || {
+                super::magic_link::authenticate_session(&db, &session_id)
+            })
+            .await
+            .map_err(join)?;
+        }
+        return tokio::task::spawn_blocking(move || authenticate_session_user(&db, &subject))
             .await
             .map_err(join)?;
     };
@@ -420,6 +434,8 @@ mod tests {
             tetra3_db: None,
             handles: Default::default(),
             signer: None,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         (state, tmp)
     }

@@ -44,6 +44,10 @@ dedicated VM with egress filtering so a compromise can't move laterally.
   client) enables browser sessions; without it only personal access
   tokens (`astra_daemon --mint-token`) authenticate. JWT validation needs
   a sane clock — enable systemd-timesyncd in minimal VM images.
+- Outbound mail (`ASTRA_RESEND_API_KEY` or `ASTRA_MAIL_RESEND_KEY_SOURCE`,
+  plus `ASTRA_MAIL_FROM`) enables magic-link sign-in emails; without it
+  the daemon logs the message it would have sent (see "Magic-link
+  sign-in" below).
 
 ## Public surface
 
@@ -52,7 +56,8 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 | `/healthz` | none | version + db/hoardfs status |
 | `/@user`, `/@user/slug`, assets | none (optional session/PAT for `circle:` galleries) | published collections only; `circle:<name>` galleries 404 unless the viewer is the owner or in the circle |
 | `/at/{did}/{collection}/{rkey}` | none | 302 to the gallery for a stored signed record |
-| `/api/*` | bearer (PAT or OIDC JWT) | default-deny |
+| `/auth/magic/request`, `/auth/magic/{token}`, `/auth/logout` | none (the link is the credential) | magic-link sign-in for custodial viewers, see below |
+| `/api/*` | bearer (PAT or OIDC JWT) or `astra_session` cookie | default-deny |
 
 ## Deploying
 
@@ -278,8 +283,8 @@ DID (400 otherwise): the mechanism is kenning's private store, see
   PAT or OIDC bearer, or the `astra_session` cookie, resolved to a local
   user and then to `users.did`. No credential, a bad or expired one, or a
   user without a DID all count as anonymous (never a 401 on a public
-  route). Magic-link sessions for people without accounts are a separate,
-  later leaf.
+  route). Family members without an OIDC login sign in with a magic link
+  (next section) — the same cookie, so nothing here changes for them.
 - Membership = a kith edge actor → `(user, viewer)` of kind
   `circle:<name>`, where both ids are local `users.id` (kith ids in Astra
   are user ids, mapped from DIDs through `users.did`). The owner always
@@ -305,6 +310,61 @@ Deleting the row removes access on the next request; nothing is cached.
 The viewer needs a local account with a DID (`PUT /api/me/did`, or set
 `users.did` for a custodial account) and a way to log in (OIDC session or
 a PAT).
+
+### Magic-link sign-in for custodial viewers
+
+Family members whose DID the host minted (`users.did` set, no Zitadel
+account) sign in by email. Design: kenning `docs/private-store.md` §3 and
+its review decisions (sessions yes, 30 days sliding, revocable; device
+memory deferred).
+
+**What a family member experiences.** They open the gallery link they
+were sent, see nothing (a `circle:` gallery is a 404 to an anonymous
+viewer), enter their email address where the page asks for it, and get
+an email "Your Astra sign-in link" with one URL. Tapping it signs them in
+and lands them on the gallery (or their profile). The link works once
+and for 15 minutes; after that, ask for a new one. They stay signed in
+on that browser as long as they come back at least every 30 days — each
+visit pushes the expiry out another 30 days. Closing the browser does
+not sign them out; `POST /auth/logout` (the sign-out button) does.
+**Remembering a device** past that (a "this is grandma's iPad" cookie
+that skips the email forever) is deliberately not implemented yet — the
+review deferred it until the family has lived with plain magic links.
+
+**Routes.**
+
+| Route | Behaviour |
+|---|---|
+| `POST /auth/magic/request` `{"email": "..."}` | Always `200 {}`. Rate limited to 5 per hour per client IP (first `X-Forwarded-For` hop) and per email; over the limit it is still `200 {}` and nothing is sent. When a user with that email (case-insensitive) **and** a `users.did` exists, a one-time token is minted — 32 random bytes, only its SHA-256 stored in `magic_tokens`, 15 minute expiry, replacing the user's outstanding token — and `{ASTRA_PUBLIC_URL}/auth/magic/{token}` is emailed as plain text. Unknown address or no DID: nothing happens, same response. |
+| `GET /auth/magic/{token}[?next=/@owner/slug]` | Redeems the token once (marked `used_at`), creates a `viewer_sessions` row, sets the `astra_session` cookie (HttpOnly, Secure, SameSite=Lax, Path=/ — the same cookie the OIDC login sets, so every existing viewer check applies) and answers 303 to `next` when it is a same-origin absolute path (`/...`, not `//host` or `/\host`), else to `/@{username}`. Unknown, used or expired token: 404 with a plain HTML message. |
+| `POST /auth/logout` | 204; deletes the viewer session the cookie names and clears the cookie. `DELETE /api/session` does the same. |
+| `DELETE /api/admin/sessions/{user_id}` | Owner only (403 otherwise). Deletes every viewer session and unused magic token of that user → `{"userId", "revokedSessions"}`. Their next request is anonymous. |
+
+**Sessions.** OIDC cookies stay stateless. A magic-link cookie's subject
+is `sess:<row id>`, signed with the same session key, hard-capped at one
+year; the `viewer_sessions` row is the real lifetime: `expires_at` is 30
+days from the last touch and slides forward on the first authenticated
+request of each day (`last_seen_at`). Expired rows are deleted when
+seen; disabling the user still kills the session on the next request.
+
+**Environment.**
+
+| Variable | Meaning |
+|---|---|
+| `ASTRA_PUBLIC_URL` | Base of the emailed link (already required for `circle:` publishing). Unset → links point at the bind address, which is useless to anyone but the operator; the daemon warns. |
+| `ASTRA_RESEND_API_KEY` | A Resend API key. Mail goes out through `POST https://api.resend.com/emails`. |
+| `ASTRA_MAIL_RESEND_KEY_SOURCE` | Where to read the key instead, in the same `ho:<name>` / `file:<path>` / `env:<VAR>` form as `ASTRA_SIGNING_KEY_SOURCE`. The homelab key is `ho:resend/smtp-key`. Set but unreadable → the daemon refuses to start. |
+| `ASTRA_MAIL_FROM` | Sender, default `Astra <noreply@byrnes.org>`. Keep it on `byrnes.org` or `flatland.org` — those domains publish Resend's SPF/DKIM; a `bcc.sh` sender softfails. |
+
+With neither key variable set the daemon logs `mail not configured` at
+startup and every magic-link email is written to the log (recipient and
+subject only) instead of sent — the state every test runs in.
+
+**Giving a family member access**, end to end: create their user row
+with `email` and `did` (the custodial DID from `kenning mint`), add the
+`circle:<name>` edge (above), and send them the gallery URL. They take
+it from there. To cut someone off: delete the circle edge (immediate),
+and revoke their sessions if you also want them signed out.
 
 ### Handle on the profile page
 

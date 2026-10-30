@@ -9,6 +9,7 @@ mod commands;
 pub mod daemon;
 mod db;
 mod fits_variant;
+pub mod mail;
 pub mod processing;
 mod python;
 pub mod relink;

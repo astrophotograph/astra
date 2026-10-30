@@ -651,6 +651,8 @@ mod tests {
             tetra3_db: None,
             handles: Default::default(),
             signer: None,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         (state, tmp, alice, bob, image)
     }
@@ -1349,6 +1351,8 @@ mod tests {
             tetra3_db: Some(db_file),
             handles: Default::default(),
             signer: None,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         let router = crate::daemon::router(with_db);
         let (_, _, body) =

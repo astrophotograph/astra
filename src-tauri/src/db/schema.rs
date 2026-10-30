@@ -139,6 +139,16 @@ diesel::table! {
 }
 
 diesel::table! {
+    magic_tokens (token_hash) {
+        token_hash -> Text,
+        user_id -> Text,
+        expires_at -> Timestamp,
+        used_at -> Nullable<Timestamp>,
+        created_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     observation_schedules (id) {
         id -> Text,
         user_id -> Text,
@@ -244,6 +254,16 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    viewer_sessions (id) {
+        id -> Text,
+        user_id -> Text,
+        created_at -> Timestamp,
+        last_seen_at -> Timestamp,
+        expires_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(access_tokens -> users (user_id));
 diesel::joinable!(astronomy_todos -> users (user_id));
 diesel::joinable!(collection_images -> collections (collection_id));
@@ -251,10 +271,12 @@ diesel::joinable!(collection_images -> images (image_id));
 diesel::joinable!(collections -> users (user_id));
 diesel::joinable!(images -> collections (collection_id));
 diesel::joinable!(images -> users (user_id));
+diesel::joinable!(magic_tokens -> users (user_id));
 diesel::joinable!(observation_schedules -> users (user_id));
 diesel::joinable!(published_collections -> collections (collection_id));
 diesel::joinable!(published_collections -> users (user_id));
 diesel::joinable!(published_records -> users (user_id));
+diesel::joinable!(viewer_sessions -> users (user_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     access_tokens,
@@ -267,6 +289,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     kith_edges,
     kith_notifications,
     kith_subscriptions,
+    magic_tokens,
     observation_schedules,
     published_collections,
     published_records,
@@ -274,4 +297,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     scanned_directories,
     simbad_cache,
     users,
+    viewer_sessions,
 );

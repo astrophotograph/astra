@@ -44,6 +44,7 @@ pub mod handles;
 pub mod identity;
 pub mod ingest;
 pub mod kith_store;
+pub mod magic_link;
 pub mod oidc;
 pub mod session;
 pub mod social_events;
@@ -134,6 +135,13 @@ pub struct DaemonState {
     /// DID resolver + per-DID cache of the verified handle shown on the
     /// profile page (`handles.rs`). Default: the network resolver.
     pub handles: handles::HandleCache,
+    /// Outbound email for magic-link sign-in (`mail.rs`). `LogMailer`
+    /// unless `ASTRA_RESEND_API_KEY` / `ASTRA_MAIL_RESEND_KEY_SOURCE` is
+    /// set — tests and unconfigured daemons never send real mail.
+    pub mailer: Arc<dyn crate::mail::Mailer>,
+    /// Magic-link link base (`ASTRA_PUBLIC_URL`) and request rate limiter
+    /// (`magic_link.rs`).
+    pub magic: magic_link::MagicLinkState,
 }
 
 impl DaemonState {
@@ -311,6 +319,11 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             ),
         )
         .nest("/social", social_routes::routes())
+        // Owner-only: revoke every magic-link session of a user.
+        .route(
+            "/admin/sessions/{user_id}",
+            axum::routing::delete(magic_link::admin_revoke_sessions),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -335,6 +348,15 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
     Router::new()
         .route("/healthz", get(healthz))
         .nest("/api", api)
+        // Magic-link sign-in for custodial viewers (magic_link.rs): public
+        // by nature — the link *is* the credential. Static `/auth/...`
+        // segments outrank the `/{user}` captures below.
+        .route(
+            "/auth/magic/request",
+            axum::routing::post(magic_link::request),
+        )
+        .route("/auth/magic/{token}", get(magic_link::redeem))
+        .route("/auth/logout", axum::routing::post(magic_link::logout))
         // Public gallery surface: `{user}` carries the leading `@`; handlers
         // 404 anything else. Gated by publish-record resolution, not auth —
         // plus the kith circle ACL (acl.rs) for `circle:` galleries, which
@@ -571,6 +593,10 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         }
     };
 
+    // Same rule as the signer: configured but unreadable is a startup
+    // error, so a daemon never silently logs mail it was told to send.
+    let mailer = crate::mail::from_env()?;
+
     Ok(DaemonState {
         db,
         hoardfs: Arc::new(Mutex::new(hfs)),
@@ -581,6 +607,8 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         tetra3_db,
         handles: handles::HandleCache::default(),
         signer,
+        mailer,
+        magic: magic_link::MagicLinkState::from_env(),
     })
 }
 

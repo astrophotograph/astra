@@ -711,6 +711,8 @@ pub(crate) mod tests {
             tetra3_db: None,
             handles: Default::default(),
             signer: None,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         link_did(&f);
         let unsigned_router = crate::daemon::router(unsigned);

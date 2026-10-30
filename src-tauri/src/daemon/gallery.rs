@@ -805,6 +805,8 @@ pub(crate) mod tests {
             tetra3_db: None,
             handles: Default::default(),
             signer: Some(Arc::new(signer)),
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         });
         Fixture {
             state,
@@ -1023,6 +1025,8 @@ pub(crate) mod tests {
             tetra3_db: None,
             signer: f.state.signer.clone(),
             handles,
+            mailer: Arc::new(crate::mail::LogMailer::default()),
+            magic: Default::default(),
         })
     }
 
