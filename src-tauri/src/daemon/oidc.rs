@@ -30,7 +30,7 @@ use diesel::prelude::*;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 
-use super::auth::{AuthError, AuthedUser};
+use super::auth::{AuthError, AuthedUser, Credential};
 use crate::db::schema::users;
 use crate::db::tenancy::{self, UserRole, UserStatus};
 use crate::db::DbPool;
@@ -221,10 +221,18 @@ pub fn resolve_user(
     if let Some((user_id, role, status)) = by_sub {
         let role = UserRole::parse(&role).map_err(AuthError::Db)?;
         return match UserStatus::parse(&status).map_err(AuthError::Db)? {
-            UserStatus::Active => Ok(AuthedUser { user_id, role }),
+            UserStatus::Active => Ok(AuthedUser {
+                user_id,
+                role,
+                credential: Credential::Oidc,
+            }),
             UserStatus::Invited => {
                 activate(&mut conn, hoardfs, &user_id, None)?;
-                Ok(AuthedUser { user_id, role })
+                Ok(AuthedUser {
+                user_id,
+                role,
+                credential: Credential::Oidc,
+            })
             }
             UserStatus::Disabled => Err(AuthError::Forbidden("account disabled")),
         };
@@ -252,7 +260,11 @@ pub fn resolve_user(
                 .then(|| claims.preferred_username.as_deref())
                 .flatten();
             activate(&mut conn, hoardfs, &user_id, fill_username)?;
-            return Ok(AuthedUser { user_id, role });
+            return Ok(AuthedUser {
+                user_id,
+                role,
+                credential: Credential::Oidc,
+            });
         }
     }
 

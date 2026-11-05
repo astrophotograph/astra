@@ -44,12 +44,29 @@ use crate::db::schema::{access_tokens, users};
 use crate::db::tenancy::{UserRole, UserStatus};
 use crate::db::DbPool;
 
+/// Which kind of credential authenticated the request. Mostly informational,
+/// with one policy hook: token management (`/api/me/tokens`) refuses
+/// [`Credential::Pat`], so a leaked CLI token cannot mint successors or
+/// revoke its siblings — only an interactive sign-in can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// `astra_…` personal access token (bearer).
+    Pat,
+    /// OIDC JWT (bearer) verified against the configured issuer.
+    Oidc,
+    /// `astra_session` cookie set by the OIDC browser login.
+    Session,
+    /// `astra_session` cookie backed by a magic-link viewer session.
+    MagicLink,
+}
+
 /// Authenticated per-request user context. There is no "current user"
 /// global — handlers pass `user_id` to core fns explicitly.
 #[derive(Debug, Clone)]
 pub struct AuthedUser {
     pub user_id: String,
     pub role: UserRole,
+    pub credential: Credential,
 }
 
 #[derive(Debug)]
@@ -121,6 +138,61 @@ pub fn mint_token(db: &DbPool, user_id: &str, name: &str) -> Result<MintedToken,
     })
 }
 
+/// A token as listed back to its owner: never the hash, never the
+/// plaintext.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at: chrono::NaiveDateTime,
+    pub last_used_at: Option<chrono::NaiveDateTime>,
+}
+
+/// Active (unrevoked) tokens of a user, newest first.
+pub fn list_tokens(db: &DbPool, user_id: &str) -> Result<Vec<TokenSummary>, String> {
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    let rows: Vec<(String, String, chrono::NaiveDateTime, Option<chrono::NaiveDateTime>)> =
+        access_tokens::table
+            .filter(access_tokens::user_id.eq(user_id))
+            .filter(access_tokens::revoked_at.is_null())
+            .order(access_tokens::created_at.desc())
+            .select((
+                access_tokens::id,
+                access_tokens::name,
+                access_tokens::created_at,
+                access_tokens::last_used_at,
+            ))
+            .load(&mut conn)
+            .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, created_at, last_used_at)| TokenSummary {
+            id,
+            name,
+            created_at,
+            last_used_at,
+        })
+        .collect())
+}
+
+/// Revoke one of the caller's own tokens. `false` when the id is unknown,
+/// already revoked, or belongs to someone else — all indistinguishable to
+/// the caller, so a token id never leaks across users.
+pub fn revoke_owned_token(db: &DbPool, user_id: &str, token_id: &str) -> Result<bool, String> {
+    let mut conn = db.get().map_err(|e| e.to_string())?;
+    diesel::update(
+        access_tokens::table
+            .find(token_id)
+            .filter(access_tokens::user_id.eq(user_id))
+            .filter(access_tokens::revoked_at.is_null()),
+    )
+    .set(access_tokens::revoked_at.eq(Some(chrono::Utc::now().naive_utc())))
+    .execute(&mut conn)
+    .map(|n| n > 0)
+    .map_err(|e| e.to_string())
+}
+
 /// Revoke a token by id. Idempotent; revoked tokens fail [`authenticate`].
 pub fn revoke_token(db: &DbPool, token_id: &str) -> Result<bool, String> {
     let mut conn = db.get().map_err(|e| e.to_string())?;
@@ -168,7 +240,11 @@ pub fn authenticate(db: &DbPool, token: &str) -> Result<AuthedUser, AuthError> {
         .set(access_tokens::last_used_at.eq(Some(chrono::Utc::now().naive_utc())))
         .execute(&mut conn);
 
-    Ok(AuthedUser { user_id, role })
+    Ok(AuthedUser {
+        user_id,
+        role,
+        credential: Credential::Pat,
+    })
 }
 
 fn bearer_token(parts_headers: &axum::http::HeaderMap) -> Option<&str> {
@@ -212,7 +288,13 @@ fn forbidden(message: &str) -> Response {
 /// Blocking: map a session cookie's user id to an active AuthedUser. The
 /// cookie is signature-checked by the caller; this re-checks user status on
 /// every request so disabling a user kills live sessions immediately.
-pub fn authenticate_session_user(db: &DbPool, user_id: &str) -> Result<AuthedUser, AuthError> {
+/// `credential` says which cookie flavour it was ([`Credential::Session`]
+/// for the OIDC login, [`Credential::MagicLink`] for a viewer session).
+pub fn authenticate_session_user(
+    db: &DbPool,
+    user_id: &str,
+    credential: Credential,
+) -> Result<AuthedUser, AuthError> {
     let mut conn = db.get().map_err(|e| AuthError::Db(e.to_string()))?;
     let row: Option<(String, String)> = users::table
         .find(user_id)
@@ -229,6 +311,7 @@ pub fn authenticate_session_user(db: &DbPool, user_id: &str) -> Result<AuthedUse
     Ok(AuthedUser {
         user_id: user_id.to_string(),
         role: UserRole::parse(&role).map_err(AuthError::Db)?,
+        credential,
     })
 }
 
@@ -270,9 +353,11 @@ pub async fn resolve_credentials(
             .await
             .map_err(join)?;
         }
-        return tokio::task::spawn_blocking(move || authenticate_session_user(&db, &subject))
-            .await
-            .map_err(join)?;
+        return tokio::task::spawn_blocking(move || {
+            authenticate_session_user(&db, &subject, Credential::Session)
+        })
+        .await
+        .map_err(join)?;
     };
 
     if token.starts_with("astra_") {

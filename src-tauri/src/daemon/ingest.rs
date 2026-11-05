@@ -481,6 +481,10 @@ pub async fn put_image_asset(
                 .blob_id
         };
 
+        // A FITS asset for a row without headers (the CLI upload path)
+        // gets what the desktop importer would have recorded; a desktop
+        // push already carries the header map and is left alone.
+        let enrichment = super::upload::fits_enrichment(&image, &body);
         let metadata = {
             let mut value = image
                 .metadata
@@ -488,6 +492,12 @@ pub async fn put_image_asset(
                 .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
                 .unwrap_or_else(|| serde_json::json!({}));
             if let Some(obj) = value.as_object_mut() {
+                if let Some(enrichment) = &enrichment {
+                    for (key, header) in &enrichment.headers {
+                        obj.entry(key.clone())
+                            .or_insert_with(|| serde_json::Value::String(header.clone()));
+                    }
+                }
                 obj.insert(
                     "hoardfs".to_string(),
                     serde_json::json!({ "hfs_path": hfs_path }),
@@ -495,10 +505,23 @@ pub async fn put_image_asset(
             }
             value.to_string()
         };
+        let blank = |s: &Option<String>| s.as_deref().map_or(true, |s| s.trim().is_empty());
+        let summary = match &enrichment {
+            Some(e) if blank(&image.summary) && e.summary.is_some() => e.summary.clone(),
+            _ => image.summary.clone(),
+        };
+        let description = match &enrichment {
+            Some(e) if blank(&image.description) && e.description.is_some() => {
+                e.description.clone()
+            }
+            _ => image.description.clone(),
+        };
         diesel::update(images::table.find(&image.id))
             .set((
                 images::blob_id.eq(Some(&stored_blob)),
                 images::metadata.eq(Some(&metadata)),
+                images::summary.eq(&summary),
+                images::description.eq(&description),
                 images::updated_at.eq(chrono::Utc::now().naive_utc()),
             ))
             .execute(&mut conn)

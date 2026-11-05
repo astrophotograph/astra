@@ -63,6 +63,38 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 | `/auth/magic/request`, `/auth/magic/{token}`, `/auth/logout` | none (the link is the credential) | magic-link sign-in for custodial viewers, see below |
 | `/api/*` | bearer (PAT or OIDC JWT) or `astra_session` cookie | default-deny |
 
+## Personal access tokens and the CLI
+
+Non-browser clients (the desktop push, `astra-cli`) authenticate with a
+personal access token: `astra_` + 64 hex characters, shown once at mint
+time, stored only as a SHA-256 hash in `access_tokens`.
+
+| Route | Notes |
+|---|---|
+| `GET /api/me/tokens` | `{"tokens": [{id, name, createdAt, lastUsedAt}]}` — the caller's active tokens, newest first. Never the plaintext or hash. |
+| `POST /api/me/tokens {"name"}` | 201 `{id, name, token, createdAt}`; `token` is the plaintext, returned exactly once. Name 1–100 characters. |
+| `DELETE /api/me/tokens/{id}` | 204; 404 for an id that is not one of the caller's active tokens (someone else's and already-revoked are indistinguishable). |
+
+All three refuse a caller who authenticated **with** a PAT (403): a
+leaked token cannot mint successors or revoke its siblings; only an
+OIDC bearer or the browser session manages tokens. Users do this under
+Settings → Account in the web app. The bootstrap path for a server
+without OIDC remains `astra_daemon --mint-token <user> <name>`.
+
+### Single-image upload (`astra-cli`)
+
+The push protocol (`/api/push/collections`) is a whole-collection sync.
+`astra-cli` instead adds one image at a time without touching the rest of
+the collection:
+
+| Route | Notes |
+|---|---|
+| `POST /api/upload/images` | Body: `filename`, `content_hash` (blake3 hex, optional `blake3:` prefix), and optionally `content_type`, `summary`, `description`, `tags` (comma-separated), `visibility`, `collection_id` **or** `collection_name` (case-insensitive match on the caller's live collections, created when absent), `metadata` (JSON object string), `source_path`. If the caller already owns an image with that content → 200 `{"id", "created": false, "assetStatus": "present", …}`; otherwise 201 with `"needed"`. The image is linked into the collection either way; `collectionCreated` says whether the name made a new one. 404 for a `collection_id` the caller does not own. |
+| `PUT /api/push/images/{id}/asset` | Unchanged asset route (hash header, 422 on mismatch, idempotent). For FITS bytes landing on a row that carries no headers yet, the daemon now fills in what the desktop importer would have: the header map into `metadata`, the `OBJECT` header (or the target directory from `source_path`) as `summary`, and "10.0s exposure, 20 frames stacked, Filter: LP" as `description` — each only where the client left the field blank. Rows pushed from the desktop already carry `BITPIX` and are left alone. |
+
+The CLI itself lives in `cli/` (`just cli-install`); see `cli/README.md`
+for selection rules, the local ledger and the `watch` mode.
+
 ## Deploying
 
 `just deploy-staging` builds the release daemon + web bundle and pushes

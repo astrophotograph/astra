@@ -114,8 +114,10 @@ hoardfs-fuse = { path = "../../hoardfs/crates/hoardfs-fuse", optional = true }
 # Python integration
 pyo3 = { version = "0.29", features = ["auto-initialize"] }
 
-[dev-dependencies]
+# Spool uploaded FITS bytes for header parsing (fitrs reads from a path)
 tempfile = "3"
+
+[dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 
 [profile.dev]

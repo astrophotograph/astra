@@ -208,3 +208,6 @@ Thumbs.db
 
 clerk-jwt
 .playwright-mcp/
+
+# astra-cli build output
+cli/target/

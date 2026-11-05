@@ -132,7 +132,7 @@ fn is_stacked_fits(path: &Path) -> bool {
 }
 
 /// Extract target name from directory path or FITS metadata
-fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
+pub(crate) fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
     // Prefer FITS OBJECT header
     if let Some(obj) = &metadata.object_name {
         if !obj.is_empty() {
@@ -178,6 +178,42 @@ fn extract_target_name(path: &Path, metadata: &FitsMetadata) -> Option<String> {
         current = dir.parent();
     }
     None
+}
+
+/// One-line description of a stacked frame from its headers — exposure,
+/// frame count, filter. The frame count falls back to the filename when
+/// the headers lack it (SharpCap: `Stack_16bits_13frames_130s.fits`).
+/// Shared with the daemon's upload enrichment.
+pub(crate) fn describe_stack(file_name: &str, metadata: &FitsMetadata) -> Option<String> {
+    let stacked_frames = metadata.stacked_frames.or_else(|| {
+        let fname = file_name.to_lowercase();
+        let pos = fname.find("frames")?;
+        let num_str: String = fname[..pos]
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        num_str.parse::<i32>().ok()
+    });
+
+    let mut desc_parts = Vec::new();
+    if let Some(exp) = metadata.exposure {
+        desc_parts.push(format!("{:.1}s exposure", exp));
+    }
+    if let Some(frames) = stacked_frames {
+        desc_parts.push(format!("{} frames stacked", frames));
+    }
+    if let Some(filter) = &metadata.filter {
+        desc_parts.push(format!("Filter: {}", filter));
+    }
+    if desc_parts.is_empty() {
+        None
+    } else {
+        Some(desc_parts.join(", "))
+    }
 }
 
 /// Copy supporting files (subframes, calibration) to library
@@ -373,38 +409,7 @@ fn run_scan_cycle(
                 .clone()
                 .or_else(|| Some(path.file_stem()?.to_string_lossy().to_string()));
 
-            // Build description
-            // Try to extract frame count from filename if not in FITS headers
-            // SharpCap: Stack_16bits_13frames_130s.fits → 13 frames
-            let stacked_frames = metadata.stacked_frames.or_else(|| {
-                let fname = file_name.to_lowercase();
-                if let Some(pos) = fname.find("frames") {
-                    let before = &fname[..pos];
-                    let num_str: String = before.chars().rev()
-                        .take_while(|c| c.is_ascii_digit())
-                        .collect::<String>()
-                        .chars().rev().collect();
-                    num_str.parse::<i32>().ok()
-                } else {
-                    None
-                }
-            });
-
-            let mut desc_parts = Vec::new();
-            if let Some(exp) = metadata.exposure {
-                desc_parts.push(format!("{:.1}s exposure", exp));
-            }
-            if let Some(frames) = stacked_frames {
-                desc_parts.push(format!("{} frames stacked", frames));
-            }
-            if let Some(filter) = &metadata.filter {
-                desc_parts.push(format!("Filter: {}", filter));
-            }
-            let description = if desc_parts.is_empty() {
-                None
-            } else {
-                Some(desc_parts.join(", "))
-            };
+            let description = describe_stack(&file_name, &metadata);
 
             // Build metadata JSON
             let meta_json = serde_json::to_string(&metadata.raw_headers).ok();

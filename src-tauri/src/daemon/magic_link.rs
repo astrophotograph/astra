@@ -47,7 +47,7 @@ use diesel::prelude::*;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use super::auth::{authenticate_session_user, AuthError, AuthedUser};
+use super::auth::{authenticate_session_user, AuthError, AuthedUser, Credential};
 use super::session::{self, mint_cookie_value, verify_cookie_value};
 use super::DaemonState;
 use crate::db::schema::{magic_tokens, users, viewer_sessions};
@@ -289,7 +289,7 @@ pub fn authenticate_session(db: &DbPool, session_id: &str) -> Result<AuthedUser,
             .execute(&mut conn);
     }
     drop(conn);
-    authenticate_session_user(db, &user_id)
+    authenticate_session_user(db, &user_id, Credential::MagicLink)
 }
 
 /// Blocking: delete the viewer session a request's cookie names, if any.

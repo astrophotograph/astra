@@ -83,6 +83,7 @@ import {
   type VerificationReport,
 } from "@/lib/tauri/commands";
 import { fetchMe, signOut, type SessionUser } from "@/lib/auth-web";
+import AccessTokensCard from "@/components/AccessTokensCard";
 import { plateSolveApi } from "@/lib/tauri/commands";
 import {
   SOLVER_IDS,
@@ -1665,6 +1666,7 @@ export default function AdminPage() {
       <div className="flex-1 overflow-y-auto pr-2 space-y-6">
         {/* Locations Section */}
         {activeSection === "account" && (
+          <>
           <Card>
             <CardHeader>
               <CardTitle className="font-serif text-xl font-light tracking-wide text-slate-100 flex items-center gap-2">
@@ -1703,6 +1705,8 @@ export default function AdminPage() {
               </div>
             </CardContent>
           </Card>
+          <AccessTokensCard />
+          </>
         )}
 
         {activeSection === "locations" && (

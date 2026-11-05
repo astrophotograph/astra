@@ -52,6 +52,8 @@ pub mod session;
 pub mod social_events;
 pub mod social_widgets;
 pub mod social_routes;
+pub mod tokens;
+pub mod upload;
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -235,6 +237,13 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
     let api = Router::new()
         .route("/me", get(me))
         .route("/me/did", axum::routing::put(identity::set_did))
+        // Self-service personal access tokens (tokens.rs). Refuses PAT
+        // callers: only an interactive sign-in manages tokens.
+        .route("/me/tokens", get(tokens::list).post(tokens::create))
+        .route("/me/tokens/{id}", axum::routing::delete(tokens::revoke))
+        // Single-image upload for the CLI (upload.rs): register by content
+        // hash, then PUT the bytes through /push/images/{id}/asset.
+        .route("/upload/images", axum::routing::post(upload::create_upload))
         .route("/images", get(api::list_images))
         .route(
             "/images/{id}",

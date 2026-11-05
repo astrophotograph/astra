@@ -79,6 +79,22 @@ verify-variants *ARGS:
 daemon *ARGS:
     cd src-tauri && cargo run --release --bin astra_daemon -- {{ARGS}}
 
+# Build the astra-cli uploader (release) → cli/target/release/astra-cli
+cli-build:
+    cd cli && cargo build --release
+
+# Install astra-cli into ~/.cargo/bin
+cli-install:
+    cargo install --path cli --locked
+
+# Run astra-cli from source. Args: e.g. upload -c Seestar ~/MyWorks
+cli *ARGS:
+    cd cli && cargo run --quiet -- {{ARGS}}
+
+# Test the astra-cli crate
+test-cli:
+    cd cli && cargo test
+
 # Rebuild the release daemon + web bundle and deploy them plus lexicons/ (as
 # /var/lib/astra/data/lexicons, for signed publishing) into the `astra` Incus
 # VM (hekaton). Build happens here (glibc-compatible Debian 13 on both ends);
@@ -115,7 +131,7 @@ test-py:
     cd python && uv run pytest
 
 # Run all tests
-test: test-rust test-py
+test: test-rust test-py test-cli
 
 # Trigger a CalVer release. Args: --dry-run, --local, or explicit version (e.g. 2026.5.0)
 release *ARGS:

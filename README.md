@@ -20,6 +20,7 @@ Pre-built binaries are available on the [releases page](https://github.com/astro
 - **Equipment management** — track telescopes, mounts, cameras, and filters with presets for Seestar smart scopes
 - **Location profiles** — save observer locations with horizon profiles
 - **Gallery sharing** — publish collections to [astra.gallery](https://astra.gallery) with one click
+- **Command-line upload** — `astra-cli` uploads stacked images to your Astra server, or watches a folder (Seestar, ASI Air, SharpCap) and uploads as they land; see [cli/README.md](cli/README.md)
 - **Auto-refreshing galleries** — shared galleries update every 30 seconds while you image
 - **FITS support** — preview generation with configurable stretch parameters
 - **Automatic backups** — database is backed up on every launch (keeps last 5)

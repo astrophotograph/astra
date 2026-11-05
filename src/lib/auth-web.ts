@@ -191,3 +191,57 @@ export async function signOut(): Promise<void> {
   }
   window.location.assign("/app");
 }
+// =============================================================================
+// Personal access tokens (Settings → Account)
+// =============================================================================
+
+export interface AccessToken {
+  id: string;
+  name: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+/** The mint response: `token` is the plaintext, shown once, never again. */
+export interface MintedAccessToken extends AccessToken {
+  token: string;
+}
+
+async function tokenError(resp: Response, fallback: string): Promise<Error> {
+  const body = (await resp.json().catch(() => null)) as {
+    error?: string;
+    message?: string;
+  } | null;
+  return new Error(
+    body?.message ?? body?.error ?? `${fallback} (${resp.status})`,
+  );
+}
+
+export async function listAccessTokens(): Promise<AccessToken[]> {
+  const resp = await fetch("/api/me/tokens", { credentials: "same-origin" });
+  if (!resp.ok) throw await tokenError(resp, "Could not load tokens");
+  const body = (await resp.json()) as { tokens: AccessToken[] };
+  return body.tokens;
+}
+
+export async function createAccessToken(
+  name: string,
+): Promise<MintedAccessToken> {
+  const resp = await fetch("/api/me/tokens", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!resp.ok) throw await tokenError(resp, "Could not create token");
+  return resp.json() as Promise<MintedAccessToken>;
+}
+
+export async function revokeAccessToken(id: string): Promise<void> {
+  const resp = await fetch(`/api/me/tokens/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (resp.status === 404) return; // already gone
+  if (!resp.ok) throw await tokenError(resp, "Could not revoke token");
+}
