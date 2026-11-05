@@ -62,7 +62,7 @@ jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 blake3 = "1"
 
 # Crypto (for S3 signing)
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 
 # Image handling
