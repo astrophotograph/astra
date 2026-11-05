@@ -130,6 +130,8 @@ pub struct DaemonState {
     /// solving. Env `ASTRA_TETRA3_DB`, or `{data_dir}/tetra3/
     /// tetra3_unified_05_5deg.bin` when present. None → solving disabled.
     pub tetra3_db: Option<PathBuf>,
+    /// Spool for in-flight chunked asset uploads (`{data_dir}/uploads`).
+    pub uploads_dir: PathBuf,
     /// Signing identity + lexicons for signed publishing
     /// (`share::records`). None → signed publishing disabled; galleries
     /// serve the legacy live manifest. Env `ASTRA_SIGNING_KEY_SOURCE`
@@ -327,6 +329,14 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/push/images/{id}/asset",
             axum::routing::put(ingest::put_image_asset).layer(
                 axum::extract::DefaultBodyLimit::max(state.limits.max_asset_bytes),
+            ),
+        )
+        .route(
+            "/push/images/{id}/asset/parts",
+            axum::routing::put(ingest::put_image_asset_part).layer(
+                axum::extract::DefaultBodyLimit::max(
+                    state.limits.max_asset_bytes.min(ingest::MAX_PART_BYTES),
+                ),
             ),
         )
         .nest("/social", social_routes::routes())
@@ -600,6 +610,9 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         None => log::info!("no tetra3 solver database — server-side plate solving disabled"),
     }
 
+    let uploads_dir = data_dir.join("uploads");
+    ingest::sweep_stale_uploads(&uploads_dir);
+
     // Set but unloadable is a startup error (the `?`): a daemon must not
     // come up believing it signs when it cannot.
     let signer = match crate::share::records::Signer::from_env(data_dir)? {
@@ -625,6 +638,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         session_key,
         processing: Default::default(),
         tetra3_db,
+        uploads_dir,
         handles: handles::HandleCache::default(),
         signer,
         mailer,

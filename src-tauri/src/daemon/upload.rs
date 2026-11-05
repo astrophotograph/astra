@@ -10,8 +10,11 @@
 //!    its metadata. If the caller already owns an image with exactly that
 //!    content the existing row is reused (`created: false`, asset
 //!    `present`), so a watch loop that restarts, or a file that is copied
-//!    twice, never produces duplicates. Otherwise a row is inserted with a
-//!    server-minted id (`created: true`, asset `needed`). Either way the
+//!    twice, never produces duplicates. A row registered for that content
+//!    whose bytes never arrived (a run cut off mid-upload) is reused too
+//!    (`created: false`, asset `needed`), so a chunked upload resumes into
+//!    the same image. Otherwise a row is inserted with a server-minted id
+//!    (`created: true`, asset `needed`). Either way the
 //!    image is linked into the target collection — by id, or by name,
 //!    creating the collection on first use — without touching the rest of
 //!    that collection.
@@ -229,8 +232,14 @@ fn link(
     Ok(())
 }
 
-/// Client metadata (a JSON object string, or nothing) plus `source_path`.
-fn initial_metadata(body: &UploadImageBody) -> Result<Option<String>, UploadError> {
+/// Metadata key naming the content a registered-but-assetless image waits
+/// for; lets a repeat registration find the pending row. Dropped once the
+/// bytes land.
+pub const PENDING_HASH_KEY: &str = "pending_content_hash";
+
+/// Client metadata (a JSON object string, or nothing) plus `source_path`
+/// and the pending content hash.
+fn initial_metadata(body: &UploadImageBody, blob_id: &str) -> Result<Option<String>, UploadError> {
     let mut value = match body
         .metadata
         .as_deref()
@@ -251,10 +260,8 @@ fn initial_metadata(body: &UploadImageBody) -> Result<Option<String>, UploadErro
     {
         value["source_path"] = serde_json::Value::String(path.to_string());
     }
-    Ok(match value.as_object() {
-        Some(obj) if obj.is_empty() => None,
-        _ => Some(value.to_string()),
-    })
+    value[PENDING_HASH_KEY] = serde_json::Value::String(blob_id.to_string());
+    Ok(Some(value.to_string()))
 }
 
 fn register(
@@ -264,7 +271,7 @@ fn register(
 ) -> Result<(StatusCode, serde_json::Value), UploadError> {
     let blob_id = normalize_blob_id(&body.content_hash)?;
     let filename = basename(&body.filename)?;
-    let metadata = initial_metadata(body)?;
+    let metadata = initial_metadata(body, &blob_id)?;
     let mut conn = db.get().map_err(|e| UploadError::Db(e.to_string()))?;
 
     conn.transaction::<_, UploadError, _>(|conn| {
@@ -279,10 +286,28 @@ fn register(
             .select(images::id)
             .first(conn)
             .optional()?;
+        // Registered earlier for this content, bytes never arrived.
+        let pending: Option<String> = match existing {
+            Some(_) => None,
+            None => images::table
+                .filter(images::user_id.eq(user_id))
+                .filter(images::blob_id.is_null())
+                .filter(images::metadata.like(format!(
+                    "%{}%",
+                    serde_json::json!({ PENDING_HASH_KEY: &blob_id })
+                        .to_string()
+                        .trim_matches(|c| c == '{' || c == '}')
+                )))
+                .order(images::created_at.asc())
+                .select(images::id)
+                .first(conn)
+                .optional()?,
+        };
 
-        let (status, id, created) = match existing {
-            Some(id) => (StatusCode::OK, id, false),
-            None => {
+        let (status, id, created, present) = match (existing, pending) {
+            (Some(id), _) => (StatusCode::OK, id, false, true),
+            (None, Some(id)) => (StatusCode::OK, id, false, false),
+            (None, None) => {
                 let content_type = body
                     .content_type
                     .as_deref()
@@ -317,7 +342,7 @@ fn register(
                         blob_id: None,
                     },
                 )?;
-                (StatusCode::CREATED, image.id, true)
+                (StatusCode::CREATED, image.id, true, false)
             }
         };
 
@@ -330,7 +355,7 @@ fn register(
             serde_json::json!({
                 "id": id,
                 "created": created,
-                "assetStatus": if created { "needed" } else { "present" },
+                "assetStatus": if present { "present" } else { "needed" },
                 "collectionId": collection_id,
                 "collectionCreated": collection_created,
             }),
@@ -488,6 +513,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            uploads_dir: std::env::temp_dir().join("astra-test-uploads"),
             handles: Default::default(),
             signer: None,
             mailer: Arc::new(crate::mail::LogMailer::default()),
@@ -651,6 +677,55 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pending_registration_is_reused_until_the_asset_lands() {
+        let (state, _tmp, alice, bob) = seeded().await;
+        let router = crate::daemon::router(state.clone());
+        let png = tiny_png(3);
+        let hash = hash_of(&png);
+        let body = serde_json::json!({ "filename": "Stack_M31.fit", "content_hash": hash });
+
+        let (status, first) = register_json(&router, &alice, body.clone()).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = first["id"].as_str().unwrap().to_string();
+
+        // Cut off before the bytes arrived; the next run lands on the same row.
+        let (status, again) = register_json(&router, &alice, body.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{again}");
+        assert_eq!(again["id"], id);
+        assert_eq!(again["created"], false);
+        assert_eq!(again["assetStatus"], "needed");
+
+        // Another user's pending row is theirs alone.
+        let (status, bobs) = register_json(&router, &bob, body.clone()).await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_ne!(bobs["id"], id);
+
+        let (_, image) = send(&router, "GET", &format!("/api/images/{id}"), &alice, vec![], &[]).await;
+        let meta: serde_json::Value =
+            serde_json::from_str(image["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(meta[PENDING_HASH_KEY], format!("blake3:{hash}"));
+
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &format!("/api/push/images/{id}/asset"),
+            &alice,
+            png.clone(),
+            &[(CONTENT_HASH_HEADER, hash.as_str())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, image) = send(&router, "GET", &format!("/api/images/{id}"), &alice, vec![], &[]).await;
+        let meta: serde_json::Value =
+            serde_json::from_str(image["metadata"].as_str().unwrap()).unwrap();
+        assert!(meta.get(PENDING_HASH_KEY).is_none(), "dropped once stored: {meta}");
+        let (status, third) = register_json(&router, &alice, body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(third["assetStatus"], "present");
+        assert_eq!(third["id"], id);
     }
 
     #[tokio::test(flavor = "multi_thread")]

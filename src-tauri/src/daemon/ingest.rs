@@ -15,6 +15,14 @@
 //!    variants generate once), otherwise stores into `user-{id}`'s volume
 //!    at the migrate_library path scheme `/{YYYY-MM}/{stem}__{id}.{ext}`
 //!    and lets the variant pipeline run.
+//! 2b. `PUT /api/push/images/{id}/asset/parts` — the same upload in
+//!    sequential pieces, for paths that cap one request body (Cloudflare's
+//!    edge allows 100 MB; stacked APS-C FITS files are larger). Each part
+//!    carries the whole-file hash header plus `Content-Range: bytes
+//!    <start>-<end>/<total>`; the daemon spools parts under
+//!    `{data_dir}/uploads/` and the final part answers exactly what the
+//!    whole-body PUT would. A part whose start is not the spooled length
+//!    answers 409 with `received`, from which a client resumes.
 //!
 //! Server-owned fields: `images.blob_id` and the `hoardfs` key inside
 //! `images.metadata` are never taken from the client on upsert (a client's
@@ -22,6 +30,7 @@
 //! has none yet). Per-user storage accounting is deferred to the
 //! hosted-scale leaf.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -55,6 +64,11 @@ impl Default for IngestLimits {
 }
 
 pub const CONTENT_HASH_HEADER: &str = "x-astra-content-hash";
+
+/// Largest single part of a chunked asset upload; the whole-body route
+/// takes up to `max_asset_bytes`. Sized to Cloudflare's 100 MB edge cap
+/// (clients default to 64 MiB parts).
+pub const MAX_PART_BYTES: usize = 100 << 20;
 
 #[derive(Debug, Deserialize)]
 pub struct PushCollectionBody {
@@ -437,9 +451,20 @@ pub async fn put_image_asset(
             .into_response();
     }
 
+    store_asset(state, user.user_id, id, computed, body).await
+}
+
+/// Verified bytes → the user's HoardFS volume + the image row. Shared by
+/// the whole-body PUT and the last part of a chunked upload.
+async fn store_asset(
+    state: Arc<DaemonState>,
+    user_id: String,
+    id: String,
+    computed: hoardfs_core::BlobId,
+    body: Bytes,
+) -> Response {
     let db = state.db.clone();
     let hoardfs = state.hoardfs.clone();
-    let user_id = user.user_id.clone();
     let rt = tokio::runtime::Handle::current();
     let state2 = state.clone();
 
@@ -498,6 +523,7 @@ pub async fn put_image_asset(
                             .or_insert_with(|| serde_json::Value::String(header.clone()));
                     }
                 }
+                obj.remove(super::upload::PENDING_HASH_KEY);
                 obj.insert(
                     "hoardfs".to_string(),
                     serde_json::json!({ "hfs_path": hfs_path }),
@@ -584,6 +610,245 @@ pub async fn put_image_asset(
     }
 }
 
+/// Parsed `Content-Range: bytes <start>-<end>/<total>` (inclusive end).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PartRange {
+    pub start: u64,
+    pub end: u64,
+    pub total: u64,
+}
+
+pub(crate) fn parse_content_range(value: &str) -> Option<PartRange> {
+    let rest = value.trim().strip_prefix("bytes")?.trim_start();
+    let (range, total) = rest.split_once('/')?;
+    let (start, end) = range.split_once('-')?;
+    let r = PartRange {
+        start: start.trim().parse().ok()?,
+        end: end.trim().parse().ok()?,
+        total: total.trim().parse().ok()?,
+    };
+    (r.start <= r.end && r.end < r.total).then_some(r)
+}
+
+/// Where one user's in-flight upload of `hash` for image `id` spools. The
+/// name is a hash of the three, so nothing from the request reaches the
+/// filesystem as a path component.
+fn spool_path(dir: &std::path::Path, user_id: &str, image_id: &str, hash: &str) -> PathBuf {
+    let key = blake3::hash(format!("{user_id}\n{image_id}\n{hash}").as_bytes()).to_hex();
+    dir.join(format!("{key}.part"))
+}
+
+/// Remove spool files untouched for a week (an aborted client run that
+/// never resumed). Called once at daemon startup.
+pub fn sweep_stale_uploads(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(7 * 86_400);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "part") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .map(|m| m < cutoff)
+            .unwrap_or(false);
+        if stale {
+            match std::fs::remove_file(&path) {
+                Ok(()) => log::info!("removed stale upload spool {}", path.display()),
+                Err(e) => log::warn!("stale upload spool {}: {e}", path.display()),
+            }
+        }
+    }
+}
+
+fn error_response(status: StatusCode, error: &str, message: String) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": error, "message": message })),
+    )
+        .into_response()
+}
+
+enum PartOutcome {
+    Reply(Response),
+    Complete(hoardfs_core::BlobId, Bytes),
+}
+
+/// `PUT /api/push/images/{id}/asset/parts` — see the module docs. Parts
+/// must arrive in order and each one must be the next byte of the file;
+/// the last part completes the upload (hash verified over the spooled
+/// whole) and answers like the whole-body route.
+pub async fn put_image_asset_part(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let Some(claimed_hash) = headers
+        .get(CONTENT_HASH_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim_start_matches("blake3:").to_lowercase())
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "missing content hash",
+            format!("{CONTENT_HASH_HEADER} header (blake3 hex of the whole file) is required"),
+        );
+    };
+    if claimed_hash.len() != 64 || !claimed_hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid content hash",
+            format!("{CONTENT_HASH_HEADER} must be 64 hex characters"),
+        );
+    }
+    let Some(range) = headers
+        .get(axum::http::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(parse_content_range)
+    else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "missing content range",
+            "Content-Range: bytes <start>-<end>/<total> is required".to_string(),
+        );
+    };
+    if range.total > state.limits.max_asset_bytes as u64 {
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "asset too large",
+            format!(
+                "{} bytes exceeds the {} byte asset limit",
+                range.total, state.limits.max_asset_bytes
+            ),
+        );
+    }
+    if range.end - range.start + 1 != body.len() as u64 {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "part length mismatch",
+            format!(
+                "Content-Range covers {} bytes but the body has {}",
+                range.end - range.start + 1,
+                body.len()
+            ),
+        );
+    }
+
+    let spool = spool_path(&state.uploads_dir, &user.user_id, &id, &claimed_hash);
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let image_id = id.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<PartOutcome, String> {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        let Some(image) =
+            crate::commands::images::fetch_owned_image(&mut conn, &user_id, &image_id)?
+        else {
+            return Ok(PartOutcome::Reply(
+                (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({ "error": "not found" })),
+                )
+                    .into_response(),
+            ));
+        };
+        drop(conn);
+
+        let blob_id = format!("blake3:{claimed_hash}");
+        if image.blob_id.as_deref() == Some(blob_id.as_str()) {
+            let _ = std::fs::remove_file(&spool);
+            return Ok(PartOutcome::Reply(
+                Json(serde_json::json!({ "status": "skipped", "blob_id": blob_id }))
+                    .into_response(),
+            ));
+        }
+
+        if let Some(parent) = spool.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+        let received = std::fs::metadata(&spool).map(|m| m.len()).unwrap_or(0);
+        if received != range.start {
+            return Ok(PartOutcome::Reply(
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": "out of order part",
+                        "message": format!("expected the part starting at byte {received}"),
+                        "received": received,
+                        "total": range.total,
+                    })),
+                )
+                    .into_response(),
+            ));
+        }
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&spool)
+                .map_err(|e| format!("open {}: {e}", spool.display()))?;
+            file.write_all(&body)
+                .map_err(|e| format!("write {}: {e}", spool.display()))?;
+        }
+        let received = range.end + 1;
+        if received < range.total {
+            return Ok(PartOutcome::Reply(
+                (
+                    StatusCode::ACCEPTED,
+                    Json(serde_json::json!({
+                        "status": "partial",
+                        "received": received,
+                        "total": range.total,
+                    })),
+                )
+                    .into_response(),
+            ));
+        }
+
+        let whole = std::fs::read(&spool).map_err(|e| format!("read {}: {e}", spool.display()))?;
+        let _ = std::fs::remove_file(&spool);
+        let computed = hoardfs_core::BlobId::from_hash(blake3::hash(&whole));
+        if whole.len() as u64 != range.total || computed.to_hex() != claimed_hash {
+            return Ok(PartOutcome::Reply(error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "content hash mismatch",
+                "the assembled parts do not match x-astra-content-hash; start over".to_string(),
+            )));
+        }
+        Ok(PartOutcome::Complete(computed, Bytes::from(whole)))
+    })
+    .await;
+
+    match result {
+        Ok(Ok(PartOutcome::Reply(response))) => response,
+        Ok(Ok(PartOutcome::Complete(computed, whole))) => {
+            store_asset(state, user.user_id, id, computed, whole).await
+        }
+        Ok(Err(e)) => {
+            log::error!("put_image_asset_part: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "internal error" })),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            log::error!("put_image_asset_part task panicked: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "internal error" })),
+            )
+                .into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -628,6 +893,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            uploads_dir: std::env::temp_dir().join("astra-test-uploads"),
             handles: Default::default(),
             signer: None,
             mailer: Arc::new(crate::mail::LogMailer::default()),
@@ -944,6 +1210,294 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chunked_asset_assembles_in_order_and_resumes() {
+        let (state, tmp, alice, bob) = seeded(IngestLimits::default()).await;
+        let router = crate::daemon::router(state.clone());
+        let collection_id = uuid::Uuid::new_v4().to_string();
+        let image_ids = vec![uuid::Uuid::new_v4().to_string()];
+        send(
+            &router,
+            "POST",
+            "/api/push/collections",
+            &alice,
+            push_body(&collection_id, &image_ids, "chunks").into_bytes(),
+            &[],
+        )
+        .await;
+        let png = tiny_png();
+        let hash = hash_of(&png);
+        let uri = format!("/api/push/images/{}/asset/parts", image_ids[0]);
+        let cut = png.len() / 3;
+        let (a, rest) = png.split_at(cut);
+        let (b, c) = rest.split_at(cut);
+        let range =
+            |start: usize, len: usize| format!("bytes {start}-{}/{}", start + len - 1, png.len());
+
+        // Missing/invalid headers are 400s before anything is spooled.
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            a.to_vec(),
+            &[(CONTENT_HASH_HEADER, &hash)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            a.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, a.len() + 1)),
+            ],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "body/range length mismatch"
+        );
+
+        // Out of order: nothing spooled yet, so a part at offset `cut` is refused with received=0.
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            b.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(cut, b.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["received"], 0);
+
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            a.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, a.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        assert_eq!(body["received"], a.len());
+        assert_eq!(body["total"], png.len());
+
+        // A repeat of the first part (client restarted) is told where to resume.
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            a.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, a.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["received"], a.len());
+
+        // Bob cannot append to Alice's upload, nor see the image.
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri,
+            &bob,
+            b.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(cut, b.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            b.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(cut, b.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            c.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(2 * cut, c.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "stored");
+        assert_eq!(body["blob_id"], format!("blake3:{hash}"));
+        assert!(
+            std::fs::read_dir(&state.uploads_dir)
+                .map(|d| d
+                    .flatten()
+                    .all(|e| e.path().extension().is_none_or(|x| x != "part")
+                        || !e.file_name().to_string_lossy().contains(
+                            &blake3::hash(format!("alice\n{}\n{hash}", image_ids[0]).as_bytes())
+                                .to_hex()
+                                .to_string()
+                        )))
+                .unwrap_or(true),
+            "spool removed after completion"
+        );
+
+        // The bytes landed: the whole-body route now reports them as already held…
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &format!("/api/push/images/{}/asset", image_ids[0]),
+            &alice,
+            png.clone(),
+            &[(CONTENT_HASH_HEADER, &hash)],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "skipped");
+        // …and so does the parts route, without spooling anything.
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri,
+            &alice,
+            a.to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, a.len())),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "skipped");
+
+        // Wrong bytes under a claimed hash: refused at the end, spool discarded.
+        let image2 = uuid::Uuid::new_v4().to_string();
+        send(
+            &router,
+            "POST",
+            "/api/push/collections",
+            &alice,
+            push_body(
+                &collection_id,
+                &[image_ids[0].clone(), image2.clone()],
+                "chunks",
+            )
+            .into_bytes(),
+            &[],
+        )
+        .await;
+        let uri2 = format!("/api/push/images/{image2}/asset/parts");
+        let wrong = vec![9u8; png.len()];
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri2,
+            &alice,
+            wrong[..cut].to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, cut)),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let (status, _) = send(
+            &router,
+            "PUT",
+            &uri2,
+            &alice,
+            wrong[cut..].to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(cut, png.len() - cut)),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        let (status, body) = send(
+            &router,
+            "PUT",
+            &uri2,
+            &alice,
+            wrong[..cut].to_vec(),
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", &range(0, cut)),
+            ],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "spool was discarded, so offset 0 is accepted again: {body}"
+        );
+
+        // Total over the asset limit → 413 before spooling.
+        let (small, _tmp2, carol, _) = seeded(IngestLimits {
+            max_images_per_push: 10,
+            max_asset_bytes: 64,
+        })
+        .await;
+        let small_router = crate::daemon::router(small.clone());
+        let (status, _) = send(
+            &small_router,
+            "PUT",
+            &uri,
+            &carol,
+            vec![0u8; 10],
+            &[
+                (CONTENT_HASH_HEADER, &hash),
+                ("content-range", "bytes 0-9/1000"),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        drop(tmp);
+    }
+
+    #[test]
+    fn content_range_parsing() {
+        let r = parse_content_range("bytes 0-99/1000").unwrap();
+        assert_eq!((r.start, r.end, r.total), (0, 99, 1000));
+        assert_eq!(
+            parse_content_range("bytes 999-999/1000").map(|r| r.end),
+            Some(999)
+        );
+        assert!(
+            parse_content_range("bytes 0-1000/1000").is_none(),
+            "end past total"
+        );
+        assert!(parse_content_range("bytes 5-4/10").is_none());
+        assert!(parse_content_range("bytes */10").is_none());
+        assert!(parse_content_range("0-9/10").is_none());
     }
 
     #[test]

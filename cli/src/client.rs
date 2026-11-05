@@ -11,7 +11,13 @@ pub struct Client {
     base: String,
     token: String,
     http: reqwest::blocking::Client,
+    /// Files larger than this go up in parts of this size.
+    chunk_bytes: u64,
 }
+
+/// Default part size for chunked uploads. Cloudflare's edge refuses
+/// request bodies over 100 MB (413), so stay well under it.
+pub const DEFAULT_CHUNK_MB: u64 = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,7 +94,14 @@ impl Client {
                 .connect_timeout(std::time::Duration::from_secs(20))
                 .build()
                 .expect("reqwest client"),
+            chunk_bytes: DEFAULT_CHUNK_MB << 20,
         }
+    }
+
+    /// Part size for chunked uploads, in MiB (0 → never chunk).
+    pub fn with_chunk_mb(mut self, mb: u64) -> Self {
+        self.chunk_bytes = mb << 20;
+        self
     }
 
     fn url(&self, path: &str) -> String {
@@ -102,19 +115,28 @@ impl Client {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().unwrap_or_default();
-            let message = serde_json::from_str::<serde_json::Value>(&body)
+            let server_message = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|v| {
                     v.get("message")
                         .or_else(|| v.get("error"))
                         .and_then(|m| m.as_str())
                         .map(str::to_string)
-                })
-                .unwrap_or(body);
+                });
             if status == reqwest::StatusCode::UNAUTHORIZED {
                 bail!("{what}: the server rejected the token (401) — run `astra-cli login` again");
             }
-            bail!("{what} failed ({status}): {message}");
+            // A 413 without the daemon's JSON body came from a proxy in
+            // front of it (Cloudflare caps request bodies at 100 MB).
+            if status == reqwest::StatusCode::PAYLOAD_TOO_LARGE && server_message.is_none() {
+                bail!(
+                    "{what}: a proxy in front of the server refused the request body (413) — try a smaller --chunk-mb"
+                );
+            }
+            bail!(
+                "{what} failed ({status}): {}",
+                server_message.unwrap_or(body)
+            );
         }
         resp.json()
             .with_context(|| format!("{what}: unexpected response"))
@@ -151,12 +173,18 @@ impl Client {
         Self::parse(resp, "registering image")
     }
 
-    /// Stream the file as the asset body. The server verifies the hash
-    /// and answers `skipped` when it already holds those bytes.
+    /// Send the file as the image's asset. Small files go in one request;
+    /// anything over the chunk size goes through the parts route in
+    /// sequential pieces, resuming where the server says it left off.
+    /// Either way the server verifies the whole-file hash and answers
+    /// `skipped` when it already holds those bytes.
     pub fn put_asset(&self, image_id: &str, blake3_hex: &str, path: &Path) -> Result<AssetStored> {
         let file =
             std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
         let len = file.metadata()?.len();
+        if self.chunk_bytes > 0 && len > self.chunk_bytes {
+            return self.put_asset_parts(image_id, blake3_hex, path, file, len);
+        }
         let resp = self
             .http
             .put(self.url(&format!("/api/push/images/{image_id}/asset")))
@@ -167,5 +195,83 @@ impl Client {
             .send()
             .map_err(|e| anyhow!("{} unreachable: {e}", self.base))?;
         Self::parse(resp, "uploading asset")
+    }
+
+    fn put_asset_parts(
+        &self,
+        image_id: &str,
+        blake3_hex: &str,
+        path: &Path,
+        mut file: std::fs::File,
+        len: u64,
+    ) -> Result<AssetStored> {
+        use std::io::{IsTerminal, Read, Seek, SeekFrom};
+
+        #[derive(Deserialize)]
+        struct Progress {
+            received: Option<u64>,
+        }
+
+        let url = self.url(&format!("/api/push/images/{image_id}/asset/parts"));
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let tty = std::io::stderr().is_terminal();
+        let mut offset = 0u64;
+        let mut buf = Vec::with_capacity(self.chunk_bytes as usize);
+        let mut last_conflict: Option<u64> = None;
+        loop {
+            let end = (offset + self.chunk_bytes).min(len); // exclusive
+            buf.clear();
+            buf.resize((end - offset) as usize, 0);
+            file.seek(SeekFrom::Start(offset))?;
+            file.read_exact(&mut buf)
+                .with_context(|| format!("reading {} at byte {offset}", path.display()))?;
+            if tty {
+                eprint!(
+                    "\r  {name}: sending {}/{} MiB",
+                    offset >> 20,
+                    len.div_ceil(1 << 20)
+                );
+            }
+            let resp = self
+                .http
+                .put(&url)
+                .bearer_auth(&self.token)
+                .header("x-astra-content-hash", blake3_hex)
+                .header(
+                    reqwest::header::CONTENT_RANGE,
+                    format!("bytes {offset}-{}/{len}", end - 1),
+                )
+                .body(buf.clone())
+                .send()
+                .map_err(|e| anyhow!("{} unreachable: {e}", self.base))?;
+
+            if resp.status() == reqwest::StatusCode::CONFLICT {
+                // The server already holds a different prefix of this
+                // file (an earlier run was cut off): continue from there.
+                let received = resp
+                    .json::<Progress>()
+                    .ok()
+                    .and_then(|p| p.received)
+                    .ok_or_else(|| anyhow!("uploading asset: server refused the part at byte {offset} without saying where to resume"))?;
+                if received > len || last_conflict == Some(received) {
+                    bail!("uploading asset: the server's partial copy of {name} is unusable (received={received}); retry with --force");
+                }
+                last_conflict = Some(received);
+                offset = received;
+                continue;
+            }
+            if end < len {
+                let _: Progress = Self::parse(resp, "uploading asset part")?;
+                offset = end;
+                continue;
+            }
+            if tty {
+                eprint!("\r\x1b[K");
+            }
+            return Self::parse(resp, "uploading asset");
+        }
     }
 }

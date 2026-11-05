@@ -38,6 +38,11 @@ struct Cli {
     #[arg(long, global = true, env = "ASTRA_CLI_CONFIG")]
     config: Option<PathBuf>,
 
+    /// Send files larger than this in parts of this many MiB (0 = never).
+    /// Keep it under 100: Cloudflare refuses bigger request bodies.
+    #[arg(long, global = true, env = "ASTRA_CHUNK_MB", default_value_t = client::DEFAULT_CHUNK_MB, value_name = "MIB")]
+    chunk_mb: u64,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -192,7 +197,7 @@ fn run() -> Result<()> {
             recursive,
         } => {
             let creds = config::resolve(&config_path, cli.server, cli.token)?;
-            let client = client::Client::new(&creds);
+            let client = client::Client::new(&creds).with_chunk_mb(cli.chunk_mb);
             let files = select::expand(&paths, recursive, opts.all)?;
             if files.is_empty() {
                 bail!("nothing to upload (directories are filtered to stacked images; try --all)");
@@ -213,7 +218,7 @@ fn run() -> Result<()> {
             poll,
         } => {
             let creds = config::resolve(&config_path, cli.server, cli.token)?;
-            let client = client::Client::new(&creds);
+            let client = client::Client::new(&creds).with_chunk_mb(cli.chunk_mb);
             let ledger = ledger::Ledger::open(&creds.server)?;
             watch::run(
                 &client,

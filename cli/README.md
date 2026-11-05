@@ -45,6 +45,7 @@ Options on `upload` and `watch`:
 | `--all` | Accept any image file in directories, not only stacked ones. |
 | `-n, --dry-run` | List what would be sent. |
 | `--force` | Ignore the local ledger (the server still dedups identical bytes). |
+| `--chunk-mb MIB` | Files larger than this are sent in parts of this size (default 64; `ASTRA_CHUNK_MB`). Keep it under 100 behind Cloudflare, which refuses larger request bodies with 413. `0` disables chunking. |
 
 ## Idempotence
 
@@ -55,6 +56,9 @@ Two layers keep repeats harmless:
   re-hash or re-send.
 - The server registers images by content hash: identical bytes map to the
   existing image, which is only (re)linked into the requested collection.
+- Large files go up in parts; a run that is cut off mid-file resumes from
+  the byte the server already has when the same file is sent again (the
+  server keeps the partial copy for a week).
 
 ## Watching
 

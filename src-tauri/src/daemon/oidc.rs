@@ -425,6 +425,7 @@ mod tests {
             session_key: [7u8; 32],
             processing: Default::default(),
             tetra3_db: None,
+            uploads_dir: std::env::temp_dir().join("astra-test-uploads"),
             handles: Default::default(),
             signer: None,
             mailer: Arc::new(crate::mail::LogMailer::default()),
