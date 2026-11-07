@@ -65,7 +65,10 @@ enum Command {
     Whoami,
     /// List your collections.
     Collections,
-    /// Upload files, or the stacked images found under directories.
+    /// Upload files, or the stacked images found under directories. A
+    /// JPG/PNG/TIFF next to a same-name FITS is attached to that image as
+    /// its processed rendition rather than uploaded separately (--no-pair
+    /// turns this off).
     Upload {
         /// Files or directories.
         #[arg(required = true)]
@@ -142,6 +145,10 @@ pub struct UploadOpts {
     /// server still dedups identical bytes).
     #[arg(long)]
     force: bool,
+    /// Upload a JPG/PNG/TIFF with a same-name FITS beside it as its own
+    /// image, instead of attaching it as that image's processed rendition.
+    #[arg(long)]
+    no_pair: bool,
 }
 
 fn main() {
@@ -218,7 +225,7 @@ fn run() -> Result<()> {
                 bail!("nothing to upload (directories are filtered to stacked images; try --all)");
             }
             let mut ledger = ledger::Ledger::open(&creds.server)?;
-            let outcome = upload::upload_all(&client, &mut ledger, &files, &opts);
+            let outcome = attach::upload_all_paired(&client, &mut ledger, &files, &opts);
             outcome.print_summary();
             if outcome.failed > 0 {
                 bail!("{} upload(s) failed", outcome.failed);
@@ -228,8 +235,8 @@ fn run() -> Result<()> {
         Command::Attach { file, to, tool } => {
             let creds = config::resolve(&config_path, cli.server, cli.token)?;
             let client = client::Client::new(&creds);
-            let ledger = ledger::Ledger::open(&creds.server)?;
-            attach::attach(&client, &ledger, &file, to.as_deref(), tool.as_deref())
+            let mut ledger = ledger::Ledger::open(&creds.server)?;
+            attach::attach(&client, &mut ledger, &file, to.as_deref(), tool.as_deref())
         }
         Command::Watch {
             dir,

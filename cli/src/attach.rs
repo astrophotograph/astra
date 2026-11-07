@@ -9,10 +9,32 @@ use anyhow::{bail, Context, Result};
 
 use crate::client::Client;
 use crate::ledger::{self, Ledger};
-use crate::upload::hash_file;
+use crate::upload::{self, hash_file, Outcome, Status};
+use crate::UploadOpts;
 
 /// Extensions a sibling original may carry, in the order they are tried.
 const ORIGINAL_EXTENSIONS: [&str; 4] = ["fit", "fits", "fts", "xisf"];
+
+/// Extensions of files that are renditions when an original sits beside
+/// them (a stacker's JPG/PNG/TIFF export of the FITS it also wrote).
+const RENDITION_EXTENSIONS: [&str; 5] = ["jpg", "jpeg", "png", "tif", "tiff"];
+
+/// Whether `path` is the kind of file that can be a rendition.
+pub fn is_rendition_type(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .is_some_and(|e| RENDITION_EXTENSIONS.contains(&e.as_str()))
+}
+
+/// The original this file is a rendition of, when pairing applies: a
+/// rendition-type file with a same-stem original next to it.
+pub fn paired_original(path: &Path) -> Option<PathBuf> {
+    if !is_rendition_type(path) {
+        return None;
+    }
+    sibling_original(path)
+}
 
 /// MIME type for the rendition, from its extension. The server sniffs the
 /// bytes too, so an unknown extension is sent as octet-stream rather than
@@ -88,9 +110,10 @@ pub fn image_id_for_original(client: &Client, ledger: &Ledger, original: &Path) 
     }
 }
 
+/// `astra-cli attach`: explicit target (or the sibling rule), always sent.
 pub fn attach(
     client: &Client,
-    ledger: &Ledger,
+    ledger: &mut Ledger,
     processed: &Path,
     to: Option<&str>,
     tool: Option<&str>,
@@ -106,15 +129,39 @@ pub fn attach(
             id
         }
     };
+    attach_to_image(client, ledger, processed, &image_id, tool)?;
+    Ok(())
+}
+
+/// Send `processed` as the rendition of `image_id` and remember it in the
+/// ledger (under the parent's image id, so a later sweep skips it).
+fn attach_to_image(
+    client: &Client,
+    ledger: &mut Ledger,
+    processed: &Path,
+    image_id: &str,
+    tool: Option<&str>,
+) -> Result<Status> {
+    let stamp = ledger::stamp(processed)?;
     let hash = hash_file(processed)?;
     let stored = client
-        .attach_rendition(&image_id, &hash, processed, content_type_for(processed), tool)
+        .attach_rendition(
+            image_id,
+            &hash,
+            processed,
+            content_type_for(processed),
+            tool,
+        )
         .with_context(|| format!("attaching {}", processed.display()))?;
-    match stored.status.as_str() {
-        "skipped" => println!(
-            "= {}  (image {image_id} already has this rendition)",
-            processed.display()
-        ),
+    ledger.record(processed, stamp, &hash, image_id)?;
+    Ok(match stored.status.as_str() {
+        "skipped" => {
+            println!(
+                "= {}  (image {image_id} already has this rendition)",
+                processed.display()
+            );
+            Status::Reused
+        }
         _ => {
             let dims = stored
                 .preview
@@ -124,9 +171,76 @@ pub fn attach(
                 "+ {}  (rendition of image {image_id}{dims})",
                 processed.display()
             );
+            Status::Uploaded
+        }
+    })
+}
+
+/// Pairing path used by `upload` and `watch`: `processed` sits next to
+/// `original`, which must already be on the server (the callers upload
+/// originals first). Ledger-skipped like a normal upload.
+pub fn attach_paired(
+    client: &Client,
+    ledger: &mut Ledger,
+    processed: &Path,
+    original: &Path,
+    opts: &UploadOpts,
+) -> Result<Status> {
+    let stamp = ledger::stamp(processed)?;
+    if !opts.force {
+        if let Some(entry) = ledger.lookup(processed, stamp) {
+            println!(
+                "= {}  (already attached to {})",
+                processed.display(),
+                entry.image_id
+            );
+            return Ok(Status::Reused);
         }
     }
-    Ok(())
+    if opts.dry_run {
+        println!(
+            "? {}  (would attach as rendition of {})",
+            processed.display(),
+            original.display()
+        );
+        return Ok(Status::Skipped);
+    }
+    let image_id = image_id_for_original(client, ledger, original)?;
+    attach_to_image(client, ledger, processed, &image_id, None)
+}
+
+/// Upload a batch with pairing: originals first, then same-stem
+/// renditions attached to them; everything else uploads as its own image.
+/// With `--no-pair` this is plain [`upload::upload_all`].
+pub fn upload_all_paired(
+    client: &Client,
+    ledger: &mut Ledger,
+    files: &[PathBuf],
+    opts: &UploadOpts,
+) -> Outcome {
+    if opts.no_pair {
+        return upload::upload_all(client, ledger, files, opts);
+    }
+    let (paired, standalone): (Vec<_>, Vec<_>) = files
+        .iter()
+        .map(|f| (f.clone(), paired_original(f)))
+        .partition(|(_, original)| original.is_some());
+    let standalone: Vec<PathBuf> = standalone.into_iter().map(|(f, _)| f).collect();
+
+    let mut outcome = upload::upload_all(client, ledger, &standalone, opts);
+    for (processed, original) in paired {
+        let original = original.expect("partitioned on Some");
+        match attach_paired(client, ledger, &processed, &original, opts) {
+            Ok(Status::Uploaded) => outcome.uploaded += 1,
+            Ok(Status::Reused) => outcome.reused += 1,
+            Ok(Status::Skipped) => outcome.skipped += 1,
+            Err(e) => {
+                eprintln!("! {}  {e:#}", processed.display());
+                outcome.failed += 1;
+            }
+        }
+    }
+    outcome
 }
 
 #[cfg(test)]
@@ -142,6 +256,26 @@ mod tests {
     }
 
     #[test]
+    fn pairing_applies_only_to_rendition_types_with_a_sibling() {
+        let dir = tempfile::tempdir().unwrap();
+        let fit = dir.path().join("Stacked_120_M42.fit");
+        let jpg = dir.path().join("Stacked_120_M42.jpg");
+        let thn = dir.path().join("Stacked_120_M42_thn.jpg");
+        let lone = dir.path().join("final_M31.png");
+        for f in [&fit, &jpg, &thn, &lone] {
+            std::fs::write(f, b"x").unwrap();
+        }
+        assert!(is_rendition_type(&jpg));
+        assert!(!is_rendition_type(&fit));
+        assert_eq!(paired_original(&jpg), Some(fit.clone()));
+        // A FITS is never a rendition, even of another FITS
+        assert_eq!(paired_original(&fit), None);
+        // Different stem: no pairing
+        assert_eq!(paired_original(&thn), None);
+        assert_eq!(paired_original(&lone), None);
+    }
+
+    #[test]
     fn sibling_rule_pairs_same_stem_originals() {
         let dir = tempfile::tempdir().unwrap();
         let jpg = dir.path().join("Stacked_120_M42.jpg");
@@ -152,7 +286,10 @@ mod tests {
         let fit = dir.path().join("Stacked_120_M42.fit");
         std::fs::write(&fit, b"y").unwrap();
         assert_eq!(sibling_original(&jpg), Some(fit.clone()));
-        assert_eq!(resolve_target(None, &jpg).unwrap(), Target::Original(fit.clone()));
+        assert_eq!(
+            resolve_target(None, &jpg).unwrap(),
+            Target::Original(fit.clone())
+        );
 
         // An explicit --to wins: a file path or an id
         assert_eq!(

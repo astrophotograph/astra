@@ -6,6 +6,13 @@
 //! with no further events and an unchanged size. inotify does not fire
 //! for writes made by another host on an SMB/NFS mount, so `--poll`
 //! switches to notify's polling backend.
+//!
+//! Pairing: a JPG/PNG/TIFF that settles next to a same-stem FITS (a
+//! Seestar writes `Stacked_*.fit` and `Stacked_*.jpg` together) is
+//! attached to that FITS's image as its processed rendition instead of
+//! becoming a second image. The original goes first: while it is still
+//! settling the rendition waits; otherwise it is (re-)uploaded — a no-op
+//! through the ledger when already sent — and the rendition attached.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +22,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use notify::{Config, Event, EventKind, PollWatcher, RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::attach;
 use crate::client::Client;
 use crate::ledger::Ledger;
 use crate::select;
@@ -30,6 +38,10 @@ pub struct Settings {
 struct Pending {
     last_event: Instant,
     last_size: u64,
+    /// A rendition-type file with no original beside it yet has waited
+    /// one extra settle window for the FITS to land (a stacker may write
+    /// the JPG first). Prevents waiting forever.
+    grace_used: bool,
 }
 
 enum AnyWatcher {
@@ -59,7 +71,7 @@ pub fn run(
                 existing.len(),
                 dir.display()
             );
-            let outcome = upload::upload_all(client, &mut ledger, &existing, opts);
+            let outcome = attach::upload_all_paired(client, &mut ledger, &existing, opts);
             outcome.print_summary();
         }
     }
@@ -106,11 +118,13 @@ pub fn run(
                 for path in event.paths {
                     if path.is_file() && select::wanted(&path, opts.all) {
                         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        let grace_used = pending.get(&path).is_some_and(|p| p.grace_used);
                         pending.insert(
                             path,
                             Pending {
                                 last_event: Instant::now(),
                                 last_size: size,
+                                grace_used,
                             },
                         );
                     }
@@ -122,7 +136,7 @@ pub fn run(
         }
 
         let now = Instant::now();
-        let ready: Vec<PathBuf> = pending
+        let mut ready: Vec<PathBuf> = pending
             .iter_mut()
             .filter_map(|(path, p)| {
                 if now.duration_since(p.last_event) < settle {
@@ -141,10 +155,50 @@ pub fn run(
                 Some(path.clone())
             })
             .collect();
+        // Originals before renditions, so a pair settling together is
+        // uploaded then attached in one pass
+        ready.sort_by_key(|p| (attach::is_rendition_type(p), p.clone()));
 
         for path in ready {
-            pending.remove(&path);
+            let Some(entry) = pending.remove(&path) else {
+                continue;
+            };
             if !path.is_file() {
+                continue;
+            }
+            let pairing = !opts.no_pair && attach::is_rendition_type(&path);
+            let original = if pairing {
+                attach::paired_original(&path)
+            } else {
+                None
+            };
+            let wait = match &original {
+                // The FITS is still being written: come back to the
+                // rendition once it has settled too
+                Some(original) => pending.contains_key(original),
+                // No FITS beside it yet: give it one more settle window
+                // before treating the file as an image of its own
+                None => pairing && !entry.grace_used,
+            };
+            if wait {
+                pending.insert(
+                    path,
+                    Pending {
+                        last_event: now,
+                        last_size: entry.last_size,
+                        grace_used: true,
+                    },
+                );
+                continue;
+            }
+            if let Some(original) = original {
+                if let Err(e) = upload::upload_one(client, &mut ledger, &original, opts) {
+                    eprintln!("! {}  {e:#}", original.display());
+                    continue;
+                }
+                if let Err(e) = attach::attach_paired(client, &mut ledger, &path, &original, opts) {
+                    eprintln!("! {}  {e:#}", path.display());
+                }
                 continue;
             }
             // A file that settled with the same stamp we already sent is
