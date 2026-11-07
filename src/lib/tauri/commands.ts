@@ -271,6 +271,14 @@ export const collectionApi = {
 // Image Commands
 // =============================================================================
 
+/** `PUT /api/images/{id}/rendition` response. */
+export interface AttachRenditionResult {
+  /** "stored" | "skipped" (same bytes were already attached) */
+  status: string;
+  preview?: { width: number; height: number };
+  image: Image;
+}
+
 export const imageApi = {
   getAll: () => invoke<Image[]>("get_images"),
 
@@ -317,6 +325,8 @@ export const imageApi = {
     sigma?: number,
     greenRemoval?: number,
     saturation?: number,
+    /** Web: replace an externally attached rendition (otherwise 409). */
+    force?: boolean,
   ) =>
     invoke<{ previewPath: string; thumbnail: string }>("regenerate_preview", {
       id,
@@ -324,7 +334,16 @@ export const imageApi = {
       sigma,
       greenRemoval,
       saturation,
+      force,
     }),
+
+  /**
+   * Web only: attach an image processed outside Astra (JPEG/PNG/TIFF/WebP)
+   * as this image's rendition. It becomes the served preview/thumbnail;
+   * the original FITS is untouched.
+   */
+  attachRendition: (id: string, file: File, tool?: string) =>
+    invoke<AttachRenditionResult>("attach_rendition", { id, file, tool }),
 
   /** Binary payload for the WebGL live-stretch preview. Desktop reads the
    *  local FITS; web fetches the daemon's `/stretch-data` endpoint. */
@@ -1044,8 +1063,8 @@ export const imageProcessApi = {
   /**
    * Process a FITS image with stretch and enhancements
    */
-  process: (input: ProcessImageInput) =>
-    invoke<ProcessImageResponse>("process_fits_image", { input }),
+  process: (input: ProcessImageInput, force?: boolean) =>
+    invoke<ProcessImageResponse>("process_fits_image", { input, force }),
 
   /**
    * Classify a target from its object name

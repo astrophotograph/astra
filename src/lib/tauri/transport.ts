@@ -295,12 +295,14 @@ const WEB_ROUTES = {
   // ---- image processing (native pipeline on the daemon) -----------------
   process_fits_image: async (a: Args) => {
     const { id, ...params } = a.input as { id: string } & Record<string, unknown>;
+    // `force` replaces an externally attached rendition (daemon 409s
+    // without it; see attach_rendition below)
     const result = await json<{
       success: boolean;
       targetType: string;
       processingTime: number;
       processingParams: Record<string, unknown>;
-    }>("POST", `/api/images/${id}/process`, params);
+    }>("POST", `/api/images/${id}/process${a.force ? "?force=1" : ""}`, params);
     // Desktop shape: the daemon has no local output paths — the "output"
     // is this image's own preview endpoint, freshly re-variant-ed
     return {
@@ -355,7 +357,7 @@ const WEB_ROUTES = {
     // Desktop Apply runs the MTF pipeline locally; on web the daemon runs
     // the same pipeline via the process endpoint's "mtf" method and
     // replaces the served preview/thumbnail variants.
-    await json("POST", `/api/images/${a.id}/process`, {
+    await json("POST", `/api/images/${a.id}/process${a.force ? "?force=1" : ""}`, {
       stretchMethod: "mtf",
       bgPercent: a.bgPercent,
       sigma: a.sigma,
@@ -368,6 +370,24 @@ const WEB_ROUTES = {
       previewPath: `/api/images/${a.id}/preview`,
       thumbnail: `/api/images/${a.id}/thumbnail`,
     };
+  },
+  // ---- externally processed rendition ------------------------------------
+  // The browser sends the user's exported JPEG/PNG/TIFF as the image's
+  // processed master; the daemon re-derives preview/thumbnail from it and
+  // leaves the FITS alone. Web-only: desktop keeps processed files as
+  // siblings in the Processed collection.
+  attach_rendition: async (a: Args) => {
+    const file = a.file as File;
+    const q = new URLSearchParams({ filename: file.name });
+    if (a.tool) q.set("tool", String(a.tool));
+    const resp = await fetch(`/api/images/${a.id}/rendition?${q}`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!resp.ok) return fail(resp);
+    return resp.json();
   },
 
   // ---- schedules ----------------------------------------------------------
@@ -484,6 +504,7 @@ type InScopeCommand =
   | "get_processing_defaults"
   | "get_stretch_data"
   | "regenerate_preview"
+  | "attach_rendition"
   | "get_schedules"
   | "get_active_schedule"
   | "get_active_schedules"

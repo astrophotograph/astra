@@ -27,8 +27,9 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Sparkles, Wand2 } from "lucide-react";
+import { AlertTriangle, Loader2, Sparkles, Wand2 } from "lucide-react";
 import {
+  HttpError,
   imageProcessApi,
   TARGET_TYPES,
   STRETCH_METHODS,
@@ -202,7 +203,14 @@ export function ProcessingDialog({
     }
   }, []);
 
-  const handleProcess = async () => {
+  // The daemon refuses (409) to overwrite a rendition attached from outside
+  // Astra; the user confirms, then we retry with force
+  const [externalConflict, setExternalConflict] = useState(false);
+  useEffect(() => {
+    if (!open) setExternalConflict(false);
+  }, [open]);
+
+  const handleProcess = async (force = false) => {
     if (!imageId) return;
 
     // Reset progress state
@@ -223,7 +231,7 @@ export function ProcessingDialog({
         contrast,
       };
 
-      const result = await imageProcessApi.process(input);
+      const result = await imageProcessApi.process(input, force);
 
       if (result.success) {
         toast.success(
@@ -235,6 +243,10 @@ export function ProcessingDialog({
         toast.error(result.errorMessage || "Processing failed");
       }
     } catch (err: unknown) {
+      if (err instanceof HttpError && err.status === 409) {
+        setExternalConflict(true);
+        return;
+      }
       const errorMsg = err instanceof Error ? err.message : String(err);
       toast.error("Processing failed: " + errorMsg);
       console.error("Processing error:", err);
@@ -456,23 +468,53 @@ export function ProcessingDialog({
           </div>
         )}
 
+        {externalConflict && (
+          <div className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400" />
+            <div className="space-y-1">
+              <p className="font-medium">Replace your external processing?</p>
+              <p className="text-muted-foreground">
+                This image's preview was attached from outside Astra. Processing
+                here replaces it with Astra's result; the attached file stays
+                stored and the original FITS is untouched.
+              </p>
+            </div>
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleProcess} disabled={isProcessing}>
-            {isProcessing ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Processing...
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 mr-2" />
-                Process Image
-              </>
-            )}
-          </Button>
+          {externalConflict ? (
+            <Button variant="destructive" onClick={() => handleProcess(true)} disabled={isProcessing}>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Replace and Process
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button onClick={() => handleProcess()} disabled={isProcessing}>
+              {isProcessing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 mr-2" />
+                  Process Image
+                </>
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

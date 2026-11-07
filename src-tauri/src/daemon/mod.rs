@@ -37,6 +37,7 @@ pub mod auth;
 pub mod blob;
 pub mod circles;
 pub mod process;
+pub mod rendition;
 pub mod signed_edges;
 pub mod records;
 pub mod solve;
@@ -249,6 +250,10 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         // Single-image upload for the CLI (upload.rs): register by content
         // hash, then PUT the bytes through /push/images/{id}/asset.
         .route("/upload/images", axum::routing::post(upload::create_upload))
+        .route(
+            "/upload/images/by-hash/{hash}",
+            get(upload::lookup_by_hash),
+        )
         .route("/images", get(api::list_images))
         .route(
             "/images/{id}",
@@ -261,6 +266,14 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
         .route(
             "/images/{id}/process",
             axum::routing::post(process::process_image),
+        )
+        // Externally processed rendition (rendition.rs): same body cap as
+        // an asset — a 16-bit TIFF master can be large.
+        .route(
+            "/images/{id}/rendition",
+            axum::routing::put(rendition::attach_rendition).layer(
+                axum::extract::DefaultBodyLimit::max(state.limits.max_asset_bytes),
+            ),
         )
         .route(
             "/images/{id}/plate-solve",

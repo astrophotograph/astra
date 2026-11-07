@@ -11,6 +11,7 @@
 //! (path, size, mtime) has gone where, and the server reuses an existing
 //! image when it already holds the same bytes.
 
+mod attach;
 mod client;
 mod config;
 mod ledger;
@@ -74,6 +75,20 @@ enum Command {
         /// Descend into subdirectories.
         #[arg(short, long)]
         recursive: bool,
+    },
+    /// Attach a processed JPEG/PNG/TIFF to an image already uploaded: it
+    /// becomes that image's preview, the original FITS stays as is.
+    Attach {
+        /// The processed image file.
+        file: PathBuf,
+        /// Which image: a server image id, or the path of the original
+        /// file it was processed from. Omitted, the original with the same
+        /// name next to FILE (M42.jpg → M42.fit) is used.
+        #[arg(long, value_name = "ID|ORIGINAL")]
+        to: Option<String>,
+        /// Software that produced it (recorded with the image).
+        #[arg(long)]
+        tool: Option<String>,
     },
     /// Watch a directory and upload stacked images as they appear.
     Watch {
@@ -209,6 +224,12 @@ fn run() -> Result<()> {
                 bail!("{} upload(s) failed", outcome.failed);
             }
             Ok(())
+        }
+        Command::Attach { file, to, tool } => {
+            let creds = config::resolve(&config_path, cli.server, cli.token)?;
+            let client = client::Client::new(&creds);
+            let ledger = ledger::Ledger::open(&creds.server)?;
+            attach::attach(&client, &ledger, &file, to.as_deref(), tool.as_deref())
         }
         Command::Watch {
             dir,

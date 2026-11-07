@@ -158,10 +158,40 @@ pub(crate) fn source_unavailable() -> Response {
         .into_response()
 }
 
+/// Query for `POST /api/images/{id}/process`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ProcessQuery {
+    /// `1` / `true`: replace an externally attached rendition
+    /// ([`super::rendition`]) instead of refusing with 409.
+    force: Option<String>,
+}
+
+impl ProcessQuery {
+    fn force(&self) -> bool {
+        self.force
+            .as_deref()
+            .is_some_and(|v| matches!(v.trim(), "1" | "true" | "yes"))
+    }
+}
+
+/// The 409 for processing over an external rendition without `force`.
+fn external_conflict(image: &Image) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(serde_json::json!({
+            "error": "external_processing",
+            "message": "this image's preview was attached from outside Astra; processing here would replace it (pass force=1 to do so)",
+            "processing": super::rendition::processing_info(image),
+        })),
+    )
+        .into_response()
+}
+
 pub async fn process_image(
     State(state): State<Arc<DaemonState>>,
     user: AuthedUser,
     Path(id): Path<String>,
+    Query(query): Query<ProcessQuery>,
     body: Option<Json<ProcessBody>>,
 ) -> Response {
     let started = std::time::Instant::now();
@@ -210,6 +240,12 @@ pub async fn process_image(
             .into_response();
     }
     let hfs_path = resolve_hfs_path(&image).expect("processable implies hfs path");
+
+    // An externally attached rendition is the user's own work: never
+    // overwrite it silently
+    if !query.force() && super::rendition::is_externally_processed(&image) {
+        return external_conflict(&image);
+    }
 
     // Object name for auto-classification, matching the desktop flow:
     // metadata.object_name, then the summary
@@ -580,7 +616,7 @@ pub async fn classify_target(Query(q): Query<ClassifyQuery>) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::commands::images::{create_image_core, CreateImageInput};
     use crate::daemon::auth::mint_token;
@@ -603,7 +639,7 @@ mod tests {
 
     /// alice + bob, one FITS-backed image for alice with variants from the
     /// FITS generator (the daemon's real pipeline configuration).
-    async fn seeded() -> (Arc<DaemonState>, tempfile::TempDir, String, String, Image) {
+    pub(crate) async fn seeded() -> (Arc<DaemonState>, tempfile::TempDir, String, String, Image) {
         let tmp = tempfile::tempdir().unwrap();
         let db = test_pool();
         insert_user(&db, "alice");
@@ -681,7 +717,7 @@ mod tests {
         (state, tmp, alice, bob, image)
     }
 
-    async fn request(
+    pub(crate) async fn request(
         router: &axum::Router,
         method: &str,
         token: &str,
@@ -706,7 +742,7 @@ mod tests {
         (status, headers, bytes)
     }
 
-    fn json(body: &[u8]) -> serde_json::Value {
+    pub(crate) fn json(body: &[u8]) -> serde_json::Value {
         serde_json::from_slice(body).unwrap()
     }
 

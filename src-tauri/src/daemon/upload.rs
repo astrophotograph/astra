@@ -380,6 +380,41 @@ pub async fn create_upload(
     }
 }
 
+/// `GET /api/upload/images/by-hash/{blake3}` — the caller's image holding
+/// exactly this content, if any. Read-only counterpart of the register
+/// route's dedup (that one also files into a collection and creates a row
+/// when nothing matches): what `astra-cli attach` uses to find the image a
+/// local original was uploaded as, with no side effects.
+pub async fn lookup_by_hash(
+    State(state): State<Arc<DaemonState>>,
+    user: AuthedUser,
+    axum::extract::Path(hash): axum::extract::Path<String>,
+) -> Response {
+    let blob_id = match normalize_blob_id(&hash) {
+        Ok(id) => id,
+        Err(e) => return e.into_response(),
+    };
+    let db = state.db.clone();
+    let user_id = user.user_id.clone();
+    let solver = super::solve::solver_available_for(&state);
+    let found = tokio::task::spawn_blocking(move || -> Result<Option<Image>, UploadError> {
+        let mut conn = db.get().map_err(|e| UploadError::Db(e.to_string()))?;
+        Ok(images::table
+            .filter(images::user_id.eq(&user_id))
+            .filter(images::blob_id.eq(&blob_id))
+            .order(images::created_at.asc())
+            .first::<Image>(&mut conn)
+            .optional()?)
+    })
+    .await;
+    match found {
+        Ok(Ok(Some(image))) => Json(super::api::image_out(image, solver)).into_response(),
+        Ok(Ok(None)) => super::api::not_found(),
+        Ok(Err(e)) => e.into_response(),
+        Err(e) => UploadError::Db(format!("lookup task: {e}")).into_response(),
+    }
+}
+
 // ============================================================================
 // FITS enrichment at asset time
 // ============================================================================
@@ -879,6 +914,53 @@ pub(crate) mod tests {
         .await;
         assert_eq!(image["summary"], "Orion, first light");
         assert_eq!(image["description"], "hand-written");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lookup_by_hash_finds_only_the_callers_stored_image() {
+        let (state, _tmp, alice, bob) = seeded().await;
+        let router = crate::daemon::router(state);
+        let png = tiny_png(3);
+        let hash = hash_of(&png);
+        let by_hash = format!("/api/upload/images/by-hash/{hash}");
+
+        // Nothing registered yet
+        let (status, _) = send(&router, "GET", &by_hash, &alice, vec![], &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, registered) = register_json(
+            &router,
+            &alice,
+            serde_json::json!({ "filename": "m42.png", "content_hash": hash }),
+        )
+        .await;
+        let id = registered["id"].as_str().unwrap().to_string();
+        // Registered but bytes not stored: still not found (blob_id unset)
+        let (status, _) = send(&router, "GET", &by_hash, &alice, vec![], &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        send(
+            &router,
+            "PUT",
+            &format!("/api/push/images/{id}/asset"),
+            &alice,
+            png,
+            &[(CONTENT_HASH_HEADER, hash.as_str())],
+        )
+        .await;
+        let (status, image) = send(&router, "GET", &by_hash, &alice, vec![], &[]).await;
+        assert_eq!(status, StatusCode::OK, "{image}");
+        assert_eq!(image["id"], id);
+
+        // Prefixed form accepted; other users see nothing; junk is a 400
+        let (status, _) =
+            send(&router, "GET", &format!("/api/upload/images/by-hash/blake3:{hash}"), &alice, vec![], &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send(&router, "GET", &by_hash, &bob, vec![], &[]).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) =
+            send(&router, "GET", "/api/upload/images/by-hash/nope", &alice, vec![], &[]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

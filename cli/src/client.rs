@@ -84,6 +84,26 @@ pub struct AssetStored {
     pub status: String,
 }
 
+/// An image found by `GET /api/upload/images/by-hash/{hash}`.
+#[derive(Debug, Deserialize)]
+pub struct FoundImage {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Dims {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// `PUT /api/images/{id}/rendition` response.
+#[derive(Debug, Deserialize)]
+pub struct RenditionStored {
+    /// "stored" | "skipped"
+    pub status: String,
+    pub preview: Option<Dims>,
+}
+
 impl Client {
     pub fn new(creds: &Credentials) -> Self {
         Self {
@@ -171,6 +191,55 @@ impl Client {
             .send()
             .map_err(|e| anyhow!("{} unreachable: {e}", self.base))?;
         Self::parse(resp, "registering image")
+    }
+
+    /// The caller's image whose stored bytes have this blake3, if any.
+    pub fn find_by_hash(&self, blake3_hex: &str) -> Result<Option<FoundImage>> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/api/upload/images/by-hash/{blake3_hex}")))
+            .bearer_auth(&self.token)
+            .send()
+            .map_err(|e| anyhow!("{} unreachable: {e}", self.base))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Self::parse(resp, "looking up image by content").map(Some)
+    }
+
+    /// Send a processed image as the rendition of an existing image. One
+    /// request, no chunking: renditions are JPEG/PNG/TIFF exports, and the
+    /// server caps them like assets.
+    pub fn attach_rendition(
+        &self,
+        image_id: &str,
+        blake3_hex: &str,
+        path: &Path,
+        content_type: &str,
+        tool: Option<&str>,
+    ) -> Result<RenditionStored> {
+        let file =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        let len = file.metadata()?.len();
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut query = format!("filename={}", percent_encode(&filename));
+        if let Some(tool) = tool {
+            query.push_str(&format!("&tool={}", percent_encode(tool)));
+        }
+        let resp = self
+            .http
+            .put(self.url(&format!("/api/images/{image_id}/rendition?{query}")))
+            .bearer_auth(&self.token)
+            .header("x-astra-content-hash", blake3_hex)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header(reqwest::header::CONTENT_LENGTH, len)
+            .body(reqwest::blocking::Body::sized(file, len))
+            .send()
+            .map_err(|e| anyhow!("{} unreachable: {e}", self.base))?;
+        Self::parse(resp, "attaching rendition")
     }
 
     /// Send the file as the image's asset. Small files go in one request;
@@ -273,5 +342,29 @@ impl Client {
             }
             return Self::parse(resp, "uploading asset");
         }
+    }
+}
+
+/// Minimal query-string encoding (RFC 3986 unreserved bytes pass through).
+fn percent_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn percent_encoding_covers_spaces_and_path_separators() {
+        assert_eq!(super::percent_encode("M42 final.png"), "M42%20final.png");
+        assert_eq!(super::percent_encode("C:\\out\\x"), "C%3A%5Cout%5Cx");
+        assert_eq!(super::percent_encode("PixInsight"), "PixInsight");
     }
 }

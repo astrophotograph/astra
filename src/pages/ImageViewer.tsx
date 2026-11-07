@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  HttpError,
   imageApi,
   isTauri,
   listen,
@@ -66,6 +67,7 @@ import {
   Star,
   Tag,
   Trash2,
+  Upload,
   Wand2,
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -121,6 +123,11 @@ export default function ImageViewerPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [imageVersion, setImageVersion] = useState(0);
+  // Web: attaching a rendition processed outside Astra, and the confirm
+  // step when an Astra action would replace one (daemon answers 409)
+  const [isAttaching, setIsAttaching] = useState(false);
+  const renditionInputRef = useRef<HTMLInputElement>(null);
+  const [replaceExternalPrompt, setReplaceExternalPrompt] = useState<(() => Promise<void>) | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
   const [isLoadingImage, setIsLoadingImage] = useState(false);
   const [plateSolveDialogOpen, setPlateSolveDialogOpen] = useState(false);
@@ -639,27 +646,59 @@ export default function ImageViewerPage() {
     return () => { unlisten.then((fn) => fn()); };
   }, [id]);
 
+  // The served preview changed on the server: drop the cached one and
+  // refetch the row (its updated_at versions the preview URL)
+  const reloadServedPreview = async () => {
+    await refetch();
+    setImageDataUrl(null);
+    setImageVersion((v) => v + 1);
+    queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+  };
+
   const handleRegeneratePreview = async (
     bgPercent?: number,
     sigma?: number,
     greenRemoval?: number,
     saturation?: number,
+    force = false,
   ) => {
     if (!image) return;
     setIsRegenerating(true);
     toast.info("Regenerating preview...");
     try {
-      await imageApi.regeneratePreview(image.id, bgPercent, sigma, greenRemoval, saturation);
+      await imageApi.regeneratePreview(image.id, bgPercent, sigma, greenRemoval, saturation, force);
       toast.success("Preview regenerated");
-      await refetch();
-      // Force clear and reload the image data
-      setImageDataUrl(null);
-      setImageVersion((v) => v + 1);
-      queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+      await reloadServedPreview();
     } catch (e) {
+      if (e instanceof HttpError && e.status === 409 && !force) {
+        // An externally attached rendition is in the way: ask first
+        setReplaceExternalPrompt(
+          () => () => handleRegeneratePreview(bgPercent, sigma, greenRemoval, saturation, true),
+        );
+        return;
+      }
       toast.error("Failed to regenerate preview: " + e);
     } finally {
       setIsRegenerating(false);
+    }
+  };
+
+  const handleAttachRendition = async (file: File) => {
+    if (!image) return;
+    setIsAttaching(true);
+    toast.info(`Uploading ${file.name}...`);
+    try {
+      const result = await imageApi.attachRendition(image.id, file);
+      if (result.status === "skipped") {
+        toast.info("That processed image is already attached");
+      } else {
+        toast.success("Processed image attached; it is now this image's preview");
+        await reloadServedPreview();
+      }
+    } catch (e) {
+      toast.error("Failed to attach processed image: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsAttaching(false);
     }
   };
 
@@ -819,6 +858,35 @@ export default function ImageViewerPage() {
               <SlidersHorizontal className="w-4 h-4 mr-2" />
               Stretch
             </Button>
+          )}
+          {!isTauri() && (
+            <>
+              <input
+                ref={renditionInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/tiff,image/webp,.jpg,.jpeg,.png,.tif,.tiff,.webp"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void handleAttachRendition(file);
+                }}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isAttaching}
+                onClick={() => renditionInputRef.current?.click()}
+                title="Attach a version you processed outside Astra (JPEG, PNG, TIFF). It becomes this image's preview; the original file is kept."
+              >
+                {isAttaching ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4 mr-2" />
+                )}
+                Attach Processed
+              </Button>
+            </>
           )}
           {!isEditing && (
             <Button variant="outline" size="sm" onClick={handleStartEdit}>
@@ -1149,6 +1217,36 @@ export default function ImageViewerPage() {
                 </>
               ) : (
                 <>
+                  {/* === Processing provenance (in Astra or attached from outside) === */}
+                  {image.metadata && (() => {
+                    try {
+                      const processing = JSON.parse(image.metadata)?.processing;
+                      if (!processing?.engine) return null;
+                      const external = processing.engine === "external";
+                      const when = processing.processed_at
+                        ? new Date(processing.processed_at).toLocaleString()
+                        : null;
+                      return (
+                        <div className="flex items-start gap-2 text-sm">
+                          {external ? (
+                            <Upload className="w-4 h-4 mt-0.5 text-muted-foreground" />
+                          ) : (
+                            <Wand2 className="w-4 h-4 mt-0.5 text-muted-foreground" />
+                          )}
+                          <span>
+                            {external
+                              ? `Processed outside Astra${processing.tool ? ` in ${processing.tool}` : ""}`
+                              : "Processed in Astra"}
+                            {external && processing.filename ? ` (${processing.filename})` : ""}
+                            {when ? ` · ${when}` : ""}
+                          </span>
+                        </div>
+                      );
+                    } catch {
+                      return null;
+                    }
+                  })()}
+
                   {/* === TOP: Capture Info === */}
                   {image.metadata && (() => {
                     try {
@@ -1586,6 +1684,35 @@ export default function ImageViewerPage() {
       </Dialog>
 
       {/* Processing Dialog */}
+      {/* Confirm replacing an externally attached rendition (Stretch Apply path) */}
+      <Dialog open={replaceExternalPrompt !== null} onOpenChange={(o) => !o && setReplaceExternalPrompt(null)}>
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Replace your external processing?</DialogTitle>
+            <DialogDescription>
+              This image's preview was attached from outside Astra. Applying a
+              stretch here replaces it with Astra's result; the attached file
+              stays stored and the original FITS is untouched.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReplaceExternalPrompt(null)}>
+              Keep external
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const retry = replaceExternalPrompt;
+                setReplaceExternalPrompt(null);
+                if (retry) void retry();
+              }}
+            >
+              Replace
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <ProcessingDialog
         open={processingDialogOpen}
         onOpenChange={setProcessingDialogOpen}
