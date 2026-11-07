@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -62,14 +62,37 @@ function getDefaultStretch(): { bgPercent: number; sigma: number } {
 export default function Images() {
   const queryClient = useQueryClient();
   const { data: allImages = [], isLoading } = useImages();
-  const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
+  // Page, search and the hidden toggle live in the URL (replaced in place,
+  // not pushed), so Back from an image lands on the page you left.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const page = Math.max(0, parseInt(searchParams.get("page") ?? "0", 10) || 0);
+  const search = searchParams.get("q") ?? "";
+  const showHidden = searchParams.get("hidden") === "1";
+  const updateParams = useCallback(
+    (changes: { page?: number; q?: string; hidden?: boolean }) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          const set = (key: string, value: string | null) =>
+            value ? next.set(key, value) : next.delete(key);
+          if (changes.page !== undefined) set("page", changes.page > 0 ? String(changes.page) : null);
+          if (changes.q !== undefined) set("q", changes.q || null);
+          if (changes.hidden !== undefined) set("hidden", changes.hidden ? "1" : null);
+          return next;
+        },
+        { replace: true }
+      );
+    },
+    [setSearchParams]
+  );
+  const setPage = useCallback(
+    (update: number | ((p: number) => number)) =>
+      updateParams({ page: typeof update === "function" ? update(page) : update }),
+    [updateParams, page]
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
-  // Hidden images (the duds of a bulk import) stay out of the grid unless
-  // asked for; the server keeps them and still lists them
-  const [showHidden, setShowHidden] = useState(false);
 
   // Refresh when auto-import adds new images — a desktop-only flow, so on
   // web there is nothing to listen for and no reason to poll.
@@ -123,10 +146,7 @@ export default function Images() {
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageImages = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
-  const handleSearch = (value: string) => {
-    setSearch(value);
-    setPage(0);
-  };
+  const handleSearch = (value: string) => updateParams({ q: value, page: 0 });
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -327,10 +347,7 @@ export default function Images() {
             <Button
               variant={showHidden ? "default" : "outline"}
               size="sm"
-              onClick={() => {
-                setShowHidden((v) => !v);
-                setPage(0);
-              }}
+              onClick={() => updateParams({ hidden: !showHidden, page: 0 })}
               title={showHidden ? "Hide the hidden images again" : "Show images hidden from the library"}
             >
               {showHidden ? <Eye className="w-4 h-4 mr-2" /> : <EyeOff className="w-4 h-4 mr-2" />}

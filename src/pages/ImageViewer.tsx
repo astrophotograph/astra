@@ -530,19 +530,31 @@ export default function ImageViewerPage() {
   };
 
   // Zoom/pan handlers
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom((z) => {
-      const newZoom = Math.min(10, Math.max(1, z * delta));
-      // Reset pan when zooming back to 1x
-      if (newZoom <= 1) {
-        setPan({ x: 0, y: 0 });
-        return 1;
-      }
-      return newZoom;
-    });
-  }, []);
+  // Wheel zoom only with Ctrl/⌘ held (a trackpad pinch arrives as a
+  // ctrl+wheel too); a plain scroll keeps scrolling the page. The step is
+  // proportional to the wheel delta, so a notch is ~5% and a trackpad's
+  // stream of small deltas no longer races to 10×.
+  useEffect(() => {
+    const el = imageContainerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const factor = Math.min(1.25, Math.max(0.8, Math.exp(-e.deltaY * 0.0005)));
+      setZoom((z) => {
+        const newZoom = Math.min(10, Math.max(1, z * factor));
+        // Reset pan when zooming back to 1x
+        if (newZoom <= 1) {
+          setPan({ x: 0, y: 0 });
+          return 1;
+        }
+        return newZoom;
+      });
+    };
+    // Non-passive: the browser's own ctrl+wheel page zoom must be suppressed.
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [liveStretch, isLoadingImage, imageDataUrl]);
 
   const handlePanStart = useCallback((e: React.MouseEvent) => {
     if (zoom <= 1) return;
@@ -1029,7 +1041,6 @@ export default function ImageViewerPage() {
           <div
             ref={imageContainerRef}
             className="rounded-lg overflow-hidden bg-muted relative"
-            onWheel={handleWheel}
             onMouseDown={handlePanStart}
             onMouseMove={handlePanMove}
             onMouseUp={handlePanEnd}
@@ -1054,7 +1065,7 @@ export default function ImageViewerPage() {
               <button
                 onClick={() => setZoom((z) => Math.min(10, z * 1.25))}
                 className="bg-slate-900/80 border border-border hover:bg-slate-700/80 text-slate-100 text-xs w-7 h-7 rounded flex items-center justify-center"
-                title="Zoom in"
+                title="Zoom in (Ctrl/⌘ + scroll, or pinch)"
               >+</button>
             </div>
             {isRegenerating && (
