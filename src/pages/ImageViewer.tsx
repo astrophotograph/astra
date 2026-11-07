@@ -1069,8 +1069,13 @@ export default function ImageViewerPage() {
               </div>
             ) : imageDataUrl ? (
               <>
+                {/* Fit the whole frame in the viewport: wide images fill the
+                    column, tall ones are capped to the window height and
+                    centred, so nothing has to be scrolled to be seen. The
+                    wrapper shrinks to the img so the overlay stays aligned. */}
+                <div className="flex justify-center">
                 <div
-                  className="relative inline-block w-full"
+                  className="relative inline-block max-w-full"
                   style={{
                     transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
                     transformOrigin: "center center",
@@ -1080,7 +1085,7 @@ export default function ImageViewerPage() {
                   <img
                     src={imageDataUrl}
                     alt={image.filename}
-                    className="w-full h-auto block"
+                    className="block max-w-full w-auto h-auto max-h-[calc(100vh-12rem)]"
                     draggable={false}
                     onLoad={(e) => {
                       const img = e.currentTarget;
@@ -1188,6 +1193,7 @@ export default function ImageViewerPage() {
                     })}
                     </svg>
                   )}
+                </div>
                 </div>
               </>
             ) : (

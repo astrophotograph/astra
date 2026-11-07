@@ -318,6 +318,9 @@ pub fn get_image_collection_ids(
 }
 
 /// Get images for a collection with full image data
+/// The images a collection publishes: members of the collection that are
+/// not hidden. Hidden images stay in the collection (and in the owner's
+/// library) but never reach a gallery manifest or signed record.
 pub fn get_images_in_collection(
     conn: &mut SqliteConnection,
     collection_id: &str,
@@ -333,6 +336,7 @@ pub fn get_images_in_collection(
 
     let result = images::table
         .filter(images::id.eq_any(image_ids))
+        .filter(images::hidden.eq(false))
         .order(images::created_at.desc())
         .load(conn);
 
@@ -354,10 +358,24 @@ pub fn get_collection_cover_image_id(
     collection_images::table
         .inner_join(images::table)
         .filter(collection_images::collection_id.eq(collection_id))
+        .filter(images::hidden.eq(false))
         .order(images::created_at.desc())
         .select(images::id)
         .first::<String>(conn)
         .optional()
+}
+
+/// How many of a collection's images a gallery shows (hidden ones excluded).
+pub fn count_visible_images_in_collection(
+    conn: &mut SqliteConnection,
+    collection_id: &str,
+) -> QueryResult<i64> {
+    collection_images::table
+        .inner_join(images::table)
+        .filter(collection_images::collection_id.eq(collection_id))
+        .filter(images::hidden.eq(false))
+        .count()
+        .get_result(conn)
 }
 
 /// Get collections for an image with full collection data
@@ -1278,6 +1296,55 @@ mod tests {
 
         let images = get_images_in_collection(&mut conn, "coll-1").unwrap();
         assert_eq!(images.len(), 3);
+    }
+
+    #[test]
+    fn hidden_images_are_left_out_of_what_a_collection_publishes() {
+        let pool = setup_test_db();
+        let mut conn = pool.get().unwrap();
+        insert_test_user(&mut conn, "user-1");
+        let coll = NewCollection {
+            id: "coll-1".to_string(),
+            user_id: "user-1".to_string(),
+            name: "Session".to_string(),
+            description: None,
+            visibility: "private".to_string(),
+            template: None,
+            favorite: false,
+            tags: None,
+            metadata: None,
+            archived: false,
+        };
+        create_collection(&mut conn, &coll).unwrap();
+        for i in 0..3 {
+            create_image(&mut conn, &make_new_image(&format!("img-{i}"), "user-1")).unwrap();
+            add_image_to_collection(
+                &mut conn,
+                &NewCollectionImage {
+                    id: format!("ci-{i}"),
+                    collection_id: "coll-1".to_string(),
+                    image_id: format!("img-{i}"),
+                },
+            )
+            .unwrap();
+        }
+        // The newest (last inserted) image is the natural cover; hide it.
+        let cover_before = get_collection_cover_image_id(&mut conn, "coll-1").unwrap().unwrap();
+        diesel::update(images::table.find(&cover_before))
+            .set(images::hidden.eq(true))
+            .execute(&mut conn)
+            .unwrap();
+
+        let published = get_images_in_collection(&mut conn, "coll-1").unwrap();
+        assert_eq!(published.len(), 2);
+        assert!(published.iter().all(|img| img.id != cover_before && !img.hidden));
+        assert_ne!(
+            get_collection_cover_image_id(&mut conn, "coll-1").unwrap().as_deref(),
+            Some(cover_before.as_str())
+        );
+        assert_eq!(count_visible_images_in_collection(&mut conn, "coll-1").unwrap(), 2);
+        // Still a member of the collection as far as the owner is concerned.
+        assert_eq!(get_collection_image_count(&mut conn, "coll-1").unwrap(), 3);
     }
 
     // ========================================================================

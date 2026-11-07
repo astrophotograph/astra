@@ -150,6 +150,7 @@ pub async fn update_image(
     Path(id): Path<String>,
     Json(body): Json<UpdateImageBody>,
 ) -> Response {
+    let hidden_changed = body.hidden.is_some();
     let input = UpdateImageInput {
         id,
         collection_id: body.collection_id,
@@ -170,9 +171,40 @@ pub async fn update_image(
     let db = state.db.clone();
     let user_id = user.user_id.clone();
     match tokio::task::spawn_blocking(move || update_image_core(&db, &user_id, input)).await {
-        Ok(Ok(image)) => Json(strip_thumbnail(image)).into_response(),
+        Ok(Ok(image)) => {
+            if hidden_changed {
+                resign_collections_with(&state, &user.user_id, &image.id).await;
+            }
+            Json(strip_thumbnail(image)).into_response()
+        }
         Ok(Err(e)) => core_error("update_image", e),
         Err(e) => internal("update_image task", e.to_string()),
+    }
+}
+
+/// Hidden images are left out of what a collection publishes, so flipping
+/// the flag re-signs every published collection carrying the image (the
+/// legacy unsigned manifest is built live and needs nothing). Best-effort:
+/// a failure is logged, the update itself has already landed.
+async fn resign_collections_with(state: &Arc<DaemonState>, user_id: &str, image_id: &str) {
+    let Some(signer) = state.signer.clone() else {
+        return;
+    };
+    let db = state.db.clone();
+    let hoardfs = state.hoardfs.clone();
+    let user_id = user_id.to_string();
+    let image_id = image_id.to_string();
+    let outcome = tokio::task::spawn_blocking(move || {
+        crate::share::records::resign_collections_with_image(
+            &db, &hoardfs, &signer, &user_id, &image_id,
+        )
+    })
+    .await;
+    match outcome {
+        Ok(Ok(n)) if n > 0 => log::info!("hidden flag change re-signed {n} collection(s)"),
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => log::warn!("re-sign after hidden flag change failed: {e}"),
+        Err(e) => log::warn!("re-sign task after hidden flag change failed: {e}"),
     }
 }
 

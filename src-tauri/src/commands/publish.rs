@@ -365,8 +365,9 @@ pub fn list_recent_public_core(
 
         let cover = repository::get_collection_cover_image_id(&mut conn, &record.collection_id)
             .map_err(|e| e.to_string())?;
-        let image_count = repository::get_collection_image_count(&mut conn, &record.collection_id)
-            .map_err(|e| e.to_string())?;
+        let image_count =
+            repository::count_visible_images_in_collection(&mut conn, &record.collection_id)
+                .map_err(|e| e.to_string())?;
 
         let thumb_url = cover
             .as_ref()
