@@ -618,7 +618,7 @@ async fn serve_gallery_asset(
                 acl::PRIVATE_CACHE_CONTROL
             };
             let mut response =
-                variant_response(state, image, volume, quality, &headers, cache).await;
+                variant_response(state, image, volume, quality, &headers, cache, false).await;
             acl::mark_if_gated(&mut response, &access);
             response
         }

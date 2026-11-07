@@ -447,7 +447,7 @@ pub fn fits_enrichment(image: &Image, bytes: &[u8]) -> Option<FitsEnrichment> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::daemon::auth::mint_token;
     use crate::daemon::ingest::CONTENT_HASH_HEADER;

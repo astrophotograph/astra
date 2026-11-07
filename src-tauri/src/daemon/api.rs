@@ -562,7 +562,16 @@ async fn serve_variant(
     };
 
     let volume = tenancy::volume_name(&user.user_id);
-    variant_response(state, image, volume, quality, &headers, "private, max-age=3600").await
+    variant_response(
+        state,
+        image,
+        volume,
+        quality,
+        &headers,
+        "private, max-age=3600",
+        true,
+    )
+    .await
 }
 
 /// Shared variant-bytes response: conditional ETag handling (blob_id is the
@@ -576,6 +585,7 @@ pub(crate) async fn variant_response(
     quality: Quality,
     req_headers: &HeaderMap,
     cache_control: &'static str,
+    backfill: bool,
 ) -> Response {
     let etag = image.blob_id.as_ref().map(|_| etag_for(&image));
     if let Some(etag) = &etag {
@@ -601,10 +611,35 @@ pub(crate) async fn variant_response(
 
     let hfs_arc = state.hoardfs.clone();
     let rt = tokio::runtime::Handle::current();
+    let fits = hoardfs_core::detect_content_type(&hfs_path)
+        .is_some_and(|t| t.contains("fits"));
     let fetched = tokio::task::spawn_blocking(move || {
         let hfs = hfs_arc.lock().map_err(|_| "HoardFS lock poisoned".to_string())?;
-        rt.block_on(hfs.get_file_quality(&volume, &hfs_path, quality))
-            .map_err(|e| e.to_string())
+        let mut served = rt
+            .block_on(hfs.get_file_quality(&volume, &hfs_path, quality.clone()))
+            .map_err(|e| e.to_string())?;
+        // No rendition yet (the asset landed before uploads generated
+        // them, or generation failed then): build them once, now. Only
+        // for the owner's own API — public `/blob/{cid}` and gallery
+        // routes must keep serving the bytes the signed digests describe;
+        // they pick up new renditions through the re-sign path.
+        if backfill && served.1 == Quality::Raw && quality != Quality::Raw {
+            match rt.block_on(hfs.generate_variants(&volume, &hfs_path)) {
+                Ok(made) if !made.is_empty() => {
+                    served = rt
+                        .block_on(hfs.get_file_quality(&volume, &hfs_path, quality.clone()))
+                        .map_err(|e| e.to_string())?;
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("rendition generation for {hfs_path}: {e}"),
+            }
+        }
+        // Raw FITS bytes are no use to an <img>, and a stacked frame runs
+        // to hundreds of MB: answer 404 rather than ship the file.
+        if backfill && served.1 == Quality::Raw && quality != Quality::Raw && fits {
+            return Err(format!("no rendition for FITS asset {hfs_path}"));
+        }
+        Ok(served)
     })
     .await;
 

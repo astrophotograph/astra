@@ -498,7 +498,11 @@ async fn store_asset(
                 .lock()
                 .map_err(|_| "HoardFS lock poisoned".to_string())?;
             tenancy::ensure_user_volume(&hfs, &user_id)?;
-            rt.block_on(hfs.put_file(&volume, &hfs_path, &body))
+            // `true`: build the thumbnail/preview renditions now, so the
+            // web app has a JPEG to show for a FITS asset (plain put_file
+            // stores the bytes only). Rendition failures are logged by
+            // HoardFS and never fail the put.
+            rt.block_on(hfs.put_file_with_variants(&volume, &hfs_path, &body, true))
                 .map_err(|e| format!("put_file {hfs_path}: {e}"))?;
             hfs.get_file_info(&volume, &hfs_path)
                 .map_err(|e| e.to_string())?
@@ -552,7 +556,7 @@ async fn store_asset(
             ))
             .execute(&mut conn)
             .map_err(|e| e.to_string())?;
-        // put_file regenerated the renditions of `stored_blob` (a re-push
+        // The put regenerated the renditions of `stored_blob` (a re-push
         // of already-known content rewrites them in place): forget their
         // cached digests so the re-sign below hashes the bytes it has.
         crate::share::records::drop_variant_digests(
@@ -1460,6 +1464,18 @@ mod tests {
             "spool was discarded, so offset 0 is accepted again: {body}"
         );
 
+        // Renditions were generated with the store: the thumbnail route
+        // serves a JPEG, not the original.
+        let (status, ctype, _) = fetch(&router, &format!("/api/images/{}/thumbnail", image_ids[0]), &alice).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ctype, "image/jpeg");
+        {
+            let hfs = state.hoardfs.lock().unwrap();
+            let image = crate::commands::images::fetch_owned_image(&mut state.db.get().unwrap(), "alice", &image_ids[0]).unwrap().unwrap();
+            let path = crate::commands::hoardfs::resolve_hfs_path(&image).unwrap();
+            assert!(!hfs.list_variants(&tenancy::volume_name("alice"), &path).unwrap().is_empty());
+        }
+
         // Total over the asset limit → 413 before spooling.
         let (small, _tmp2, carol, _) = seeded(IngestLimits {
             max_images_per_push: 10,
@@ -1481,6 +1497,71 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         drop(tmp);
+    }
+
+    async fn fetch(router: &axum::Router, uri: &str, token: &str) -> (StatusCode, String, Vec<u8>) {
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("Authorization", format!("Bearer {token}"))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let ctype = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let bytes = to_bytes(resp.into_body(), 1 << 26).await.unwrap().to_vec();
+        (status, ctype, bytes)
+    }
+
+    /// Assets stored before renditions were generated on upload get them
+    /// on first view; a FITS asset without a usable rendition is a 404,
+    /// never the raw file.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thumbnail_route_backfills_missing_renditions() {
+        let (state, _tmp, alice, _bob) = seeded(IngestLimits::default()).await;
+        let router = crate::daemon::router(state.clone());
+        let collection_id = uuid::Uuid::new_v4().to_string();
+        let png_id = uuid::Uuid::new_v4().to_string();
+        let fits_id = uuid::Uuid::new_v4().to_string();
+        let body = serde_json::json!({
+            "collection": { "id": collection_id, "name": "Legacy" },
+            "images": [
+                { "id": png_id, "filename": "legacy.png", "metadata": r#"{"hoardfs":{"hfs_path":"/legacy/legacy.png"}}"# },
+                { "id": fits_id, "filename": "legacy.fit", "metadata": r#"{"hoardfs":{"hfs_path":"/legacy/legacy.fit"}}"# },
+            ],
+        });
+        let (status, _) = send(&router, "POST", "/api/push/collections", &alice, body.to_string().into_bytes(), &[]).await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Bytes stored the old way: no renditions.
+        let png = tiny_png();
+        let fits = crate::daemon::upload::tests::tiny_fits(Some("M1"));
+        {
+            let hfs = state.hoardfs.lock().unwrap();
+            tenancy::ensure_user_volume(&hfs, "alice").unwrap();
+            let volume = tenancy::volume_name("alice");
+            hfs.put_file(&volume, "/legacy/legacy.png", &png).await.unwrap();
+            hfs.put_file(&volume, "/legacy/legacy.fit", &fits).await.unwrap();
+            assert!(hfs.list_variants(&volume, "/legacy/legacy.png").unwrap().is_empty());
+        }
+
+        let (status, ctype, bytes) = fetch(&router, &format!("/api/images/{png_id}/thumbnail"), &alice).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ctype, "image/jpeg", "generated on first view, not the PNG original");
+        assert!(!bytes.is_empty());
+        {
+            let hfs = state.hoardfs.lock().unwrap();
+            assert!(!hfs.list_variants(&tenancy::volume_name("alice"), "/legacy/legacy.png").unwrap().is_empty());
+        }
+
+        let (status, ctype, _) = fetch(&router, &format!("/api/images/{fits_id}/preview"), &alice).await;
+        assert_ne!(ctype, "image/fits", "raw FITS is never served as a rendition");
+        assert!(status == StatusCode::OK || status == StatusCode::NOT_FOUND, "{status}");
     }
 
     #[test]
