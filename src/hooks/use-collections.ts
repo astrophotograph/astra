@@ -13,6 +13,7 @@ import {
   type Image,
 } from "@/lib/tauri/commands";
 import { extractExposureSeconds } from "@/components/CatalogObjectDialog";
+import { isVisibleImage } from "@/hooks/use-images";
 
 export const collectionKeys = {
   all: ["collections"] as const,
@@ -108,14 +109,16 @@ export function useCollectionsMetadata(collections: Collection[]) {
           const count = await collectionImageApi.getCount(collection.id);
 
           if (count > 0) {
-            const images = await imageApi.getByCollection(collection.id);
+            const images = (await imageApi.getByCollection(collection.id)).filter(
+              isVisibleImage
+            );
             const favorite = images.find((img) => img.favorite);
             const totalExposure = images.reduce(
               (sum, img) => sum + extractExposureSeconds(img),
               0
             );
             result[collection.id] = {
-              imageCount: count,
+              imageCount: images.length,
               plateSolvedCount: images.filter(isPlateSolved).length,
               previewImage: favorite || images[0] || null,
               totalExposureSeconds: totalExposure,

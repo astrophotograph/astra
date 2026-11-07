@@ -114,7 +114,8 @@ export default function ImageViewerPage() {
   const { data: collectionImagesNav = [] } = useCollectionImages(collectionId || "");
   const navIndex = collectionImagesNav.findIndex((img) => img.id === id);
   const prevImage = navIndex > 0 ? collectionImagesNav[navIndex - 1] : null;
-  const nextImage = navIndex < collectionImagesNav.length - 1 ? collectionImagesNav[navIndex + 1] : null;
+  const nextImage =
+    navIndex >= 0 && navIndex < collectionImagesNav.length - 1 ? collectionImagesNav[navIndex + 1] : null;
   const [isEditing, setIsEditing] = useState(false);
   const [editSummary, setEditSummary] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -820,7 +821,7 @@ export default function ImageViewerPage() {
                 <ChevronLeft className="w-4 h-4" />
               </Button>
               <span className="text-sm text-muted-foreground min-w-[60px] text-center">
-                {navIndex + 1} of {collectionImagesNav.length}
+                {navIndex >= 0 ? `${navIndex + 1} of ${collectionImagesNav.length}` : "hidden"}
               </span>
               <Button
                 variant="ghost"

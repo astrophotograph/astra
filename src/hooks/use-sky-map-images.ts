@@ -16,6 +16,7 @@ import {
   getCollectionColor,
   type ImageFootprint,
 } from "@/lib/sky-map-utils";
+import { isVisibleImage } from "@/hooks/use-images";
 
 export interface UnsolvedImage {
   id: string;
@@ -191,6 +192,7 @@ export function useSkyMapImages(
           const images = await imageApi.getByCollection(collection.id);
 
           for (const image of images) {
+            if (!isVisibleImage(image)) continue;
             if (isPlateSolved(image)) {
               // Process plate-solved images
               const footprint = getImageFootprint(image, collection);

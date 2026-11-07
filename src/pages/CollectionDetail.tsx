@@ -61,7 +61,7 @@ import {
 import CollectFilesDialog from "@/components/CollectFilesDialog";
 import CatalogCollectionView from "@/components/CatalogCollectionView";
 import { useCollection, useCollections, useUpdateCollection, useDeleteCollection } from "@/hooks/use-collections";
-import { useCollectionImages, useImages, useUpdateImage, imageKeys } from "@/hooks/use-images";
+import { useCollectionImages, useImages, useUpdateImage, imageKeys, isVisibleImage } from "@/hooks/use-images";
 import {
   imageApi,
   isTauri,
@@ -352,7 +352,7 @@ export default function CollectionDetailPage() {
   // Images not in this collection (filter out ones already in collection)
   const collectionImageIds = new Set(collectionImages.map((img) => img.id));
   const availableImages = allImages.filter(
-    (img) => !collectionImageIds.has(img.id)
+    (img) => isVisibleImage(img) && !collectionImageIds.has(img.id)
   );
 
   // Start editing mode

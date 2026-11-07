@@ -10,6 +10,15 @@ import {
   type UpdateImageInput,
 } from "@/lib/tauri/commands";
 
+/** Library visibility: hidden images stay out of every browsing surface
+ *  (collections, slideshows, sky map) except the Images screen's explicit
+ *  "Show hidden" toggle. */
+export function isVisibleImage(image: Image): boolean {
+  return !image.hidden;
+}
+
+const selectVisible = (images: Image[]) => images.filter(isVisibleImage);
+
 export const imageKeys = {
   all: ["images"] as const,
   lists: () => [...imageKeys.all, "list"] as const,
@@ -30,6 +39,7 @@ export function useCollectionImages(collectionId: string) {
   return useQuery({
     queryKey: imageKeys.byCollection(collectionId),
     queryFn: () => imageApi.getByCollection(collectionId),
+    select: selectVisible,
     enabled: !!collectionId,
   });
 }
