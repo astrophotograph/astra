@@ -389,6 +389,7 @@ const WEB_ROUTES = {
     if (!resp.ok) return fail(resp);
     return resp.json();
   },
+  revert_rendition: (a: Args) => json("POST", `/api/images/${a.id}/rendition/revert`),
 
   // ---- schedules ----------------------------------------------------------
   get_schedules: () => json("GET", "/api/schedules"),
@@ -505,6 +506,7 @@ type InScopeCommand =
   | "get_stretch_data"
   | "regenerate_preview"
   | "attach_rendition"
+  | "revert_rendition"
   | "get_schedules"
   | "get_active_schedule"
   | "get_active_schedules"

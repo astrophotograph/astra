@@ -276,6 +276,10 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             ),
         )
         .route(
+            "/images/{id}/rendition/revert",
+            axum::routing::post(rendition::revert_rendition),
+        )
+        .route(
             "/images/{id}/plate-solve",
             axum::routing::post(solve::plate_solve_image),
         )

@@ -50,6 +50,7 @@ pub struct UpdateImageInput {
     pub annotations: Option<String>,
     pub metadata: Option<String>,
     pub thumbnail: Option<String>,
+    pub hidden: Option<bool>,
 }
 
 /// Load an image only if it belongs to `user_id`.
@@ -156,6 +157,7 @@ pub fn update_image_core(
         thumbnail: input.thumbnail,
         fits_url: None,
         blob_id: None,
+        hidden: input.hidden,
     };
 
     repository::update_image(&mut conn, &input.id, &update).map_err(|e| e.to_string())
@@ -853,6 +855,7 @@ mod tests {
                 annotations: None,
                 metadata: None,
                 thumbnail: None,
+                hidden: None,
             },
         )
         .unwrap();
@@ -891,6 +894,7 @@ mod tests {
                 annotations: None,
                 metadata: None,
                 thumbnail: None,
+                hidden: None,
             },
         )
         .is_err());

@@ -98,6 +98,7 @@ diesel::table! {
         fits_url -> Nullable<Text>,
         blob_id -> Nullable<Text>,
         rkey -> Nullable<Text>,
+        hidden -> Bool,
     }
 }
 

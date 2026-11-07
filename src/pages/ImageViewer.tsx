@@ -614,6 +614,51 @@ export default function ImageViewerPage() {
     }
   };
 
+  // Hide from / restore to the Images library listing (the image keeps
+  // its collections and sharing)
+  const handleToggleHidden = async () => {
+    if (!image) return;
+    try {
+      await updateImage.mutateAsync({ id: image.id, hidden: !image.hidden });
+      toast.success(image.hidden ? "Image shown in library again" : "Image hidden from library");
+    } catch (err) {
+      toast.error("Failed to update image");
+      console.error(err);
+    }
+  };
+
+  // metadata.rendition / metadata.processing, parsed once per row
+  const renditionState = useMemo(() => {
+    if (!image?.metadata) return { attached: false, external: false };
+    try {
+      const meta = JSON.parse(image.metadata);
+      return {
+        attached: !!meta?.rendition,
+        external: meta?.processing?.engine === "external",
+      };
+    } catch {
+      return { attached: false, external: false };
+    }
+  }, [image?.metadata]);
+
+  const handleRevertRendition = async () => {
+    if (!image) return;
+    setIsRegenerating(true);
+    try {
+      const result = await imageApi.revertRendition(image.id);
+      if (result.status === "skipped") {
+        toast.info("The attached rendition is already the preview");
+      } else {
+        toast.success("Reverted to the attached rendition");
+        await reloadServedPreview();
+      }
+    } catch (e) {
+      toast.error("Failed to revert: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
   // Read default stretch from auto-import config in localStorage
   const defaultStretch = useMemo(() => {
     try {
@@ -930,6 +975,24 @@ export default function ImageViewerPage() {
                   <DropdownMenuSeparator />
                 </>
               )}
+              {!isTauri() && renditionState.attached && !renditionState.external && (
+                <>
+                  <DropdownMenuItem onClick={handleRevertRendition} disabled={isRegenerating}>
+                    <Upload className="w-4 h-4 mr-2" />
+                    Revert to Attached Rendition
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onClick={handleToggleHidden}>
+                {image.hidden ? (
+                  <Eye className="w-4 h-4 mr-2" />
+                ) : (
+                  <EyeOff className="w-4 h-4 mr-2" />
+                )}
+                {image.hidden ? "Show in Library" : "Hide from Library"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem
                 className="text-destructive"
                 onClick={() => setDeleteDialogOpen(true)}
@@ -1239,6 +1302,9 @@ export default function ImageViewerPage() {
                               : "Processed in Astra"}
                             {external && processing.filename ? ` (${processing.filename})` : ""}
                             {when ? ` · ${when}` : ""}
+                            {!external && renditionState.attached
+                              ? " · attached rendition kept (revert from the menu)"
+                              : ""}
                           </span>
                         </div>
                       );

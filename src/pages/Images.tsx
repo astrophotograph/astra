@@ -21,6 +21,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Compass,
+  Eye,
+  EyeOff,
   ImageIcon,
   Loader2,
   RefreshCw,
@@ -65,6 +67,9 @@ export default function Images() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
+  // Hidden images (the duds of a bulk import) stay out of the grid unless
+  // asked for; the server keeps them and still lists them
+  const [showHidden, setShowHidden] = useState(false);
 
   // Refresh when auto-import adds new images — a desktop-only flow, so on
   // web there is nothing to listen for and no reason to poll.
@@ -91,11 +96,16 @@ export default function Images() {
     };
   }, [queryClient]);
 
-  // Sort by created_at descending, filter by search
+  const hiddenCount = useMemo(() => allImages.filter((img) => img.hidden).length, [allImages]);
+
+  // Sort by created_at descending, drop hidden unless shown, filter by search
   const filtered = useMemo(() => {
     let images = [...allImages].sort(
       (a, b) => b.created_at.localeCompare(a.created_at)
     );
+    if (!showHidden) {
+      images = images.filter((img) => !img.hidden);
+    }
 
     if (search) {
       const q = search.toLowerCase();
@@ -108,7 +118,7 @@ export default function Images() {
     }
 
     return images;
-  }, [allImages, search]);
+  }, [allImages, search, showHidden]);
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const pageImages = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
@@ -255,6 +265,42 @@ export default function Images() {
     }
   }, [selectedIds, allImages, queryClient]);
 
+  // Batch hide / unhide
+  const handleBatchHidden = useCallback(
+    async (hidden: boolean) => {
+      const ids = [...selectedIds].filter((id) => {
+        const img = allImages.find((i) => i.id === id);
+        return img && img.hidden !== hidden;
+      });
+      if (ids.length === 0) {
+        toast.info(hidden ? "Selected images are already hidden" : "Selected images are already shown");
+        return;
+      }
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          await imageApi.update({ id, hidden });
+        } catch (e) {
+          failed++;
+          console.error(`Failed to update ${id}:`, e);
+        }
+      }
+      queryClient.invalidateQueries({ queryKey: imageKeys.lists() });
+      const done = ids.length - failed;
+      if (failed > 0) {
+        toast.warning(`${hidden ? "Hid" : "Restored"} ${done}, failed ${failed}`);
+      } else {
+        toast.success(
+          hidden
+            ? `Hid ${done} image${done !== 1 ? "s" : ""} from the library`
+            : `Restored ${done} image${done !== 1 ? "s" : ""} to the library`,
+        );
+      }
+      clearSelection();
+    },
+    [selectedIds, allImages, queryClient, clearSelection]
+  );
+
   const selectedCount = selectedIds.size;
   const defaultStretch = getDefaultStretch();
   const isProcessing = processingIds.size > 0;
@@ -272,11 +318,25 @@ export default function Images() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             {allImages.length} total image{allImages.length !== 1 ? "s" : ""}
+            {hiddenCount > 0 && !showHidden && ` — ${hiddenCount} hidden`}
             {search && ` — ${filtered.length} matching`}
           </p>
         </div>
-        {/* Selection only drives regenerate/plate-solve — desktop-only ops. */}
-        {isTauri() && (
+        <div className="flex items-center gap-2">
+          {(hiddenCount > 0 || showHidden) && (
+            <Button
+              variant={showHidden ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setShowHidden((v) => !v);
+                setPage(0);
+              }}
+              title={showHidden ? "Hide the hidden images again" : "Show images hidden from the library"}
+            >
+              {showHidden ? <Eye className="w-4 h-4 mr-2" /> : <EyeOff className="w-4 h-4 mr-2" />}
+              {showHidden ? "Showing hidden" : `Show hidden (${hiddenCount})`}
+            </Button>
+          )}
           <Button
             variant={selectMode ? "default" : "outline"}
             size="sm"
@@ -291,7 +351,7 @@ export default function Images() {
             <CheckSquare className="w-4 h-4 mr-2" />
             {selectMode ? "Done" : "Select"}
           </Button>
-        )}
+        </div>
       </div>
 
       {/* Selection toolbar */}
@@ -310,6 +370,19 @@ export default function Images() {
                 Clear
               </Button>
               <div className="h-4 w-px bg-slate-600" />
+              <Button variant="outline" size="sm" onClick={() => handleBatchHidden(true)}>
+                <EyeOff className="w-3 h-3 mr-1" />
+                Hide
+              </Button>
+              {showHidden && (
+                <Button variant="outline" size="sm" onClick={() => handleBatchHidden(false)}>
+                  <Eye className="w-3 h-3 mr-1" />
+                  Unhide
+                </Button>
+              )}
+              {/* Regenerate / plate-solve batches are desktop-only ops */}
+              {isTauri() && (
+              <>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="sm" disabled={isProcessing}>
@@ -345,6 +418,8 @@ export default function Images() {
                 <Compass className={`w-3 h-3 mr-1 ${isProcessing ? "animate-spin" : ""}`} />
                 Plate Solve
               </Button>
+              </>
+              )}
             </>
           )}
         </div>
@@ -381,12 +456,14 @@ export default function Images() {
         <div className="text-center py-12 rounded-xl border border-border bg-slate-800/50">
           <ImageIcon className="w-12 h-12 mx-auto mb-4 text-slate-500 opacity-60" />
           <p className="font-serif text-lg text-slate-300">
-            {search ? "No images match your search" : "No images yet"}
+            {search ? "No images match your search" : hiddenCount > 0 ? "Every image is hidden" : "No images yet"}
           </p>
           <p className="text-muted-foreground text-sm mt-1">
             {search
               ? "Try a different search term"
-              : isTauri()
+              : hiddenCount > 0
+                ? "Use \"Show hidden\" above to see them"
+                : isTauri()
                 ? "Import images via bulk scan or auto-import"
                 : "Push images from the Astra desktop app"}
           </p>
@@ -491,7 +568,7 @@ function ImageCard({
           src={thumbnailSrc}
           alt={title}
           className={`w-full h-full object-cover transition-opacity ${
-            selected ? "opacity-75" : ""
+            selected ? "opacity-75" : image.hidden ? "opacity-40" : ""
           }`}
           loading="lazy"
         />
@@ -516,6 +593,18 @@ function ImageCard({
             onCheckedChange={() => onToggleSelect()}
             className="border-white/60 data-[state=checked]:bg-indigo-500 data-[state=checked]:border-indigo-500"
           />
+        </div>
+      )}
+
+      {/* Hidden marker (only visible when hidden images are shown) */}
+      {image.hidden && (
+        <div
+          className={`absolute top-1.5 z-10 bg-slate-900/80 text-slate-300 rounded-full p-1 ${
+            selectMode ? "left-8" : "left-1.5"
+          }`}
+          title="Hidden from the library"
+        >
+          <EyeOff className="w-3 h-3" />
         </div>
       )}
 

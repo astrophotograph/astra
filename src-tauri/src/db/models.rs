@@ -207,6 +207,9 @@ pub struct Image {
     /// `gallery.astra.image` record key (TID), minted at first signed
     /// publish and reused thereafter; NULL until then.
     pub rkey: Option<String>,
+    /// Owner's "keep this out of my library listing" flag. Listing only:
+    /// a hidden image stays in its collections and publishes normally.
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Insertable, Serialize, Deserialize)]
@@ -252,6 +255,7 @@ pub struct UpdateImage {
     pub thumbnail: Option<String>,
     pub fits_url: Option<String>,
     pub blob_id: Option<String>,
+    pub hidden: Option<bool>,
 }
 
 // ============================================================================

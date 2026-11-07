@@ -141,6 +141,7 @@ pub struct UpdateImageBody {
     location: Option<String>,
     annotations: Option<String>,
     metadata: Option<String>,
+    hidden: Option<bool>,
 }
 
 pub async fn update_image(
@@ -164,6 +165,7 @@ pub async fn update_image(
         annotations: body.annotations,
         metadata: body.metadata,
         thumbnail: None,
+        hidden: body.hidden,
     };
     let db = state.db.clone();
     let user_id = user.user_id.clone();
@@ -534,6 +536,58 @@ mod tests {
 
     fn json(body: &[u8]) -> serde_json::Value {
         serde_json::from_slice(body).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn hidden_flag_round_trips_and_defaults_off() {
+        let (state, _tmp, alice, bob) = state_with_users().await;
+        let router = crate::daemon::router(state.clone());
+        let image = seed_image(&state.db, "alice", "dud.fits");
+        let uri = format!("/api/images/{}", image.id);
+
+        let (status, body) = send(&router, &alice, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["hidden"], false);
+
+        let (status, body) = send(
+            &router,
+            &alice,
+            "PATCH",
+            &uri,
+            Some(serde_json::json!({ "hidden": true })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(json(&body)["hidden"], true);
+        // Other fields untouched by a hidden-only patch
+        assert_eq!(json(&body)["filename"], "dud.fits");
+
+        // Still listed (hiding is a client-side listing preference), flagged
+        let (_, body) = send(&router, &alice, "GET", "/api/images", None).await;
+        let items = json(&body)["items"].clone();
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["hidden"], true);
+
+        // Someone else can't flip it
+        let (status, _) = send(
+            &router,
+            &bob,
+            "PATCH",
+            &uri,
+            Some(serde_json::json!({ "hidden": false })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, body) = send(
+            &router,
+            &alice,
+            "PATCH",
+            &uri,
+            Some(serde_json::json!({ "hidden": false })),
+        )
+        .await;
+        assert_eq!(json(&body)["hidden"], false);
     }
 
     #[tokio::test(flavor = "multi_thread")]

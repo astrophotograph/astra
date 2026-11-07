@@ -135,6 +135,9 @@ export interface Image {
   /** Server-truth flag from the daemon API: a processable FITS asset
    *  exists server-side. Absent on desktop (use local fits_url checks). */
   processable?: boolean;
+  /** Owner's "keep out of my library listing" flag. Listing only: the
+   *  image stays in its collections and publishes normally. */
+  hidden: boolean;
 }
 
 export interface CreateImageInput {
@@ -165,6 +168,7 @@ export interface UpdateImageInput {
   location?: string;
   annotations?: string;
   metadata?: string;
+  hidden?: boolean;
 }
 
 export interface PopulateFitsUrlsResult {
@@ -344,6 +348,13 @@ export const imageApi = {
    */
   attachRendition: (id: string, file: File, tool?: string) =>
     invoke<AttachRenditionResult>("attach_rendition", { id, file, tool }),
+
+  /**
+   * Web only: make the attached rendition the served preview again after
+   * an in-app process replaced it. 404 when nothing was ever attached.
+   */
+  revertRendition: (id: string) =>
+    invoke<AttachRenditionResult>("revert_rendition", { id }),
 
   /** Binary payload for the WebGL live-stretch preview. Desktop reads the
    *  local FITS; web fetches the daemon's `/stretch-data` endpoint. */
