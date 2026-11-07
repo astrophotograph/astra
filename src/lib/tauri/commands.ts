@@ -824,6 +824,9 @@ export interface PlateSolveResult {
   solver: string;
   solveTime: number;
   errorMessage?: string;
+  /** Linear TAN WCS of the solve when the solver provides one (see
+   *  `SolveWcs` in solve-annotations.ts). */
+  wcs?: unknown;
 }
 
 export interface CatalogObject {

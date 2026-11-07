@@ -130,6 +130,8 @@ pub struct DaemonState {
     /// solving. Env `ASTRA_TETRA3_DB`, or `{data_dir}/tetra3/
     /// tetra3_unified_05_5deg.bin` when present. None → solving disabled.
     pub tetra3_db: Option<PathBuf>,
+    /// The loaded tetra3 database (see `solve::Tetra3Cache`).
+    pub tetra3_cache: solve::Tetra3Cache,
     /// Spool for in-flight chunked asset uploads (`{data_dir}/uploads`).
     pub uploads_dir: PathBuf,
     /// Signing identity + lexicons for signed publishing
@@ -179,6 +181,7 @@ impl Daemon {
     /// bind the listener.
     pub async fn bind(config: &DaemonConfig) -> Result<Self, String> {
         let state = Arc::new(init_backend(&config.data_dir).await?);
+        solve::Tetra3Cache::preload(&state);
         let listener = tokio::net::TcpListener::bind(config.bind)
             .await
             .map_err(|e| format!("bind {}: {e}", config.bind))?;
@@ -638,6 +641,7 @@ async fn init_backend(data_dir: &Path) -> Result<DaemonState, String> {
         session_key,
         processing: Default::default(),
         tetra3_db,
+        tetra3_cache: Default::default(),
         uploads_dir,
         handles: handles::HandleCache::default(),
         signer,

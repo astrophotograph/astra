@@ -25,7 +25,7 @@ import {
   type CatalogObject,
   type ProcessImageResponse,
 } from "@/lib/tauri/commands";
-import { queryObjectsInFovClient } from "@/lib/solve-annotations";
+import { isSolveWcs, queryObjectsInFovClient } from "@/lib/solve-annotations";
 import { buildChainEntries } from "@/lib/solver-config";
 import { ProcessingDialog } from "@/components/ProcessingDialog";
 import { StretchPreview } from "@/components/StretchPreview";
@@ -421,7 +421,9 @@ export default function ImageViewerPage() {
   const handlePlateSolve = async () => {
     if (!image) return;
 
-    if (plateSolveSolver === "nova" && !plateSolveApiKey) {
+    // Desktop only: the nova solver needs a key. The web app solves on
+    // the server with tetra3 — no solver choice, no key.
+    if (isTauri() && plateSolveSolver === "nova" && !plateSolveApiKey) {
       toast.error("Please enter an Astrometry.net API key");
       return;
     }
@@ -480,6 +482,7 @@ export default function ImageViewerPage() {
             result.centerDec,
             result.widthDeg,
             result.heightDeg,
+            isSolveWcs(result.wcs) ? result.wcs : null,
           );
           if (objects.length > 0) {
             try {
@@ -1528,38 +1531,53 @@ export default function ImageViewerPage() {
           <DialogHeader>
             <DialogTitle>Plate Solve Image</DialogTitle>
             <DialogDescription>
-              Determine the sky coordinates and identify objects in this image using
-              nova.astrometry.net. You'll need an API key from{" "}
-              <a
-                href="https://nova.astrometry.net/api_help"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary hover:underline"
-              >
-                astrometry.net
-              </a>.
+              {isTauri() ? (
+                <>
+                  Determine the sky coordinates and identify objects in this image using
+                  nova.astrometry.net. You'll need an API key from{" "}
+                  <a
+                    href="https://nova.astrometry.net/api_help"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    astrometry.net
+                  </a>.
+                </>
+              ) : (
+                <>
+                  Determine the sky coordinates and identify objects in this image. The
+                  solve runs on the server with the built-in tetra3 solver; nothing to
+                  configure.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="api-key">Astrometry.net API Key</Label>
-              <Input
-                id="api-key"
-                type="password"
-                value={plateSolveApiKey}
-                onChange={(e) => setPlateSolveApiKey(e.target.value)}
-                placeholder="Enter your API key"
-              />
-              <p className="text-xs text-muted-foreground">
-                Your API key is stored locally and never sent to our servers.
-              </p>
+          {isTauri() && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="api-key">Astrometry.net API Key</Label>
+                <Input
+                  id="api-key"
+                  type="password"
+                  value={plateSolveApiKey}
+                  onChange={(e) => setPlateSolveApiKey(e.target.value)}
+                  placeholder="Enter your API key"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Your API key is stored locally and never sent to our servers.
+                </p>
+              </div>
             </div>
-          </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setPlateSolveDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handlePlateSolve} disabled={plateSolveSolver === "nova" && !plateSolveApiKey}>
+            <Button
+              onClick={handlePlateSolve}
+              disabled={isTauri() && plateSolveSolver === "nova" && !plateSolveApiKey}
+            >
               <Compass className="w-4 h-4 mr-2" />
               Start Plate Solve
             </Button>

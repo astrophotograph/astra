@@ -12,7 +12,8 @@
 //! `/stretch-data`: solves are CPU-bound and the daemon shares a VM, so a
 //! second concurrent request from the same user gets 429.
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -26,7 +27,7 @@ use super::process::{processable, source_unavailable, PipelineError};
 use super::DaemonState;
 use crate::commands::hoardfs::resolve_hfs_path;
 use crate::commands::images::get_image_core;
-use crate::commands::plate_solve::{read_fits_dimensions, solve_with_tetra3};
+use crate::commands::plate_solve::{load_tetra3_database, read_fits_dimensions, solve_with_tetra3_db};
 use crate::db::models::Image;
 use crate::db::tenancy;
 use crate::processing;
@@ -46,6 +47,58 @@ pub struct SolveBody {
     scale_upper: Option<f64>,
     /// Timeout in seconds
     timeout: Option<i32>,
+}
+
+/// The loaded tetra3 database, shared by every solve. The unified file is
+/// 2.7 GB on disk and takes seconds to deserialize into several GB of
+/// tables, so it is read once — at startup ([`Tetra3Cache::preload`]) or
+/// on the first solve — and held for the life of the process. Keyed by
+/// path so a changed `ASTRA_TETRA3_DB` is honored.
+#[derive(Default)]
+pub struct Tetra3Cache(Mutex<Option<(PathBuf, Arc<tetra3::SolverDatabase>)>>);
+
+impl Tetra3Cache {
+    /// The database at `path`, loading it on first use. Blocking (seconds
+    /// on a cold cache): call from `spawn_blocking`. Concurrent first
+    /// callers wait on the lock and share the one load.
+    pub fn get_or_load(&self, path: &std::path::Path) -> Result<Arc<tetra3::SolverDatabase>, String> {
+        let mut slot = self
+            .0
+            .lock()
+            .map_err(|_| "tetra3 cache lock poisoned".to_string())?;
+        if let Some((loaded_from, db)) = slot.as_ref() {
+            if loaded_from == path {
+                return Ok(db.clone());
+            }
+        }
+        let started = std::time::Instant::now();
+        let db = Arc::new(load_tetra3_database(&path.to_string_lossy())?);
+        log::info!(
+            "tetra3 database loaded from {} in {:.1}s ({} stars)",
+            path.display(),
+            started.elapsed().as_secs_f64(),
+            db.star_vectors.len()
+        );
+        *slot = Some((path.to_path_buf(), db.clone()));
+        Ok(db)
+    }
+
+    /// Load in the background so the first solve does not pay for it.
+    /// `ASTRA_TETRA3_PRELOAD=0` skips this (the first solve loads instead).
+    pub fn preload(state: &Arc<DaemonState>) {
+        if std::env::var("ASTRA_TETRA3_PRELOAD").is_ok_and(|v| v == "0") {
+            return;
+        }
+        let Some(path) = state.tetra3_db.clone().filter(|p| p.exists()) else {
+            return;
+        };
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = state.tetra3_cache.get_or_load(&path) {
+                log::warn!("tetra3 preload failed: {e}");
+            }
+        });
+    }
 }
 
 /// Whether `/api/images/{id}/plate-solve` can run on this image: a FITS
@@ -264,7 +317,12 @@ pub async fn plate_solve_image(
     let rt = tokio::runtime::Handle::current();
     let volume = tenancy::volume_name(&user.user_id);
     let path_for_task = hfs_path.clone();
+    let cache_state = state.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let db = cache_state
+            .tetra3_cache
+            .get_or_load(&db_path)
+            .map_err(PipelineError::Other)?;
         let bytes = {
             let hfs = hfs_arc
                 .lock()
@@ -276,15 +334,18 @@ pub async fn plate_solve_image(
             return Err(PipelineError::SourceUnavailable);
         }
 
-        processing::with_temp_fits(bytes, |tmp| {
+        // Inner Err: the image could not be solved (unreadable pixels, too
+        // few stars …) — the caller's problem, reported as 422 with the
+        // solver's message. Outer Err: ours.
+        Ok(processing::with_temp_fits(bytes, |tmp| {
             let (w, h) = read_fits_dimensions(tmp)?;
             let fov = body.fov_estimate.or_else(|| fov_hint_from_headers(tmp));
             let tmp_str = tmp
                 .to_str()
                 .ok_or_else(|| "temp path not UTF-8".to_string())?;
-            solve_with_tetra3(
+            solve_with_tetra3_db(
                 tmp_str,
-                &db_path.to_string_lossy(),
+                &db,
                 fov,
                 body.scale_lower,
                 body.scale_upper,
@@ -292,13 +353,20 @@ pub async fn plate_solve_image(
                 h,
                 body.timeout.map(|t| (t as u64) * 1000),
             )
-        })
-        .map_err(PipelineError::Other)
+        }))
     })
     .await;
 
     let solve = match result {
-        Ok(Ok(solve)) => solve,
+        Ok(Ok(Ok(solve))) => solve,
+        Ok(Ok(Err(message))) => {
+            log::warn!("solve {id} for {}: {message}", user.user_id);
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("plate solve failed: {message}") })),
+            )
+                .into_response();
+        }
         Ok(Err(PipelineError::SourceUnavailable)) => {
             log::warn!(
                 "solve {id} for {}: original FITS at {hfs_path} unreachable from this host",
@@ -326,9 +394,14 @@ pub async fn plate_solve_image(
     };
 
     log::info!(
-        "plate solve {id} for {}: success={} in {:?}",
+        "plate solve {id} for {}: success={} center=({:.4}, {:.4}) fov={:.3}x{:.3} deg scale={:.3}\"/px in {:?}",
         user.user_id,
         solve.success,
+        solve.center_ra,
+        solve.center_dec,
+        solve.width_deg,
+        solve.height_deg,
+        solve.pixel_scale,
         started.elapsed()
     );
 

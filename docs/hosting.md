@@ -99,6 +99,19 @@ the collection:
 The CLI itself lives in `cli/` (`just cli-install`); see `cli/README.md`
 for selection rules, the local ledger and the `watch` mode.
 
+## Plate solving (tetra3)
+
+The daemon solves with the native tetra3 solver when a database exists at
+`{data_dir}/tetra3/tetra3_unified_05_5deg.bin` (or `ASTRA_TETRA3_DB`); the
+web app shows Plate Solve only when the server reports `solvable`. Build the
+database once with `cargo run --release --bin generate_tetra3_db -- --preset
+unified --catalog gaia_merged.bin --output tetra3_unified_05_5deg.bin` (the
+17 MB Gaia catalog comes from the tetra3rs README; the unified database is
+2.7 GB on disk, ~4 minutes to build) and push it to the VM. The daemon
+deserializes it once — in the background at startup, or on the first solve
+(`ASTRA_TETRA3_PRELOAD=0` skips the startup load) — and keeps it resident
+(several GB), so solves take the solver's own time, not the load time.
+
 ## Deploying
 
 `just deploy-staging` builds the release daemon + web bundle and pushes

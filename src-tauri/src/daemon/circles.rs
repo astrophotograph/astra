@@ -440,6 +440,7 @@ mod tests {
             session_key: f.state.session_key,
             processing: Default::default(),
             tetra3_db: None,
+            tetra3_cache: Default::default(),
             uploads_dir: std::env::temp_dir().join("astra-test-uploads"),
             handles: fake_handles(f.verifying_key.clone()),
             mailer: Arc::new(crate::mail::LogMailer::default()),

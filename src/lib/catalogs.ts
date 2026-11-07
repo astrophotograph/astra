@@ -5,6 +5,7 @@
  */
 
 import { NGC_CATALOG_DATA, NGC_TOTAL_COUNT, type NGCEntry } from "./ngc-catalog-data";
+import { IC_CATALOG_DATA, type ICEntry } from "./ic-catalog-data";
 
 export interface CatalogEntry {
   id: string;
@@ -383,6 +384,27 @@ export function getCatalog(template: string, page?: number): CatalogDefinition |
  */
 export function getAllNGCEntries(): CatalogEntry[] {
   return NGC_CATALOG_DATA.map(ngcToCatalogEntry);
+}
+
+function icToCatalogEntry(entry: ICEntry): CatalogEntry {
+  return {
+    id: `IC${entry.num}`,
+    name: `IC ${entry.num}`,
+    commonName: entry.commonName || undefined,
+    type: entry.type,
+    constellation: entry.constellation,
+    ra: entry.ra,
+    dec: entry.dec,
+    magnitude: entry.magnitude || undefined,
+    size: entry.size || undefined,
+  };
+}
+
+/**
+ * Get all IC entries (for matching and plate-solve annotation, not for display)
+ */
+export function getAllICEntries(): CatalogEntry[] {
+  return IC_CATALOG_DATA.map(icToCatalogEntry);
 }
 
 /**

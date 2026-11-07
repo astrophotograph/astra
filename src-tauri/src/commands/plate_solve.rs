@@ -247,11 +247,40 @@ pub(crate) fn solve_with_tetra3(
     image_height: u32,
     timeout_ms: Option<u64>,
 ) -> Result<PlateSolveResult, String> {
-    let start = std::time::Instant::now();
+    let db = load_tetra3_database(db_path)?;
+    solve_with_tetra3_db(
+        image_path,
+        &db,
+        fov_estimate_deg,
+        scale_lower,
+        scale_upper,
+        image_width,
+        image_height,
+        timeout_ms,
+    )
+}
 
-    // Load the tetra3 database
-    let db = tetra3::SolverDatabase::load_from_file(db_path)
-        .map_err(|e| format!("Failed to load tetra3 database from '{}': {}", db_path, e))?;
+/// Read and deserialize a tetra3 database file. Seconds and several GB for
+/// the unified database — the daemon loads once and caches
+/// (`daemon::solve::Tetra3Cache`); the desktop loads per solve.
+pub(crate) fn load_tetra3_database(db_path: &str) -> Result<tetra3::SolverDatabase, String> {
+    tetra3::SolverDatabase::load_from_file(db_path)
+        .map_err(|e| format!("Failed to load tetra3 database from '{}': {}", db_path, e))
+}
+
+/// Solve with an already-loaded database.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_with_tetra3_db(
+    image_path: &str,
+    db: &tetra3::SolverDatabase,
+    fov_estimate_deg: Option<f64>,
+    scale_lower: Option<f64>,
+    scale_upper: Option<f64>,
+    image_width: u32,
+    image_height: u32,
+    timeout_ms: Option<u64>,
+) -> Result<PlateSolveResult, String> {
+    let start = std::time::Instant::now();
 
     // Extract star centroids from the image using tetra3's built-in centroid extraction.
     // This requires the "image" feature on the tetra3 crate.
@@ -374,7 +403,7 @@ pub(crate) fn solve_with_tetra3(
         tetra3::SolveStatus::MatchFound => {
             // Extract RA/Dec from crval_rad (WCS reference point in radians)
             let (center_ra_deg, center_dec_deg) = if let Some(crval) = result.crval_rad {
-                (crval[0].to_degrees(), crval[1].to_degrees())
+                (crval[0].to_degrees().rem_euclid(360.0), crval[1].to_degrees())
             } else {
                 // Fallback: extract from quaternion if WCS not available
                 // The quaternion qicrs2cam rotates from ICRS to camera frame,
@@ -385,9 +414,7 @@ pub(crate) fn solve_with_tetra3(
 
             // Calculate pixel scale from CD matrix or FOV
             let pixel_scale_arcsec = if let Some(cd) = result.cd_matrix {
-                // Pixel scale from CD matrix: sqrt(cd11^2 + cd21^2) in degrees, convert to arcsec
-                let scale_deg = (cd[0][0] * cd[0][0] + cd[1][0] * cd[1][0]).sqrt();
-                scale_deg * 3600.0
+                pixel_scale_arcsec_from_cd(&cd)
             } else if let Some(fov) = result.fov_rad {
                 // pixel_scale = fov_deg / image_width * 3600
                 (fov as f64).to_degrees() / image_width as f64 * 3600.0
@@ -409,6 +436,18 @@ pub(crate) fn solve_with_tetra3(
             let width_deg = pixel_scale_arcsec * image_width as f64 / 3600.0;
             let height_deg = pixel_scale_arcsec * image_height as f64 / 3600.0;
 
+            let wcs = match (result.cd_matrix, result.crval_rad) {
+                (Some(cd), Some(_)) => Some(tetra3_wcs(
+                    &cd,
+                    center_ra_deg,
+                    center_dec_deg,
+                    image_width,
+                    image_height,
+                    result.parity_flip,
+                )),
+                _ => None,
+            };
+
             Ok(PlateSolveResult {
                 success: true,
                 center_ra: center_ra_deg,
@@ -422,7 +461,7 @@ pub(crate) fn solve_with_tetra3(
                 solver: "tetra3".to_string(),
                 solve_time: elapsed,
                 error_message: None,
-                wcs: None,
+                wcs,
             })
         }
         tetra3::SolveStatus::NoMatch => Ok(PlateSolveResult {
@@ -506,81 +545,55 @@ pub(crate) fn read_fits_dimensions(path: &Path) -> Result<(u32, u32), String> {
 
 /// Read pixel data from a FITS file as f32 values for centroid extraction.
 /// Returns (pixels, width, height) where pixels is a flat array in row-major order.
+/// The solve as a linear TAN WCS the viewer can place objects with:
+/// `crpix` is the frame centre in top-left-origin pixels (x along columns,
+/// y along rows — the frame tetra3's centroids and the rendered preview
+/// share), `crval` the tangent point in degrees, `cd` in degrees per pixel
+/// mapping pixel offsets to (ξ east, η north). tetra3's CD already carries
+/// rotation and parity; `parity_flip` is kept for information.
+pub(crate) fn tetra3_wcs(
+    cd: &[[f64; 2]; 2],
+    center_ra_deg: f64,
+    center_dec_deg: f64,
+    image_width: u32,
+    image_height: u32,
+    parity_flip: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "crpix": [image_width as f64 / 2.0, image_height as f64 / 2.0],
+        "crval": [center_ra_deg, center_dec_deg],
+        "cd": [
+            [cd[0][0].to_degrees(), cd[0][1].to_degrees()],
+            [cd[1][0].to_degrees(), cd[1][1].to_degrees()],
+        ],
+        "pixel_origin": "top-left",
+        "parity_flip": parity_flip,
+    })
+}
+
+/// Pixel scale in arcsec/pixel from a tetra3 WCS CD matrix, which is in
+/// tangent-plane **radians** per pixel (`sqrt(CD11² + CD21²)`). Treating it
+/// as degrees, as an earlier version did, made every solved field 57× too
+/// small — the overlay footprint collapsed and no catalog object ever fell
+/// inside it.
+pub(crate) fn pixel_scale_arcsec_from_cd(cd: &[[f64; 2]; 2]) -> f64 {
+    let scale_rad = (cd[0][0] * cd[0][0] + cd[1][0] * cd[1][0]).sqrt();
+    scale_rad.to_degrees() * 3600.0
+}
+
+/// Pixels for centroid extraction: luminance (mean of the planes for a
+/// colour cube), row-major, with `(width, height)` = `(NAXIS1, NAXIS2)`.
+/// Uses processinator's reader, which knows the `[NAXIS1, NAXIS2, NAXIS3]`
+/// layout; the earlier hand-rolled version read the shape back to front
+/// and mistook a 3-plane stack for a 3-pixel-wide image.
 fn read_fits_pixels(fits_path: &str) -> Result<(Vec<f32>, u32, u32), String> {
-    use fitrs::Fits;
-
-    let fits =
-        Fits::open(fits_path).map_err(|e| format!("Failed to open FITS file: {}", e))?;
-    let hdu = fits.into_iter().next().ok_or("No HDU in FITS file")?;
-
-    let (width, height, pixels) = match hdu.read_data() {
-        fitrs::FitsData::FloatingPoint32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
-            // For color images (3 channels), average to mono
-            let channel_size = w * h;
-            let pixels = if data.data.len() == channel_size * 3 {
-                // RGB: average channels
-                (0..channel_size)
-                    .map(|i| (data.data[i] + data.data[i + channel_size] + data.data[i + 2 * channel_size]) / 3.0)
-                    .collect()
-            } else {
-                data.data.clone()
-            };
-            (w as u32, h as u32, pixels)
-        }
-        fitrs::FitsData::FloatingPoint64(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
-            let channel_size = w * h;
-            let pixels: Vec<f32> = if data.data.len() == channel_size * 3 {
-                (0..channel_size)
-                    .map(|i| ((data.data[i] + data.data[i + channel_size] + data.data[i + 2 * channel_size]) / 3.0) as f32)
-                    .collect()
-            } else {
-                data.data.iter().map(|&x| x as f32).collect()
-            };
-            (w as u32, h as u32, pixels)
-        }
-        fitrs::FitsData::IntegersI32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
-            let pixels: Vec<f32> = data.data.iter().map(|x| x.unwrap_or(0) as f32).collect();
-            let channel_size = w * h;
-            let mono = if pixels.len() == channel_size * 3 {
-                (0..channel_size)
-                    .map(|i| (pixels[i] + pixels[i + channel_size] + pixels[i + 2 * channel_size]) / 3.0)
-                    .collect()
-            } else {
-                pixels
-            };
-            (w as u32, h as u32, mono)
-        }
-        fitrs::FitsData::IntegersU32(data) => {
-            let shape = &data.shape;
-            let w = shape[shape.len() - 1];
-            let h = shape[shape.len() - 2];
-            let pixels: Vec<f32> = data.data.iter().map(|x| x.unwrap_or(0) as f32).collect();
-            let channel_size = w * h;
-            let mono = if pixels.len() == channel_size * 3 {
-                (0..channel_size)
-                    .map(|i| (pixels[i] + pixels[i + channel_size] + pixels[i + 2 * channel_size]) / 3.0)
-                    .collect()
-            } else {
-                pixels
-            };
-            (w as u32, h as u32, mono)
-        }
-        _ => return Err("Unsupported FITS pixel format for centroid extraction".to_string()),
-    };
-
-    if pixels.is_empty() {
+    let image = processinator::read_fits(fits_path)
+        .map_err(|e| format!("Failed to read FITS pixels: {e}"))?;
+    let (width, height) = (image.width() as u32, image.height() as u32);
+    let pixels: Vec<f32> = image.luminance().into_iter().map(|v| v as f32).collect();
+    if pixels.is_empty() || pixels.len() != (width as usize) * (height as usize) {
         return Err("No pixel data in FITS file".to_string());
     }
-
     Ok((pixels, width, height))
 }
 
@@ -1022,5 +1035,76 @@ mod tests {
             ..entry
         };
         assert!(build_solver(&entry).is_err());
+    }
+
+    fn planar_fits(naxis: &[usize], planes: &[Vec<i16>]) -> Vec<u8> {
+        let mut cards = vec![
+            "SIMPLE  =                    T".to_string(),
+            "BITPIX  =                   16".to_string(),
+            format!("NAXIS   = {:>20}", naxis.len()),
+        ];
+        for (i, n) in naxis.iter().enumerate() {
+            cards.push(format!("NAXIS{}  = {:>20}", i + 1, n));
+        }
+        cards.push("END".to_string());
+        let mut out: Vec<u8> = cards
+            .iter()
+            .flat_map(|c| format!("{c:<80}").into_bytes())
+            .collect();
+        out.resize(2880, b' ');
+        for plane in planes {
+            for v in plane {
+                out.extend_from_slice(&v.to_be_bytes());
+            }
+        }
+        let padded = out.len().div_ceil(2880) * 2880;
+        out.resize(padded, 0);
+        out
+    }
+
+    #[test]
+    fn cd_matrix_is_radians_per_pixel() {
+        // 1e-5 rad/px ≈ 2.063 arcsec/px (a 400 mm lens on 3.76 µm pixels)
+        let cd = [[1e-5, 0.0], [0.0, 1e-5]];
+        let scale = pixel_scale_arcsec_from_cd(&cd);
+        assert!((scale - 2.0626).abs() < 1e-3, "{scale}");
+        // Rotated CD: the scale is the column norm, not the diagonal
+        let rotated = [[7.0710678e-6, -7.0710678e-6], [7.0710678e-6, 7.0710678e-6]];
+        assert!((pixel_scale_arcsec_from_cd(&rotated) - 2.0626).abs() < 1e-3);
+    }
+
+    #[test]
+    fn wcs_payload_is_degrees_about_the_frame_centre() {
+        let cd = [[-1e-5, 0.0], [0.0, 1e-5]]; // north up, east left
+        let wcs = tetra3_wcs(&cd, 83.8, -5.4, 6248, 4176, false);
+        assert_eq!(wcs["crpix"], serde_json::json!([3124.0, 2088.0]));
+        assert_eq!(wcs["crval"], serde_json::json!([83.8, -5.4]));
+        let cd00 = wcs["cd"][0][0].as_f64().unwrap();
+        assert!((cd00 - (-1e-5f64).to_degrees()).abs() < 1e-12, "{cd00}");
+        assert_eq!(wcs["pixel_origin"], "top-left");
+    }
+
+    #[test]
+    fn fits_pixels_keep_naxis1_as_width_and_average_colour_planes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (w, h) = (4usize, 3usize);
+        let plane = |base: i16| (0..(w * h) as i16).map(|i| base + i).collect::<Vec<_>>();
+
+        let mono = dir.path().join("mono.fit");
+        std::fs::write(&mono, planar_fits(&[w, h], &[plane(100)])).unwrap();
+        let (px, pw, ph) = read_fits_pixels(mono.to_str().unwrap()).unwrap();
+        assert_eq!((pw, ph), (4, 3));
+        assert_eq!(px.len(), 12);
+        assert_eq!(px[5], 105.0);
+        assert_eq!(read_fits_dimensions(&mono).unwrap(), (4, 3));
+
+        // APS-C colour stack: NAXIS3 = 3 planes, not a 3-pixel-wide image.
+        let rgb = dir.path().join("rgb.fit");
+        std::fs::write(&rgb, planar_fits(&[w, h, 3], &[plane(100), plane(200), plane(300)])).unwrap();
+        let (px, pw, ph) = read_fits_pixels(rgb.to_str().unwrap()).unwrap();
+        assert_eq!((pw, ph), (4, 3));
+        assert_eq!(px.len(), 12, "one luminance value per pixel");
+        assert_eq!(px[0], 200.0, "mean of the three planes");
+        assert_eq!(read_fits_dimensions(&rgb).unwrap(), (4, 3));
     }
 }
