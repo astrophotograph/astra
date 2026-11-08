@@ -62,7 +62,7 @@ pub fn run(
     let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
 
     if settings.initial_sweep {
-        let existing = select::walk(&dir, true, opts.all)?;
+        let existing = select::walk(&dir, true, opts.filter())?;
         if existing.is_empty() {
             println!("initial sweep: nothing new under {}", dir.display());
         } else {
@@ -116,7 +116,7 @@ pub fn run(
                     continue;
                 }
                 for path in event.paths {
-                    if path.is_file() && select::wanted(&path, opts.all) {
+                    if path.is_file() && select::wanted(&path, opts.filter()) {
                         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                         let grace_used = pending.get(&path).is_some_and(|p| p.grace_used);
                         pending.insert(

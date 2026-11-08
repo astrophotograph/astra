@@ -43,6 +43,8 @@ Options on `upload` and `watch`:
 | `--summary`, `--description` | Set on every image. Left blank, a FITS upload gets its `OBJECT` header (or the target directory name) as summary and "10.0s exposure, 20 frames stacked, Filter: LP" as description. |
 | `--visibility` | `private` (default), `unlisted`, `public`. |
 | `--all` | Accept any image file in directories, not only stacked ones. |
+| `--fits-only` | Send only FITS/XISF originals. JPG/PNG/TIFF are skipped everywhere, even when named explicitly, and are not attached as renditions. |
+| `--no-pair` | Upload a JPG/PNG/TIFF with a same-name FITS beside it as its own image instead of attaching it as that image's processed rendition. |
 | `-n, --dry-run` | List what would be sent. |
 | `--force` | Ignore the local ledger (the server still dedups identical bytes). |
 | `--chunk-mb MIB` | Files larger than this are sent in parts of this size (default 64; `ASTRA_CHUNK_MB`). Keep it under 100 behind Cloudflare, which refuses larger request bodies with 413. `0` disables chunking. |

@@ -10,6 +10,20 @@ const IMAGE_EXTS: &[&str] = &[
     "fit", "fits", "fts", "xisf", "jpg", "jpeg", "png", "tif", "tiff",
 ];
 
+/// Originals as opposed to processed rasters: what `--fits-only` keeps.
+const ORIGINAL_EXTS: &[&str] = &["fit", "fits", "fts", "xisf"];
+
+/// What a directory walk (or watch) keeps.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Filter {
+    /// Any image that is not calibration or a raw subframe, instead of
+    /// only stacked frames.
+    pub all: bool,
+    /// Only FITS/XISF originals; JPG/PNG/TIFF are never sent, not even as
+    /// renditions of a FITS beside them.
+    pub fits_only: bool,
+}
+
 fn ext_of(path: &Path) -> String {
     path.extension()
         .and_then(|e| e.to_str())
@@ -31,6 +45,11 @@ fn lower_path(path: &Path) -> String {
 
 pub fn is_image(path: &Path) -> bool {
     IMAGE_EXTS.contains(&ext_of(path).as_str())
+}
+
+/// A FITS or XISF file: an original rather than a processed raster.
+pub fn is_original(path: &Path) -> bool {
+    ORIGINAL_EXTS.contains(&ext_of(path).as_str())
 }
 
 /// Dark/flat/bias frames and masters, by name or directory.
@@ -77,27 +96,36 @@ pub fn is_stacked(path: &Path) -> bool {
 }
 
 /// What a directory walk keeps: stacked frames, or with `all` any image
-/// that is not calibration or a raw subframe.
-pub fn wanted(path: &Path, all: bool) -> bool {
+/// that is not calibration or a raw subframe; with `fits_only`, originals
+/// only.
+pub fn wanted(path: &Path, filter: Filter) -> bool {
     if !is_image(path) || is_calibration(path) || lower_name(path).ends_with("_thn.jpg") {
         return false;
     }
-    if all {
+    if filter.fits_only && !is_original(path) {
+        return false;
+    }
+    if filter.all {
         !is_subframe(path)
     } else {
         is_stacked(path)
     }
 }
 
-/// Explicit files are taken as given; directories are walked (one level,
-/// or fully with `recursive`) and filtered through [`wanted`].
-pub fn expand(paths: &[PathBuf], recursive: bool, all: bool) -> Result<Vec<PathBuf>> {
+/// Explicit files are taken as given (except that `--fits-only` still
+/// drops rasters, with a note); directories are walked (one level, or
+/// fully with `recursive`) and filtered through [`wanted`].
+pub fn expand(paths: &[PathBuf], recursive: bool, filter: Filter) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for path in paths {
         if path.is_file() {
+            if filter.fits_only && !is_original(path) {
+                eprintln!("skipping {} (--fits-only)", path.display());
+                continue;
+            }
             out.push(path.clone());
         } else if path.is_dir() {
-            out.extend(walk(path, recursive, all)?);
+            out.extend(walk(path, recursive, filter)?);
         } else {
             bail!("{} does not exist", path.display());
         }
@@ -107,7 +135,7 @@ pub fn expand(paths: &[PathBuf], recursive: bool, all: bool) -> Result<Vec<PathB
     Ok(out)
 }
 
-pub fn walk(dir: &Path, recursive: bool, all: bool) -> Result<Vec<PathBuf>> {
+pub fn walk(dir: &Path, recursive: bool, filter: Filter) -> Result<Vec<PathBuf>> {
     let depth = if recursive { usize::MAX } else { 1 };
     let mut out = Vec::new();
     for entry in walkdir::WalkDir::new(dir)
@@ -115,7 +143,7 @@ pub fn walk(dir: &Path, recursive: bool, all: bool) -> Result<Vec<PathBuf>> {
         .follow_links(true)
     {
         let entry = entry.with_context(|| format!("walking {}", dir.display()))?;
-        if entry.file_type().is_file() && wanted(entry.path(), all) {
+        if entry.file_type().is_file() && wanted(entry.path(), filter) {
             out.push(entry.into_path());
         }
     }
@@ -129,6 +157,10 @@ mod tests {
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
     }
+
+    const STACKED: Filter = Filter { all: false, fits_only: false };
+    const ALL: Filter = Filter { all: true, fits_only: false };
+    const FITS: Filter = Filter { all: false, fits_only: true };
 
     #[test]
     fn stacked_layouts() {
@@ -153,21 +185,15 @@ mod tests {
 
     #[test]
     fn all_mode_keeps_images_but_not_subs_or_calibration() {
-        assert!(wanted(&p("/data/final_M31.tif"), true));
-        assert!(!wanted(&p("/data/final_M31.tif"), false));
+        assert!(wanted(&p("/data/final_M31.tif"), ALL));
+        assert!(!wanted(&p("/data/final_M31.tif"), STACKED));
         assert!(!wanted(
-            &p("/asiair/Autorun/Light/M42/Light_M42_10s.fit"),
-            true
-        ));
+            &p("/asiair/Autorun/Light/M42/Light_M42_10s.fit"), ALL));
         assert!(!wanted(
-            &p("/seestar/MyWorks/M 42_sub/Light_0001.fit"),
-            true
-        ));
-        assert!(!wanted(&p("/data/Flat/Flat_001.fit"), true));
+            &p("/seestar/MyWorks/M 42_sub/Light_0001.fit"), ALL));
+        assert!(!wanted(&p("/data/Flat/Flat_001.fit"), ALL));
         assert!(!wanted(
-            &p("/seestar/MyWorks/M 42/Stacked_120_M 42_thn.jpg"),
-            true
-        ));
+            &p("/seestar/MyWorks/M 42/Stacked_120_M 42_thn.jpg"), ALL));
     }
 
     #[test]
@@ -181,10 +207,10 @@ mod tests {
         std::fs::write(root.join("Stacked_top.jpg"), b"x").unwrap();
         std::fs::write(root.join("readme.md"), b"x").unwrap();
 
-        let shallow = expand(&[root.to_path_buf()], false, false).unwrap();
+        let shallow = expand(&[root.to_path_buf()], false, STACKED).unwrap();
         assert_eq!(shallow, vec![root.join("Stacked_top.jpg")]);
 
-        let deep = expand(&[root.to_path_buf()], true, false).unwrap();
+        let deep = expand(&[root.to_path_buf()], true, STACKED).unwrap();
         assert_eq!(
             deep,
             vec![
@@ -194,8 +220,31 @@ mod tests {
         );
 
         // An explicit file is always taken, filter or not.
-        let explicit = expand(&[root.join("readme.md")], false, false).unwrap();
+        let explicit = expand(&[root.join("readme.md")], false, STACKED).unwrap();
         assert_eq!(explicit, vec![root.join("readme.md")]);
-        assert!(expand(&[root.join("missing")], false, false).is_err());
+        assert!(expand(&[root.join("missing")], false, STACKED).is_err());
+
+        // --fits-only drops rasters everywhere: in walks and even when
+        // named explicitly.
+        let fits = expand(&[root.to_path_buf()], true, FITS).unwrap();
+        assert_eq!(fits, vec![root.join("M42/Stacked/Stack_1.fit")]);
+        let explicit = expand(
+            &[root.join("Stacked_top.jpg"), root.join("M42/Stacked/Stack_1.fit")],
+            false,
+            FITS,
+        )
+        .unwrap();
+        assert_eq!(explicit, vec![root.join("M42/Stacked/Stack_1.fit")]);
+    }
+
+    #[test]
+    fn fits_only_keeps_originals_and_drops_rasters() {
+        assert!(wanted(&p("/seestar/MyWorks/M 42/Stacked_120_M 42_10.0s.fit"), FITS));
+        assert!(wanted(&p("/data/M42_stacked.xisf"), FITS));
+        assert!(!wanted(&p("/seestar/MyWorks/M 42/Stacked_120_M 42.jpg"), FITS));
+        assert!(!wanted(&p("/data/final_M31.tif"), Filter { all: true, fits_only: true }));
+        assert!(wanted(&p("/data/final_M31.fits"), Filter { all: true, fits_only: true }));
+        // Still only stacked frames unless --all
+        assert!(!wanted(&p("/data/final_M31.fits"), FITS));
     }
 }

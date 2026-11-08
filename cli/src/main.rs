@@ -149,6 +149,19 @@ pub struct UploadOpts {
     /// image, instead of attaching it as that image's processed rendition.
     #[arg(long)]
     no_pair: bool,
+    /// Only send FITS/XISF originals. JPG/PNG/TIFF files are skipped
+    /// entirely — not uploaded, and not attached as renditions either.
+    #[arg(long)]
+    fits_only: bool,
+}
+
+impl UploadOpts {
+    pub fn filter(&self) -> select::Filter {
+        select::Filter {
+            all: self.all,
+            fits_only: self.fits_only,
+        }
+    }
 }
 
 fn main() {
@@ -220,9 +233,12 @@ fn run() -> Result<()> {
         } => {
             let creds = config::resolve(&config_path, cli.server, cli.token)?;
             let client = client::Client::new(&creds).with_chunk_mb(cli.chunk_mb);
-            let files = select::expand(&paths, recursive, opts.all)?;
+            let files = select::expand(&paths, recursive, opts.filter())?;
             if files.is_empty() {
-                bail!("nothing to upload (directories are filtered to stacked images; try --all)");
+                bail!(
+                    "nothing to upload (directories are filtered to stacked images{}; try --all)",
+                    if opts.fits_only { ", and --fits-only drops JPG/PNG/TIFF" } else { "" }
+                );
             }
             let mut ledger = ledger::Ledger::open(&creds.server)?;
             let outcome = attach::upload_all_paired(&client, &mut ledger, &files, &opts);
