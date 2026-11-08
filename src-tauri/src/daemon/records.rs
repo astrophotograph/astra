@@ -8,6 +8,10 @@
 //! - `GET /xrpc/com.atproto.repo.getRecord?repo=&collection=&rkey=` — the
 //!   AT Protocol read shape `{ uri, cid, value }`, with `repo` either the
 //!   author's DID or, as a handle stand-in, their username.
+//! - `GET /xrpc/com.atproto.repo.listRecords?repo=&collection=&limit=&cursor=`
+//!   and `GET /xrpc/com.atproto.repo.describeRepo?repo=` — enumeration for
+//!   mirrors: a page of one collection's records (each with its `envelope`,
+//!   so the page verifies on its own) and the NSIDs a repo holds.
 //!
 //! `GET /@{user}/{slug}/manifest.json` (in `gallery.rs`) returns the stored
 //! collection SignedRecord when one exists, else the legacy live manifest.
@@ -31,7 +35,10 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use diesel::prelude::*;
+use diesel::SqliteConnection;
 use serde::Deserialize;
+use serde_json::value::RawValue;
 
 use super::acl;
 use super::api::if_none_match_hits;
@@ -41,6 +48,7 @@ use crate::commands::publish::{
     access_for_published, resolve_public_collection, user_id_for_username, Access,
 };
 use crate::db::models::PublishedRecord;
+use crate::db::schema::{published_records, users};
 use crate::share::records::{self, IMAGE_NSID};
 
 pub const RECORD_CACHE_CONTROL: &str = "public, max-age=60";
@@ -224,10 +232,12 @@ fn xrpc_error(status: StatusCode, error: &str, message: String) -> Response {
         .into_response()
 }
 
-/// `GET /xrpc/com.atproto.repo.getRecord` → `{ uri, cid, value }`.
+/// `GET /xrpc/com.atproto.repo.getRecord` → `{ uri, cid, value, envelope }`.
 /// `repo` is the author's DID (exact URI lookup) or their username (the
 /// handle stand-in until handles resolve). Unknown → 404 `RecordNotFound`,
-/// and so is a private record for a viewer outside its circle.
+/// and so is a private record for a viewer outside its circle. `value` is
+/// the stored record bytes; `envelope` (`{ methodId, signedAt, algo, sig }`)
+/// is additive to the AT Protocol shape and makes the answer verifiable.
 pub async fn xrpc_get_record(
     State(state): State<Arc<DaemonState>>,
     Query(params): Query<GetRecordParams>,
@@ -294,19 +304,12 @@ pub async fn xrpc_get_record(
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
-            let value: serde_json::Value = match serde_json::from_str(&row.signed_json) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::error!("getRecord: stored json for {} unparsable: {e}", row.uri);
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-            };
-            let out = serde_json::json!({
-                "uri": row.uri,
-                "cid": row.cid,
-                "value": value.get("record").cloned().unwrap_or(serde_json::Value::Null),
-            });
-            let mut response = json_bytes_response(out.to_string(), &row.cid, &headers);
+            let mut out = String::with_capacity(row.signed_json.len() + 32);
+            if let Err(e) = push_list_entry(&mut out, &row) {
+                log::error!("getRecord: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            let mut response = json_bytes_response(out, &row.cid, &headers);
             acl::mark_if_gated(&mut response, &access);
             response
         }
@@ -326,6 +329,405 @@ pub async fn xrpc_get_record(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Enumeration: listRecords / describeRepo (what a mirror walks)
+// ---------------------------------------------------------------------------
+
+/// The owner a `repo` parameter names: a DID (exact `users.did` match) or,
+/// as the handle stand-in, a username.
+struct RepoOwner {
+    user_id: String,
+    username: Option<String>,
+    did: Option<String>,
+}
+
+fn resolve_repo(conn: &mut SqliteConnection, repo: &str) -> Result<Option<RepoOwner>, String> {
+    let selection = (users::id, users::username, users::did);
+    let row: Option<(String, Option<String>, Option<String>)> = if repo.starts_with("did:") {
+        users::table
+            .filter(users::did.eq(repo))
+            .select(selection)
+            .first(conn)
+            .optional()
+    } else {
+        users::table
+            .filter(users::username.eq(repo))
+            .select(selection)
+            .first(conn)
+            .optional()
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(row.map(|(user_id, username, did)| RepoOwner {
+        user_id,
+        username,
+        did,
+    }))
+}
+
+fn repo_not_found() -> Response {
+    xrpc_error(
+        StatusCode::NOT_FOUND,
+        "RepoNotFound",
+        "no such repo".to_string(),
+    )
+}
+
+/// The pieces of a stored `SignedRecord` the xrpc routes splice in
+/// verbatim. Borrowing `RawValue`s keeps every byte as signed: `record`
+/// becomes the AT Protocol `value`, and the signature fields travel as a
+/// sibling `envelope` so a mirror can verify without a second fetch.
+#[derive(Deserialize)]
+struct EnvelopeParts<'a> {
+    #[serde(borrow)]
+    record: &'a RawValue,
+    #[serde(rename = "methodId", borrow)]
+    method_id: &'a RawValue,
+    #[serde(rename = "signedAt", borrow)]
+    signed_at: &'a RawValue,
+    #[serde(borrow)]
+    algo: &'a RawValue,
+    #[serde(borrow)]
+    sig: &'a RawValue,
+}
+
+impl EnvelopeParts<'_> {
+    /// `{ methodId, signedAt, algo, sig }`, each value as stored.
+    fn push_envelope(&self, out: &mut String) {
+        out.push_str("{\"methodId\":");
+        out.push_str(self.method_id.get());
+        out.push_str(",\"signedAt\":");
+        out.push_str(self.signed_at.get());
+        out.push_str(",\"algo\":");
+        out.push_str(self.algo.get());
+        out.push_str(",\"sig\":");
+        out.push_str(self.sig.get());
+        out.push('}');
+    }
+}
+
+/// One `records[]` entry, appended to `out`.
+fn push_list_entry(out: &mut String, row: &PublishedRecord) -> Result<(), String> {
+    let parts: EnvelopeParts = serde_json::from_str(&row.signed_json)
+        .map_err(|e| format!("stored json for {}: {e}", row.uri))?;
+    out.push_str("{\"uri\":");
+    out.push_str(&serde_json::to_string(&row.uri).map_err(|e| e.to_string())?);
+    out.push_str(",\"cid\":");
+    out.push_str(&serde_json::to_string(&row.cid).map_err(|e| e.to_string())?);
+    out.push_str(",\"value\":");
+    out.push_str(parts.record.get());
+    out.push_str(",\"envelope\":");
+    parts.push_envelope(out);
+    out.push('}');
+    Ok(())
+}
+
+/// Composite JSON (no single record to name): the record cache policy,
+/// no ETag.
+fn composite_json_response(body: String) -> Response {
+    let mut response = (StatusCode::OK, body).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(RECORD_CACHE_CONTROL),
+    );
+    response
+}
+
+pub const LIST_RECORDS_DEFAULT_LIMIT: u32 = 50;
+pub const LIST_RECORDS_MAX_LIMIT: u32 = 100;
+
+#[derive(Debug, Deserialize)]
+pub struct ListRecordsParams {
+    repo: Option<String>,
+    collection: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    reverse: Option<bool>,
+}
+
+/// `GET /xrpc/com.atproto.repo.listRecords?repo=&collection=&limit=&cursor=&reverse=`
+/// → `{ records: [{ uri, cid, value, envelope }], cursor? }`.
+///
+/// Pages through the owner's stored records of one collection in rkey
+/// order (TIDs sort chronologically; `reverse=true` walks newest first).
+/// `cursor` is the last rkey of the previous page and is present only when
+/// more rows exist. Rows the viewer may not read are left out silently, so
+/// a page may carry fewer entries than `limit` (even none) and still a
+/// cursor; walk until the cursor is gone. `envelope`
+/// (`{ methodId, signedAt, algo, sig }`, beyond the AT Protocol
+/// `{uri, cid, value}` shape) is what makes a listing verifiable on its
+/// own. Unknown repo → 404 `RepoNotFound`.
+pub async fn xrpc_list_records(
+    State(state): State<Arc<DaemonState>>,
+    Query(params): Query<ListRecordsParams>,
+    viewer: MaybeViewer,
+) -> Response {
+    let (Some(repo), Some(collection)) = (
+        params.repo.filter(|s| !s.is_empty()),
+        params.collection.filter(|s| !s.is_empty()),
+    ) else {
+        return xrpc_error(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "repo and collection are required".to_string(),
+        );
+    };
+    if kenning::record::Nsid::new(collection.as_str()).is_err() {
+        return xrpc_error(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "collection must be an NSID".to_string(),
+        );
+    }
+    let limit = params.limit.unwrap_or(LIST_RECORDS_DEFAULT_LIMIT);
+    if !(1..=LIST_RECORDS_MAX_LIMIT).contains(&limit) {
+        return xrpc_error(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            format!("limit must be between 1 and {LIST_RECORDS_MAX_LIMIT}"),
+        );
+    }
+    if let Some(c) = params.cursor.as_deref() {
+        if kenning::record::Rkey::new(c).is_err() {
+            return xrpc_error(
+                StatusCode::BAD_REQUEST,
+                "InvalidRequest",
+                "cursor must be a record key".to_string(),
+            );
+        }
+    }
+    let reverse = params.reverse.unwrap_or(false);
+    let cursor = params.cursor;
+
+    /// A page of rows with their access, and the next cursor if any.
+    type Page = (Vec<(PublishedRecord, Access)>, Option<String>);
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(move || -> Result<Option<Page>, String> {
+        let mut conn = db.get().map_err(|e| e.to_string())?;
+        let Some(owner) = resolve_repo(&mut conn, &repo)? else {
+            return Ok(None);
+        };
+        let mut query = published_records::table
+            .filter(published_records::user_id.eq(&owner.user_id))
+            .filter(published_records::collection.eq(&collection))
+            .into_boxed();
+        if let Some(c) = cursor.as_deref() {
+            query = if reverse {
+                query.filter(published_records::rkey.lt(c))
+            } else {
+                query.filter(published_records::rkey.gt(c))
+            };
+        }
+        query = if reverse {
+            query.order(published_records::rkey.desc())
+        } else {
+            query.order(published_records::rkey.asc())
+        };
+        let mut rows: Vec<PublishedRecord> = query
+            .limit(i64::from(limit) + 1)
+            .load(&mut conn)
+            .map_err(|e| e.to_string())?;
+        let next = if rows.len() > limit as usize {
+            rows.truncate(limit as usize);
+            rows.last().map(|r| r.rkey.clone())
+        } else {
+            None
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let access = records::access_for_record(&mut conn, &row)?;
+            out.push((row, access));
+        }
+        Ok(Some((out, next)))
+    })
+    .await;
+
+    let (rows, next) = match result {
+        Ok(Ok(Some(page))) => page,
+        Ok(Ok(None)) => return repo_not_found(),
+        Ok(Err(e)) => {
+            log::error!("listRecords: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(e) => {
+            log::error!("listRecords task: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut body = String::from("{\"records\":[");
+    let mut first = true;
+    let mut gated = false;
+    for (row, access) in &rows {
+        match acl::allowed(&state, access, viewer.0.as_ref()).await {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                log::error!("listRecords acl: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+        gated |= !access.is_public();
+        if !first {
+            body.push(',');
+        }
+        first = false;
+        if let Err(e) = push_list_entry(&mut body, row) {
+            log::error!("listRecords: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    body.push(']');
+    if let Some(c) = next {
+        body.push_str(",\"cursor\":");
+        match serde_json::to_string(&c) {
+            Ok(s) => body.push_str(&s),
+            Err(e) => {
+                log::error!("listRecords cursor: {e}");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+    }
+    body.push('}');
+
+    let mut response = composite_json_response(body);
+    if gated {
+        acl::mark_private(&mut response);
+    }
+    response
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DescribeRepoParams {
+    repo: Option<String>,
+}
+
+/// `GET /xrpc/com.atproto.repo.describeRepo?repo=` →
+/// `{ handle, did, didDoc: null, collections, handleIsCorrect }`.
+///
+/// `collections` lists every NSID the viewer could read at least one
+/// record of: all with a public row, plus those whose private rows the
+/// kith ACL admits the viewer to. `handle` is the DID document's handle
+/// when it verifies (`handles.rs`, bidirectional check); otherwise the
+/// username stand-in with `handleIsCorrect: false`. `didDoc` is `null`:
+/// resolve the DID yourself, that is the point of it. A user without a DID
+/// has no signed repo → 404 `RepoNotFound`.
+pub async fn xrpc_describe_repo(
+    State(state): State<Arc<DaemonState>>,
+    Query(params): Query<DescribeRepoParams>,
+    viewer: MaybeViewer,
+) -> Response {
+    let Some(repo) = params.repo.filter(|s| !s.is_empty()) else {
+        return xrpc_error(
+            StatusCode::BAD_REQUEST,
+            "InvalidRequest",
+            "repo is required".to_string(),
+        );
+    };
+
+    type PrivateByNsid = Vec<(String, Vec<Access>)>;
+    let db = state.db.clone();
+    let result = tokio::task::spawn_blocking(
+        move || -> Result<Option<(RepoOwner, Vec<String>, PrivateByNsid)>, String> {
+            let mut conn = db.get().map_err(|e| e.to_string())?;
+            let Some(owner) = resolve_repo(&mut conn, &repo)? else {
+                return Ok(None);
+            };
+            if owner.did.is_none() {
+                return Ok(None);
+            }
+            let public: Vec<String> = published_records::table
+                .filter(published_records::user_id.eq(&owner.user_id))
+                .filter(published_records::private.eq(false))
+                .select(published_records::collection)
+                .distinct()
+                .load(&mut conn)
+                .map_err(|e| e.to_string())?;
+            let private_nsids: Vec<String> = published_records::table
+                .filter(published_records::user_id.eq(&owner.user_id))
+                .filter(published_records::private.eq(true))
+                .select(published_records::collection)
+                .distinct()
+                .load(&mut conn)
+                .map_err(|e| e.to_string())?;
+            let mut private = Vec::with_capacity(private_nsids.len());
+            for nsid in private_nsids {
+                if public.contains(&nsid) {
+                    continue;
+                }
+                let rows: Vec<PublishedRecord> = published_records::table
+                    .filter(published_records::user_id.eq(&owner.user_id))
+                    .filter(published_records::private.eq(true))
+                    .filter(published_records::collection.eq(&nsid))
+                    .load(&mut conn)
+                    .map_err(|e| e.to_string())?;
+                let mut grants = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    grants.push(records::access_for_record(&mut conn, row)?);
+                }
+                private.push((nsid, grants));
+            }
+            Ok(Some((owner, public, private)))
+        },
+    )
+    .await;
+
+    let (owner, mut collections, private) = match result {
+        Ok(Ok(Some(found))) => found,
+        Ok(Ok(None)) => return repo_not_found(),
+        Ok(Err(e)) => {
+            log::error!("describeRepo: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(e) => {
+            log::error!("describeRepo task: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let did = owner.did.clone().expect("checked in the blocking task");
+
+    let mut gated = false;
+    for (nsid, grants) in private {
+        for access in &grants {
+            match acl::allowed(&state, access, viewer.0.as_ref()).await {
+                Ok(true) => {
+                    gated = true;
+                    collections.push(nsid.clone());
+                    break;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    log::error!("describeRepo acl: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+        }
+    }
+    collections.sort();
+    collections.dedup();
+
+    let verified = state.handles.verified_handle(&did).await;
+    let handle_is_correct = verified.is_some();
+    let handle = verified.or(owner.username).unwrap_or_else(|| did.clone());
+
+    let out = serde_json::json!({
+        "handle": handle,
+        "did": did,
+        "didDoc": serde_json::Value::Null,
+        "collections": collections,
+        "handleIsCorrect": handle_is_correct,
+    });
+    let mut response = composite_json_response(out.to_string());
+    if gated {
+        acl::mark_private(&mut response);
+    }
+    response
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -335,12 +737,11 @@ pub(crate) mod tests {
     };
     use crate::daemon::auth::mint_token;
     use crate::daemon::gallery::tests::{fixture, get, Fixture};
-    use crate::db::schema::{collections, images as images_table, published_records, users};
+    use crate::db::schema::{collections, images as images_table};
     use crate::share::records::{CollectionBody, ImageBody, SignedPublish, COLLECTION_NSID};
     use async_trait::async_trait;
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
-    use diesel::prelude::*;
     use kenning::did::{Did, DidDocument, ResolveError, Resolver, VerificationMethod};
     use kenning::envelope::SignedRecord;
     use kenning::handle::Handle;
@@ -457,6 +858,341 @@ pub(crate) mod tests {
 
     pub(crate) fn json(bytes: &[u8]) -> serde_json::Value {
         serde_json::from_slice(bytes).unwrap()
+    }
+
+    /// Recompute the CID of a listed `value` the way a mirror would: JSON →
+    /// IPLD → canonical DAG-CBOR → CIDv1 dag-cbor/sha256.
+    fn cid_of_value(value: &serde_json::Value) -> String {
+        let ipld = kenning::record::json_to_ipld(value).unwrap();
+        let bytes = kenning::record::encode_ipld(&ipld).unwrap();
+        kenning::cbor::cid_of_bytes(&bytes).to_string()
+    }
+
+    /// `envelope` holds what verifying needs: method, time, curve, signature.
+    fn assert_envelope(entry: &serde_json::Value) {
+        let env = &entry["envelope"];
+        assert_eq!(env["methodId"], "astra");
+        assert!(env["signedAt"].as_str().unwrap().ends_with('Z'));
+        assert!(matches!(
+            env["algo"].as_str().unwrap(),
+            "secp256k1" | "p256"
+        ));
+        assert!(!env["sig"].as_str().unwrap().is_empty());
+        assert_eq!(env.as_object().unwrap().len(), 4);
+    }
+
+    fn rkeys(v: &serde_json::Value) -> Vec<String> {
+        v["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                r["uri"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_records_pages_filters_private_rows_and_describe_repo_lists_nsids() {
+        let f = fixture().await;
+        link_did(&f);
+        let token = mint_token(&f.state.db, "alice", "t").unwrap().token;
+
+        // Give the private image an asset so its record gets signed, then
+        // publish "Secret" family-only: its collection + image rows are
+        // private, the stub is public.
+        diesel::update(images_table::table.find(&f.private_image.id))
+            .set((
+                images_table::blob_id.eq(Some(f.blob_id.clone())),
+                images_table::metadata.eq(Some(
+                    serde_json::json!({ "hoardfs": { "hfs_path": "/g/m31.png" } }).to_string(),
+                )),
+            ))
+            .execute(&mut f.state.db.get().unwrap())
+            .unwrap();
+        publish_collection_core(
+            &f.state.db,
+            "alice",
+            &f.private_collection.id,
+            PublishVisibility::circle("family").unwrap(),
+            None,
+        )
+        .unwrap();
+        let public = sign_publish(&f, &f.public_collection.id).await.unwrap();
+        let secret = sign_publish(&f, &f.private_collection.id).await.unwrap();
+        assert_eq!(public.image_count, 1);
+        assert_eq!(secret.image_count, 1);
+        let public_rkey = image_rkey(&f);
+        let secret_rkey: String = images_table::table
+            .find(&f.private_image.id)
+            .select(images_table::rkey)
+            .first::<Option<String>>(&mut f.state.db.get().unwrap())
+            .unwrap()
+            .unwrap();
+
+        let router = crate::daemon::router(f.state.clone());
+        let list = |q: &str| format!("/xrpc/com.atproto.repo.listRecords?{q}");
+
+        // Anonymous: only the public image; every cid matches its value.
+        let (status, headers, body) = get(
+            &router,
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=60"
+        );
+        assert!(headers.get(header::ETAG).is_none());
+        let v = json(&body);
+        assert_eq!(rkeys(&v), vec![public_rkey.clone()]);
+        assert!(v.get("cursor").is_none());
+        let entry = &v["records"][0];
+        assert_eq!(
+            entry["uri"],
+            format!("at://{DID}/{IMAGE_NSID}/{public_rkey}")
+        );
+        assert_eq!(
+            entry["cid"].as_str().unwrap(),
+            cid_of_value(&entry["value"])
+        );
+        assert_eq!(entry["value"]["$type"], IMAGE_NSID);
+        assert_envelope(entry);
+        // getRecord carries the same entry shape.
+        let (status, _, one) = get(
+            &router,
+            &format!(
+                "/xrpc/com.atproto.repo.getRecord?repo=aliceh&collection={IMAGE_NSID}&rkey={public_rkey}"
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&one), *entry);
+        // `value` is the stored record bytes, not a re-serialization.
+        let stored_json = stored(&f, entry["uri"].as_str().unwrap());
+        let record_start = stored_json.find("\"record\":").unwrap() + "\"record\":".len();
+        let record_bytes = &stored_json[record_start..stored_json.len() - 1];
+        let body_str = String::from_utf8(body.clone()).unwrap();
+        assert!(
+            body_str.contains(record_bytes),
+            "value spliced byte-for-byte"
+        );
+        // The DID works as `repo` too.
+        let (status, _, body_by_did) = get(
+            &router,
+            &list(&format!("repo={DID}&collection={IMAGE_NSID}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body_by_did, body);
+
+        // The owner sees both; the response is viewer-specific.
+        let (status, headers, body) = request(
+            &router,
+            "GET",
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}")),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "private, no-store"
+        );
+        let v = json(&body);
+        let mut expected = vec![public_rkey.clone(), secret_rkey.clone()];
+        expected.sort();
+        assert_eq!(rkeys(&v), expected);
+        for entry in v["records"].as_array().unwrap() {
+            assert_eq!(
+                entry["cid"].as_str().unwrap(),
+                cid_of_value(&entry["value"])
+            );
+            assert_envelope(entry);
+        }
+
+        // limit=1 cursor walk, forwards and in reverse.
+        let (_, _, body) = request(
+            &router,
+            "GET",
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}&limit=1")),
+            Some(&token),
+            None,
+        )
+        .await;
+        let page1 = json(&body);
+        assert_eq!(rkeys(&page1), vec![expected[0].clone()]);
+        let cursor = page1["cursor"].as_str().expect("more rows → cursor");
+        assert_eq!(cursor, expected[0]);
+        let (_, _, body) = request(
+            &router,
+            "GET",
+            &list(&format!(
+                "repo=aliceh&collection={IMAGE_NSID}&limit=1&cursor={cursor}"
+            )),
+            Some(&token),
+            None,
+        )
+        .await;
+        let page2 = json(&body);
+        assert_eq!(rkeys(&page2), vec![expected[1].clone()]);
+        assert!(page2.get("cursor").is_none(), "last page has no cursor");
+        let (_, _, body) = request(
+            &router,
+            "GET",
+            &list(&format!(
+                "repo=aliceh&collection={IMAGE_NSID}&limit=1&reverse=true"
+            )),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(rkeys(&json(&body)), vec![expected[1].clone()]);
+
+        // Anonymous page walk over a window holding only a private row:
+        // the row is omitted, the cursor still advances.
+        let (status, _, body) = get(
+            &router,
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}&limit=1")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let page = json(&body);
+        if expected[0] == secret_rkey {
+            assert!(page["records"].as_array().unwrap().is_empty());
+            assert_eq!(page["cursor"], secret_rkey);
+        } else {
+            assert_eq!(rkeys(&page), vec![public_rkey.clone()]);
+            assert_eq!(page["cursor"], public_rkey);
+        }
+
+        // Collections: the public one anonymously, both for the owner; the
+        // stub is public.
+        let (_, _, body) = get(
+            &router,
+            &list(&format!("repo=aliceh&collection={COLLECTION_NSID}")),
+        )
+        .await;
+        assert_eq!(rkeys(&json(&body)), vec!["andromeda-nights".to_string()]);
+        let (_, _, body) = request(
+            &router,
+            "GET",
+            &list(&format!("repo=aliceh&collection={COLLECTION_NSID}")),
+            Some(&token),
+            None,
+        )
+        .await;
+        assert_eq!(
+            rkeys(&json(&body)),
+            vec!["andromeda-nights".to_string(), "secret".to_string()]
+        );
+        let (_, _, body) = get(
+            &router,
+            &list(&format!(
+                "repo=aliceh&collection={}",
+                kenning::private::STUB_NSID
+            )),
+        )
+        .await;
+        assert_eq!(rkeys(&json(&body)), vec!["secret".to_string()]);
+
+        // Errors.
+        let (status, _, body) =
+            get(&router, &list("repo=nobody&collection=gallery.astra.image")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body)["error"], "RepoNotFound");
+        let (status, _, _) = get(&router, &list("repo=aliceh")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = get(&router, &list("repo=aliceh&collection=not-an-nsid")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = get(
+            &router,
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}&limit=0")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = get(
+            &router,
+            &list(&format!("repo=aliceh&collection={IMAGE_NSID}&limit=101")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        // An unknown collection of a known repo is an empty page, not 404.
+        let (status, _, body) = get(
+            &router,
+            &list("repo=aliceh&collection=gallery.astra.nothing"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(json(&body)["records"].as_array().unwrap().is_empty());
+
+        // describeRepo, with a resolver that verifies alice's handle.
+        use crate::daemon::gallery::tests::{fake_handles, state_with_handles};
+        use crate::daemon::handles::tests::HandleAnswer;
+        let verified = crate::daemon::router(state_with_handles(
+            &f,
+            fake_handles(vec!["alice.example"], HandleAnswer::Did(DID)),
+        ));
+        let (status, headers, body) =
+            get(&verified, "/xrpc/com.atproto.repo.describeRepo?repo=aliceh").await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(
+            headers.get(header::CACHE_CONTROL).unwrap(),
+            "public, max-age=60"
+        );
+        let v = json(&body);
+        assert_eq!(v["did"], DID);
+        assert_eq!(v["handle"], "alice.example");
+        assert_eq!(v["handleIsCorrect"], true);
+        assert!(v["didDoc"].is_null());
+        // Image and collection NSIDs have public rows; the private rows add
+        // nothing new for an anonymous viewer.
+        assert_eq!(
+            v["collections"],
+            serde_json::json!([COLLECTION_NSID, IMAGE_NSID, kenning::private::STUB_NSID])
+        );
+        let (status, _, body) = get(
+            &verified,
+            &format!("/xrpc/com.atproto.repo.describeRepo?repo={DID}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json(&body)["did"], DID);
+
+        // Unverifiable handle: the username stand-in, flagged.
+        let unverified = crate::daemon::router(state_with_handles(
+            &f,
+            fake_handles(vec!["alice.example"], HandleAnswer::NotFound),
+        ));
+        let (_, _, body) = get(
+            &unverified,
+            "/xrpc/com.atproto.repo.describeRepo?repo=aliceh",
+        )
+        .await;
+        let v = json(&body);
+        assert_eq!(v["handle"], "aliceh");
+        assert_eq!(v["handleIsCorrect"], false);
+
+        // Unknown user, and a user without a DID, are not repos.
+        let (status, _, body) =
+            get(&verified, "/xrpc/com.atproto.repo.describeRepo?repo=nobody").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(json(&body)["error"], "RepoNotFound");
+        diesel::update(users::table.find("alice"))
+            .set(users::did.eq(None::<String>))
+            .execute(&mut f.state.db.get().unwrap())
+            .unwrap();
+        let (status, _, _) =
+            get(&verified, "/xrpc/com.atproto.repo.describeRepo?repo=aliceh").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test(flavor = "multi_thread")]

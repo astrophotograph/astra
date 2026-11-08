@@ -1016,7 +1016,7 @@ pub(crate) mod tests {
     use std::time::Duration;
 
     /// The fixture's state with a different handle cache (fake resolver).
-    fn state_with_handles(f: &Fixture, handles: HandleCache) -> Arc<DaemonState> {
+    pub(crate) fn state_with_handles(f: &Fixture, handles: HandleCache) -> Arc<DaemonState> {
         Arc::new(DaemonState {
             db: f.state.db.clone(),
             hoardfs: f.state.hoardfs.clone(),
@@ -1034,7 +1034,7 @@ pub(crate) mod tests {
         })
     }
 
-    fn fake_handles(handles: Vec<&'static str>, answer: HandleAnswer) -> HandleCache {
+    pub(crate) fn fake_handles(handles: Vec<&'static str>, answer: HandleAnswer) -> HandleCache {
         HandleCache::new(
             FakeResolver::new(handles, answer),
             Duration::from_millis(100),

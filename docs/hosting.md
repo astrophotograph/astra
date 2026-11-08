@@ -60,6 +60,9 @@ dedicated VM with egress filtering so a compromise can't move laterally.
 | `/healthz` | none | version + db/hoardfs status |
 | `/@user`, `/@user/slug`, assets | none (optional session/PAT for `circle:` galleries) | published collections only; `circle:<name>` galleries 404 unless the viewer is the owner or in the circle |
 | `/at/{did}/{collection}/{rkey}` | none | 302 to the gallery for a stored signed record |
+| `/xrpc/com.atproto.repo.getRecord?repo=&collection=&rkey=` | none (optional session/PAT for `circle:` records) | one stored signed record as `{uri, cid, value, envelope}`; `repo` is the DID or the username. `envelope` = `{methodId, signedAt, algo, sig}` from the stored SignedRecord (additive to the AT Protocol shape) |
+| `/xrpc/com.atproto.repo.listRecords?repo=&collection=&limit=&cursor=&reverse=` | none (optional session/PAT for `circle:` records) | a page of one collection's records in rkey order, `limit` 1–100 (default 50), `cursor` = last rkey, present only while more exist. Each entry is `{uri, cid, value, envelope}` with `value` the stored record bytes and `envelope` the signature fields, so a mirror can verify a page on its own. Records the viewer may not read are omitted silently (a page may be short or empty and still carry a cursor). Unknown repo → 404 `RepoNotFound` |
+| `/xrpc/com.atproto.repo.describeRepo?repo=` | none (optional session/PAT) | `{handle, did, didDoc: null, collections, handleIsCorrect}`; `collections` are the NSIDs the viewer can read at least one record of; `handle` is the verified DID-document handle, else the username with `handleIsCorrect: false`. A user without a DID → 404 `RepoNotFound` |
 | `/auth/magic/request`, `/auth/magic/{token}`, `/auth/logout` | none (the link is the credential) | magic-link sign-in for custodial viewers, see below |
 | `/api/*` | bearer (PAT or OIDC JWT) or `astra_session` cookie | default-deny |
 

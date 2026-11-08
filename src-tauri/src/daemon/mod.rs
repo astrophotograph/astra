@@ -419,6 +419,16 @@ pub fn router_with_web(state: Arc<DaemonState>, web_dist: Option<PathBuf>) -> Ro
             "/xrpc/com.atproto.repo.getRecord",
             get(records::xrpc_get_record),
         )
+        // Enumeration for mirrors: a repo's collections and a page of one
+        // collection's records, ACL-filtered like the single-record routes.
+        .route(
+            "/xrpc/com.atproto.repo.listRecords",
+            get(records::xrpc_list_records),
+        )
+        .route(
+            "/xrpc/com.atproto.repo.describeRepo",
+            get(records::xrpc_describe_repo),
+        )
         // `at://` resolver: the identity-rooted URI a signed gallery
         // advertises (`<link rel="canonical">`) → 302 to the pretty URL.
         // A private-record stub URI redirects to its subject's gallery too.
