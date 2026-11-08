@@ -75,7 +75,7 @@ import {
 } from "@/lib/tauri/commands";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Progress } from "@/components/ui/progress";
-import { getCollectionType } from "@/lib/collection-utils";
+import { getCollectionType, COLLECTION_TEMPLATES } from "@/lib/collection-utils";
 import { useQueryClient } from "@tanstack/react-query";
 import SkyMapSheet from "@/components/SkyMapSheet";
 import SlideshowConfigDialog from "@/components/SlideshowConfigDialog";
@@ -103,6 +103,9 @@ export default function CollectionDetailPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editTags, setEditTags] = useState("");
   const [editVisibility, setEditVisibility] = useState("private");
+  // Collection type is just the template string; "" (custom) is "_custom"
+  // in the Select, which can't hold an empty value
+  const [editTemplate, setEditTemplate] = useState("_custom");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [addImagesDialogOpen, setAddImagesDialogOpen] = useState(false);
   const [selectedImages, setSelectedImages] = useState<string[]>([]);
@@ -362,6 +365,7 @@ export default function CollectionDetailPage() {
       setEditDescription(collection.description || "");
       setEditTags(collection.tags || "");
       setEditVisibility(collection.visibility);
+      setEditTemplate(collection.template || "_custom");
       setIsEditing(true);
     }
   };
@@ -377,6 +381,7 @@ export default function CollectionDetailPage() {
         description: editDescription || undefined,
         tags: editTags || undefined,
         visibility: editVisibility,
+        template: editTemplate === "_custom" ? "" : editTemplate,
       });
       toast.success("Collection updated");
       setIsEditing(false);
@@ -1023,6 +1028,26 @@ export default function CollectionDetailPage() {
                 placeholder="galaxy, nebula (comma separated)"
                 className="bg-slate-700 border-slate-600"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-template">Type</Label>
+              <Select value={editTemplate} onValueChange={setEditTemplate}>
+                <SelectTrigger id="edit-template" className="bg-slate-700 border-slate-600">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-slate-700 border-slate-600">
+                  {COLLECTION_TEMPLATES.map((tmpl) => (
+                    <SelectItem key={tmpl.value} value={tmpl.value || "_custom"}>
+                      {tmpl.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {collectionImages.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Changing the type keeps every image; it only changes which views and tools the collection gets.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="edit-visibility">Visibility</Label>
