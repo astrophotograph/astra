@@ -42,9 +42,25 @@ jobs:
   check-backend:
     name: Backend (Rust)
     needs: check-frontend
+    # Forge-only. src-tauri depends on four sibling checkouts by path
+    # (../../hoardfs, kith, kenning, processinator-rs); hoardfs and kith are
+    # private on GitHub and CI has no credentials there, so this job had not
+    # passed on GitHub since the HoardFS integration (2026-04). On code-mesh
+    # all four are readable anonymously and are fetched below.
+    if: ${{ github.event.act }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      # Same layout as a developer checkout under ~/code/astrophotograph/:
+      # the siblings sit next to the repo, so `../../X` from src-tauri and
+      # kith's own `../kenning` resolve to one copy each. Read-only clone
+      # URL through the hub, no credentials (kith's ci.yml does the same).
+      - name: Fetch sibling crates from the forge
+        run: |
+          for r in erewhon/hoardfs embettering/kith embettering/kenning astrophotograph/processinator-rs; do
+            git clone --depth 1 "https://code.bcc.sh/$r" "../${r##*/}"
+          done
 
       - name: Install system dependencies
         run: |
