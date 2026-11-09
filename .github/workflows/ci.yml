@@ -71,7 +71,11 @@ jobs:
       - name: Build frontend (required by tauri::generate_context)
         run: pnpm run build
 
-      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+      # Not SHA-pinned on purpose: dtolnay moves the `stable`/`nightly` branches
+      # by rewriting them, so a pinned commit soon sits on no branch. GitHub can
+      # still fetch such a commit; act's git client only sees branch and tag tips
+      # and fails the job with "reference not found" (run 0144 on code-mesh).
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         if: ${{ !github.event.act }}
