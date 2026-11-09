@@ -1,5 +1,16 @@
 name: CI
 
+# Runs on GitHub and on the homelab forge (code-mesh, remote `code-mesh`),
+# where sprinkle-runner executes it under `act` on the ci-runner VM
+# (6 vCPU / 8 GiB, Ubuntu 22.04 act image) and posts the verdict as the
+# `sprinkle-runner` commit status that the homeops deployer gates on.
+# Forge constraints (homeops/CODE-FORGE-FOR-AGENTS.md): push events only,
+# `ubuntu-latest` only, no secrets, no GitHub-hosted cache service, and the
+# run logs at https://ci.bcc.sh/runs are unauthenticated on the mesh.
+# `github.event.act` is true only on the forge; the two cache steps below
+# key off it because asking for the cache service under act fails the step
+# instead of degrading (same lesson as nous's ci.yml, 2026-10).
+
 on:
   push:
     branches: [main]
@@ -20,7 +31,7 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event.act && '' || 'pnpm' }}
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
@@ -51,7 +62,7 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
-          cache: pnpm
+          cache: ${{ github.event.act && '' || 'pnpm' }}
 
       - run: pnpm install --frozen-lockfile
 
@@ -61,6 +72,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        if: ${{ !github.event.act }}
         with:
           workspaces: src-tauri
 
