@@ -403,7 +403,11 @@ def solve_with_astap(
     try:
         # Check for ASTAP executable (configured path first)
         astap_cmd = None
-        candidates = ([binary_path] if binary_path else []) + ["astap", "astap_cli", "/opt/astap/astap_cli"]
+        candidates = ([binary_path] if binary_path else []) + [
+            "astap",
+            "astap_cli",
+            "/opt/astap/astap_cli",
+        ]
         for cmd in candidates:
             try:
                 subprocess.run([cmd, "-h"], capture_output=True, timeout=5)

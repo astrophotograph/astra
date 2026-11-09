@@ -1,10 +1,7 @@
 """Tests for astra_astro.catalog_query pure functions."""
 
-import math
-
 import numpy as np
 import numpy.testing as npt
-import pytest
 
 from astra_astro.catalog_query import (
     _format_size,

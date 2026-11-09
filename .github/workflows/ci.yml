@@ -7,9 +7,13 @@ name: CI
 # Forge constraints (homeops/CODE-FORGE-FOR-AGENTS.md): push events only,
 # `ubuntu-latest` only, no secrets, no GitHub-hosted cache service, and the
 # run logs at https://ci.bcc.sh/runs are unauthenticated on the mesh.
-# `github.event.act` is true only on the forge; the two cache steps below
-# key off it because asking for the cache service under act fails the step
-# instead of degrading (same lesson as nous's ci.yml, 2026-10).
+# setup-node runs without `cache: pnpm`: the cache service does not exist
+# under act and asking for it fails the step instead of degrading (same
+# lesson as nous's ci.yml, 2026-10). rust-cache is skipped there via
+# `github.event.act`, which act sets and GitHub does not.
+# pnpm is pinned to the major the repo is developed with (12): pnpm 9 rejects
+# a settings-only pnpm-workspace.yaml ("packages field missing or empty"),
+# which is what had every CI run since the workspace file was added failing.
 
 on:
   push:
@@ -26,12 +30,11 @@ jobs:
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
         with:
-          version: 9
+          version: 12
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
-          cache: ${{ github.event.act && '' || 'pnpm' }}
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
@@ -57,12 +60,11 @@ jobs:
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4
         with:
-          version: 9
+          version: 12
 
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
         with:
           node-version: 22
-          cache: ${{ github.event.act && '' || 'pnpm' }}
 
       - run: pnpm install --frozen-lockfile
 

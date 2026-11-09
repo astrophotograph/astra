@@ -246,6 +246,7 @@ def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list
 
 
 # Known Messier magnitudes (visual)
+# fmt: off
 MESSIER_MAGNITUDES: dict[int, float] = {
     1: 8.4, 2: 6.5, 3: 6.2, 4: 5.6, 5: 5.6, 6: 4.2, 7: 3.3, 8: 6.0, 9: 7.7, 10: 6.6,
     11: 6.3, 12: 6.7, 13: 5.8, 14: 7.6, 15: 6.2, 16: 6.0, 17: 6.0, 18: 7.5, 19: 6.8, 20: 6.3,
@@ -257,8 +258,10 @@ MESSIER_MAGNITUDES: dict[int, float] = {
     71: 8.2, 72: 9.3, 73: 9.0, 74: 9.4, 75: 8.5, 76: 10.1, 77: 8.9, 78: 8.3, 79: 7.7, 80: 7.3,
     81: 6.9, 82: 8.4, 83: 7.6, 84: 9.1, 85: 9.1, 86: 8.9, 87: 8.6, 88: 9.6, 89: 9.8, 90: 9.5,
     91: 10.2, 92: 6.4, 93: 6.0, 94: 8.2, 95: 9.7, 96: 9.2, 97: 9.9, 98: 10.1, 99: 9.9, 100: 9.3,
-    101: 7.9, 102: 9.9, 103: 7.4, 104: 8.0, 105: 9.3, 106: 8.4, 107: 7.9, 108: 10.0, 109: 9.8, 110: 8.5,
+    101: 7.9, 102: 9.9, 103: 7.4, 104: 8.0, 105: 9.3, 106: 8.4, 107: 7.9, 108: 10.0, 109: 9.8,
+    110: 8.5,
 }
+# fmt: on
 
 
 def query_messier(center_ra: float, center_dec: float, radius_deg: float) -> list[CatalogObject]:
@@ -1104,19 +1107,16 @@ def add_pixel_positions(
         Same list with pixelX, pixelY, and radiusPx fields added
     """
     try:
+        import numpy as np
+        from astropy.coordinates import SkyCoord
         from astropy.io import fits
         from astropy.wcs import WCS
-        from astropy.coordinates import SkyCoord
-        import numpy as np
 
         with fits.open(fits_path) as hdul:
             header = hdul[0].header
 
         naxis1 = header.get("NAXIS1", 0)
         naxis2 = header.get("NAXIS2", 0)
-        row_order = str(header.get("ROWORDER", "")).upper()
-        is_top_down = "TOP" in row_order
-
         if solve_result and solve_result.get("wcs"):
             # Use stored raw WCS parameters (CRPIX, CRVAL, CD) from the solve
             wcs_params = solve_result["wcs"]
@@ -1141,10 +1141,12 @@ def add_pixel_positions(
 
             cos_r = np.cos(rotation_rad)
             sin_r = np.sin(rotation_rad)
-            wcs.wcs.cd = np.array([
-                [-pixel_scale_deg * cos_r, pixel_scale_deg * sin_r],
-                [pixel_scale_deg * sin_r, pixel_scale_deg * cos_r],
-            ])
+            wcs.wcs.cd = np.array(
+                [
+                    [-pixel_scale_deg * cos_r, pixel_scale_deg * sin_r],
+                    [pixel_scale_deg * sin_r, pixel_scale_deg * cos_r],
+                ]
+            )
         else:
             # Fall back to FITS header WCS
             wcs = WCS(header, naxis=2)

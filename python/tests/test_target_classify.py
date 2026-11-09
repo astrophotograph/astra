@@ -1,7 +1,5 @@
 """Tests for astra_astro.target_classify pure functions."""
 
-import pytest
-
 from astra_astro.target_classify import (
     TargetInfo,
     TargetType,

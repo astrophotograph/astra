@@ -1,10 +1,6 @@
 """Tests for astra_astro.simbad pure functions."""
 
-import math
-
 import numpy as np
-import numpy.testing as npt
-import pytest
 
 from astra_astro.simbad import (
     _decode_bytes,

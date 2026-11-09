@@ -571,7 +571,7 @@ def quick_preview(
     """
     try:
         start_time = time.time()
-        from processinator import fits_to_image, StretchAlgorithm
+        from processinator import StretchAlgorithm, fits_to_image
 
         # Determine format from extension
         ext = Path(output_path).suffix.lower()

@@ -1,7 +1,5 @@
 """Tests for astra_astro.altitude pure functions."""
 
-import pytest
-
 from astra_astro.altitude import _azimuth_to_compass
 
 
@@ -48,10 +46,12 @@ class TestAzimuthToCompass:
 
     def test_all_16_directions(self):
         """Each 22.5-degree increment should yield the correct direction."""
+        # fmt: off
         expected = [
             "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
             "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
         ]
+        # fmt: on
         for i, direction in enumerate(expected):
             azimuth = i * 22.5
             assert _azimuth_to_compass(azimuth) == direction, (

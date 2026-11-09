@@ -2,7 +2,6 @@
 
 import numpy as np
 import numpy.testing as npt
-import pytest
 
 from astra_astro.image_process import (
     _apply_contrast_curve,
