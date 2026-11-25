@@ -93,6 +93,14 @@ class TestCalculateMtfBalance:
                 m = _calculate_mtf_balance(median, target)
                 assert 0 < m < 1, f"m={m} out of range for median={median}, target={target}"
 
+    def test_degenerate_denominator_returns_half(self):
+        """median/target where 2*t*x - t - x ≈ 0 should return 0.5.
+
+        2*t*x = t + x is solved by t = x / (2x - 1); for x = 0.25 that is
+        t = -0.5, a target below zero.
+        """
+        assert _calculate_mtf_balance(0.25, -0.5) == 0.5
+
     def test_roundtrip(self):
         """MTF(m, median) should approximately equal target."""
         median = 0.1
