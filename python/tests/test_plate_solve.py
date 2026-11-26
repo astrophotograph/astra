@@ -386,6 +386,38 @@ def test_extract_solve_hints_channels_last_cube_uses_first_two_axes(tmp_path):
     assert hints["image_height"] == 40
 
 
+def test_extract_solve_hints_bad_first_coord_key_falls_through(tmp_path):
+    # An unparseable RA/DEC string must be skipped, not stop the key search
+    path = tmp_path / "junkcoord.fits"
+    _write_fits(
+        path,
+        {
+            "RA": "junk-value",
+            "OBJCTRA": "10 20 30",
+            "DEC": "junk-value",
+            "OBJCTDEC": "+20 30 40",
+        },
+    )
+    hints = extract_solve_hints(str(path))
+    assert hints["ra_hint"] == pytest.approx((10 + 20 / 60 + 30 / 3600) * 15.0)
+    assert hints["dec_hint"] == pytest.approx(20 + 30 / 60 + 40 / 3600)
+
+
+def test_extract_solve_hints_good_first_coord_key_wins_over_later(tmp_path):
+    path = tmp_path / "firstwins.fits"
+    _write_fits(path, {"RA": "01 02 03", "OBJCTRA": "05 06 07"})
+    hints = extract_solve_hints(str(path))
+    assert hints["ra_hint"] == pytest.approx((1 + 2 / 60 + 3 / 3600) * 15.0)
+
+
+def test_extract_solve_hints_all_coord_keys_bad_gives_no_hint(tmp_path):
+    path = tmp_path / "allbad.fits"
+    _write_fits(path, {"RA": "junk", "OBJCTRA": "junk2", "DEC": "bad", "OBJCTDEC": "bad2"})
+    hints = extract_solve_hints(str(path))
+    assert "ra_hint" not in hints
+    assert "dec_hint" not in hints
+
+
 def test_extract_solve_hints_complex_coordinate_value_yields_no_hint(tmp_path):
     # A complex FITS value cannot be cast to float: the hint is skipped entirely
     path = tmp_path / "complex.fits"
@@ -405,6 +437,37 @@ def test_extract_solve_hints_complex_coordinate_value_yields_no_hint(tmp_path):
     assert "dec_hint" not in hints
     assert hints["image_width"] == 20
     assert hints["image_height"] == 10
+
+
+def test_extract_solve_hints_non_rgb_cube_uses_middle_axes(tmp_path):
+    path = tmp_path / "cube4.fits"
+    data = np.zeros((4, 40, 70), dtype=np.int16)
+    header = fits.Header({"SIMPLE": True, "BITPIX": 16, "NAXIS": 3})
+    fits.PrimaryHDU(data=data, header=header).writeto(path, overwrite=True)
+    hints = extract_solve_hints(str(path))
+    assert hints["image_width"] == 70
+    assert hints["image_height"] == 40
+
+
+def test_extract_solve_hints_single_plane_cube_uses_middle_axes(tmp_path):
+    path = tmp_path / "cube1.fits"
+    data = np.zeros((1, 40, 70), dtype=np.int16)
+    header = fits.Header({"SIMPLE": True, "BITPIX": 16, "NAXIS": 3})
+    fits.PrimaryHDU(data=data, header=header).writeto(path, overwrite=True)
+    hints = extract_solve_hints(str(path))
+    assert hints["image_width"] == 70
+    assert hints["image_height"] == 40
+
+
+def test_extract_solve_hints_five_plane_cube_with_short_last_axis(tmp_path):
+    # (5, 40, 4): last axis is 1-4 and first axis > 4 -> treated as channels last
+    path = tmp_path / "cube54.fits"
+    data = np.zeros((5, 40, 4), dtype=np.int16)
+    header = fits.Header({"SIMPLE": True, "BITPIX": 16, "NAXIS": 3})
+    fits.PrimaryHDU(data=data, header=header).writeto(path, overwrite=True)
+    hints = extract_solve_hints(str(path))
+    assert hints["image_width"] == 40
+    assert hints["image_height"] == 5
 
 
 def test_extract_solve_hints_image_without_data_array_returns_empty(tmp_path):

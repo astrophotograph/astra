@@ -613,9 +613,10 @@ def extract_solve_hints(image_path: str) -> dict:
                 if hdu.data is not None and hdu.data.ndim >= 2:
                     header = hdu.header
                     if hdu.data.ndim == 3:
-                        image_height, image_width = hdu.data.shape[1], hdu.data.shape[2]
-                        if hdu.data.shape[0] != 3:
+                        if 1 <= hdu.data.shape[-1] <= 4 and hdu.data.shape[0] > 4:
                             image_height, image_width = hdu.data.shape[0], hdu.data.shape[1]
+                        else:
+                            image_height, image_width = hdu.data.shape[1], hdu.data.shape[2]
                     else:
                         image_height, image_width = hdu.data.shape
                     break
@@ -674,7 +675,8 @@ def extract_solve_hints(image_path: str) -> dict:
                             ra_hint = _parse_ra_string(val)
                         else:
                             ra_hint = float(val)
-                        break
+                        if ra_hint is not None:
+                            break
                     except (ValueError, TypeError):
                         pass
 
@@ -687,7 +689,8 @@ def extract_solve_hints(image_path: str) -> dict:
                             dec_hint = _parse_dec_string(val)
                         else:
                             dec_hint = float(val)
-                        break
+                        if dec_hint is not None:
+                            break
                     except (ValueError, TypeError):
                         pass
 
