@@ -73,14 +73,6 @@ class Distance:
 
 
 @dataclass
-class ProperMotion:
-    """Proper motion in mas/yr."""
-
-    ra: float
-    dec: float
-
-
-@dataclass
 class SimbadResult:
     """Result from a SIMBAD query."""
 
@@ -91,7 +83,6 @@ class SimbadResult:
     visual_magnitude: Optional[float] = None
     distance: Optional[Distance] = None
     spectral_type: Optional[str] = None
-    proper_motion: Optional[ProperMotion] = None
     radial_velocity: Optional[float] = None
     alternative_names: list[str] = field(default_factory=list)
     catalogs: dict[str, str] = field(default_factory=dict)
@@ -262,7 +253,7 @@ def lookup_object(object_name: str) -> Optional[dict]:
                        basic."coo_err_maj", basic."coo_err_min",
                        allfluxes."V",
                        basic."galdim_minaxis", basic."otype", basic."oid",
-                       basic."pmdec", basic."galdim_angle", basic."pmra",
+                       basic."galdim_angle",
                        basic."galdim_majaxis", basic."sp_type",
                        basic."plx_value",
                        ident."id" AS "matched_id"
@@ -328,13 +319,6 @@ def lookup_object(object_name: str) -> Optional[dict]:
         if obj["sp_type"] is not None:
             spectral_type = _decode_bytes(obj["sp_type"])
 
-        # Parse proper motion
-        proper_motion = None
-        pmra = _safe_float(obj["pmra"])
-        pmdec = _safe_float(obj["pmdec"])
-        if pmra is not None and pmdec is not None:
-            proper_motion = ProperMotion(ra=pmra, dec=pmdec)
-
         # Get alternative identifiers
         alternative_names = []
         other_names = simbad.query_objectids(object_name)
@@ -354,7 +338,6 @@ def lookup_object(object_name: str) -> Optional[dict]:
             visual_magnitude=visual_magnitude,
             distance=distance,
             spectral_type=spectral_type,
-            proper_motion=proper_motion,
             alternative_names=alternative_names,
             catalogs=_extract_catalog_references([main_name] + alternative_names),
             common_name=_extract_common_name([main_name] + alternative_names),

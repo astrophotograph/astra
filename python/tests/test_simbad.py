@@ -5,6 +5,9 @@ import pytest
 from astropy.table import Table
 
 from astra_astro.simbad import (
+    Coordinates,
+    SimbadResult,
+    Size,
     _decode_bytes,
     _extract_catalog_references,
     _extract_common_name,
@@ -359,7 +362,6 @@ class TestExtractCatalogReferencesDetails:
 # ---------------------------------------------------------------------------
 # to_dict branches and remaining _safe_float / _is_valid_value paths
 # ---------------------------------------------------------------------------
-from astra_astro.simbad import Coordinates, SimbadResult, Size
 
 
 class TestToDict:
@@ -454,8 +456,6 @@ def _make_simbad_table(
     galdim_angle=15.0,
     plx_value=2.5,
     sp_type=b"M2III",
-    pmra=1.5,
-    pmdec=0.5,
 ):
     """Build a small masked astropy Table shaped like a SIMBAD TAP answer."""
     return Table(
@@ -469,9 +469,7 @@ def _make_simbad_table(
             "galdim_minaxis": [galdim_minaxis],
             "otype": [otype],
             "oid": [123],
-            "pmdec": [pmdec],
             "galdim_angle": [galdim_angle],
-            "pmra": [pmra],
             "galdim_majaxis": [galdim_majaxis],
             "sp_type": [sp_type],
             "plx_value": [plx_value],
@@ -533,10 +531,10 @@ class TestLookupObject:
         assert result["distance"]["lightYears"] == pytest.approx(400 * 3.26156)
 
     def test_masked_optional_columns(self, monkeypatch):
-        """Masked V, parallax and proper motion produce no keys, no crash."""
+        """Masked V and parallax produce no keys, no crash."""
         _patch(monkeypatch)
         t = _make_simbad_table(main_id=b"HD 1", otype=b"Star")
-        for col in ("V", "plx_value", "pmra", "pmdec"):
+        for col in ("V", "plx_value"):
             t[col].mask = [True]
         _FakeSimbad.tap_result = t
         _FakeSimbad.ids_result = Table({"id": []})
