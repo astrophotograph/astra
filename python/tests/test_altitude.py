@@ -363,11 +363,10 @@ class TestCalculateAltitudeData:
         assert naive[0]["altitude"] == aware[0]["altitude"]
 
     def test_default_start_is_a_sun_event(self, freeze_now):
-        """With no start_time the first point lands on the next sun horizon event.
+        """With no start_time the first point lands on the next sunset.
 
-        The module's sunset/sunrise event codes are swapped relative to skyfield
-        (it actually starts at the next *sunrise*); this test accepts either
-        horizon crossing so it pins only "the window starts at a sun event".
+        now is 20:00 UTC (13:00 local); the next horizon crossing is the Mar 6
+        sunset at 00:57 UTC, so this pins the neighbouring (already right) case.
         """
         freeze_now(datetime(2015, 3, 5, 20, 0, tzinfo=UTC))
         points = altitude.calculate_altitude_data(90.0, 10.0, BOULDER)
@@ -376,7 +375,24 @@ class TestCalculateAltitudeData:
         # Independent horizon crossings in the window (from the same kernel):
         sunset = datetime(2015, 3, 6, 0, 57, 5, tzinfo=UTC)
         sunrise = datetime(2015, 3, 6, 13, 27, 3, tzinfo=UTC)
-        assert min(abs(first - sunset), abs(first - sunrise)) < timedelta(minutes=2)
+        assert abs(first - sunset) < timedelta(minutes=2)
+        assert abs(first - sunrise) > timedelta(hours=1)
+
+    def test_default_start_skips_earlier_sunrise(self, freeze_now):
+        """A few hours after local midnight the next sunset is the next day's;
+        the window must not start at the sunrise in between."""
+        freeze_now(datetime(2015, 3, 6, 10, 0, tzinfo=UTC))  # 03:00 local Mar 6
+        points = altitude.calculate_altitude_data(
+            90.0, 10.0, BOULDER, duration_hours=1, interval_minutes=30
+        )
+        first = datetime.fromisoformat(points[0]["time"])
+        # Sunset for the night of Mar 6 (local evening Mar 6 = Mar 7 UTC),
+        # from get_sunset_sunrise (same kernel):
+        result = altitude.get_sunset_sunrise(BOULDER, datetime(2015, 3, 7, tzinfo=UTC))
+        expected_sunset = datetime.fromisoformat(result["sunset"])
+        assert abs(first - expected_sunset) < timedelta(minutes=2)
+        # and not the Mar 6 sunrise, which comes before that sunset:
+        assert abs(first - datetime(2015, 3, 6, 13, 27, 3, tzinfo=UTC)) > timedelta(hours=1)
 
     def test_no_sun_event_falls_back_to_now(self, freeze_now):
         """At 89N in early March the sun never rises: start falls back to now."""

@@ -185,10 +185,10 @@ def calculate_altitude_data(
         f = almanac.sunrise_sunset(eph, observer_location)
         times, events = almanac.find_discrete(t0, t1, f)
 
-        # events: 0 = sunrise, 1 = sunset
+        # skyfield's sunrise_sunset: 1 = sunrise, 0 = sunset
         sunset_found = False
         for t, event in zip(times, events):
-            if event == 0:  # sunrise
+            if event == 1:  # sunrise
                 continue
             # This is sunset
             start_time = t.utc_datetime()
