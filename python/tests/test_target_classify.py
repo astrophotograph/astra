@@ -299,16 +299,12 @@ class TestQuerySimbad:
         assert info.simbad_type == "HIIx"
 
     @pytest.mark.parametrize("answer", [None, Table({"OTYPE": []}, dtype=["U8"])])
-    def test_no_answer_is_not_treated_as_failure(
-        self, monkeypatch, caplog, answer
-    ):
+    def test_no_answer_is_not_treated_as_failure(self, monkeypatch, caplog, answer):
         """A missing or empty SIMBAD answer is a clean 'no result' return, not
         an error path: nothing is logged."""
         import logging
 
-        monkeypatch.setattr(
-            "astra_astro.target_classify.Simbad", make_simbad_mock(answer)
-        )
+        monkeypatch.setattr("astra_astro.target_classify.Simbad", make_simbad_mock(answer))
         with caplog.at_level(logging.WARNING):
             result = _query_simbad("SimbadObject")
         assert result is None

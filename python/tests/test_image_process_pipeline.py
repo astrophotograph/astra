@@ -91,9 +91,11 @@ class TestLoadFits:
         data, header = _load_fits(str(mono_fits))
         assert data.shape == (32, 32)
         assert data.dtype == np.float64
-        expected = np.moveaxis(
-            fits.getdata(mono_fits), -1, 0
-        ) if fits.getdata(mono_fits).ndim == 3 else fits.getdata(mono_fits)
+        expected = (
+            np.moveaxis(fits.getdata(mono_fits), -1, 0)
+            if fits.getdata(mono_fits).ndim == 3
+            else fits.getdata(mono_fits)
+        )
         npt.assert_allclose(data, expected, rtol=0, atol=0)
         assert header["OBJECT"] == "M42"
         assert header["TELESCOP"] == "SeeStar"
@@ -284,7 +286,8 @@ class TestProcessImage:
         write_fits(path, 0.05 + 0.002 * x + 0.001 * y)  # 40 wide, 20 high
         calls = []
         result = process_image(
-            str(path), str(tmp_path / "out"),
+            str(path),
+            str(tmp_path / "out"),
             progress_callback=lambda s, p, m: calls.append(m),
         )
         assert result.success is True
@@ -295,7 +298,8 @@ class TestProcessImage:
     def test_noise_reduction_percent_in_progress_message(self, tmp_path, mono_fits):
         messages = []
         result = process_image(
-            str(mono_fits), str(tmp_path / "out"),
+            str(mono_fits),
+            str(tmp_path / "out"),
             ProcessingParams(noise_reduction=1.0),
             progress_callback=lambda s, p, m: messages.append(m),
         )
@@ -314,14 +318,19 @@ class TestProcessImage:
         steps = [c[0] for c in calls]
         assert steps[0] == "init"
         assert steps[-1] == "complete"
-        for expected in ["loading", "classifying", "background", "calibration",
-                         "stretch", "stars", "noise", "saving"]:
+        for expected in [
+            "loading",
+            "classifying",
+            "background",
+            "calibration",
+            "stretch",
+            "stars",
+            "noise",
+            "saving",
+        ]:
             assert expected in steps
         progresses = [c[1] for c in calls]
-        assert all(
-            progresses[i] <= progresses[i + 1] + 1e-9
-            for i in range(len(progresses) - 1)
-        )
+        assert all(progresses[i] <= progresses[i + 1] + 1e-9 for i in range(len(progresses) - 1))
         assert progresses[-1] == 1.0
         assert all(isinstance(c[2], str) for c in calls)
 
@@ -364,27 +373,32 @@ class TestProcessImage:
         npt.assert_allclose(loaded, stats, atol=1e-6)
 
     def test_stretch_methods_differ(self, tmp_path, mono_fits):
-        outs = {m: self._run_stretch(tmp_path, mono_fits, m)
-                for m in ["statistical", "arcsinh", "log"]}
+        outs = {
+            m: self._run_stretch(tmp_path, mono_fits, m) for m in ["statistical", "arcsinh", "log"]
+        }
         assert not np.allclose(outs["statistical"], outs["arcsinh"])
         assert not np.allclose(outs["statistical"], outs["log"])
         assert not np.allclose(outs["arcsinh"], outs["log"])
 
     def test_background_removal_changes_output(self, tmp_path, mono_fits):
-        on = process_image(str(mono_fits), str(tmp_path / "bg_on"),
-                           ProcessingParams(background_removal=True))
-        off = process_image(str(mono_fits), str(tmp_path / "bg_off"),
-                            ProcessingParams(background_removal=False))
+        on = process_image(
+            str(mono_fits), str(tmp_path / "bg_on"), ProcessingParams(background_removal=True)
+        )
+        off = process_image(
+            str(mono_fits), str(tmp_path / "bg_off"), ProcessingParams(background_removal=False)
+        )
         assert on.success and off.success
         a, _ = _load_fits(on.output_fits_path)
         b, _ = _load_fits(off.output_fits_path)
         assert not np.allclose(a, b)
 
     def test_colour_calibration_changes_colour_output(self, tmp_path, colour_fits):
-        on = process_image(str(colour_fits), str(tmp_path / "cc_on"),
-                           ProcessingParams(color_calibration=True))
-        off = process_image(str(colour_fits), str(tmp_path / "cc_off"),
-                            ProcessingParams(color_calibration=False))
+        on = process_image(
+            str(colour_fits), str(tmp_path / "cc_on"), ProcessingParams(color_calibration=True)
+        )
+        off = process_image(
+            str(colour_fits), str(tmp_path / "cc_off"), ProcessingParams(color_calibration=False)
+        )
         assert on.success and off.success
         a, _ = _load_fits(on.output_fits_path)
         b, _ = _load_fits(off.output_fits_path)
@@ -396,22 +410,28 @@ class TestProcessImage:
         noisy = make_mono() + rng.normal(0, 0.05, (32, 32))
         noisy_path = tmp_path / "noisy.fits"
         write_fits(noisy_path, noisy)
-        off = process_image(str(noisy_path), str(tmp_path / "nr_off"),
-                            ProcessingParams(noise_reduction=0.0))
-        on = process_image(str(noisy_path), str(tmp_path / "nr_on"),
-                           ProcessingParams(noise_reduction=0.8))
+        off = process_image(
+            str(noisy_path), str(tmp_path / "nr_off"), ProcessingParams(noise_reduction=0.0)
+        )
+        on = process_image(
+            str(noisy_path), str(tmp_path / "nr_on"), ProcessingParams(noise_reduction=0.8)
+        )
         a, _ = _load_fits(on.output_fits_path)
         b, _ = _load_fits(off.output_fits_path)
+
         # Smoothing reduces high-frequency energy (mean of |neighbour diffs|).
         def hf(x):
             return np.mean(np.abs(np.diff(x, axis=0))) + np.mean(np.abs(np.diff(x, axis=1)))
+
         assert hf(a) < hf(b)
 
     def test_star_reduction_dims_bright_peaks(self, tmp_path, mono_fits):
-        on = process_image(str(mono_fits), str(tmp_path / "sr_on"),
-                           ProcessingParams(star_reduction=True))
-        off = process_image(str(mono_fits), str(tmp_path / "sr_off"),
-                            ProcessingParams(star_reduction=False))
+        on = process_image(
+            str(mono_fits), str(tmp_path / "sr_on"), ProcessingParams(star_reduction=True)
+        )
+        off = process_image(
+            str(mono_fits), str(tmp_path / "sr_off"), ProcessingParams(star_reduction=False)
+        )
         a, _ = _load_fits(on.output_fits_path)
         b, _ = _load_fits(off.output_fits_path)
         assert not np.allclose(a, b)
@@ -423,10 +443,10 @@ class TestProcessImage:
         assert a[0, 0] <= b[0, 0] + 0.05
 
     def test_contrast_above_one_changes_output(self, tmp_path, mono_fits):
-        none = process_image(str(mono_fits), str(tmp_path / "c10"),
-                             ProcessingParams(contrast=1.0))
-        strong = process_image(str(mono_fits), str(tmp_path / "c15"),
-                               ProcessingParams(contrast=1.5))
+        none = process_image(str(mono_fits), str(tmp_path / "c10"), ProcessingParams(contrast=1.0))
+        strong = process_image(
+            str(mono_fits), str(tmp_path / "c15"), ProcessingParams(contrast=1.5)
+        )
         a, _ = _load_fits(strong.output_fits_path)
         b, _ = _load_fits(none.output_fits_path)
         assert not np.allclose(a, b)
@@ -436,8 +456,9 @@ class TestProcessImage:
     def test_stretch_factor_between_zero_and_one_is_used(self, tmp_path, mono_fits):
         # A stretch_factor in (0, 1] must be honoured, not treated as missing:
         # a higher target median gives a brighter stretch than the default 0.15.
-        bright = process_image(str(mono_fits), str(tmp_path / "bright"),
-                               ProcessingParams(stretch_factor=0.5))
+        bright = process_image(
+            str(mono_fits), str(tmp_path / "bright"), ProcessingParams(stretch_factor=0.5)
+        )
         default = process_image(str(mono_fits), str(tmp_path / "default"))
         assert bright.success is True and default.success is True
         a, _ = _load_fits(bright.output_fits_path)
@@ -447,22 +468,25 @@ class TestProcessImage:
     def test_stretch_factor_zero_uses_target_default(self, tmp_path, mono_fits):
         # stretch_factor <= 0 falls back to the target-specific default
         # (0.15 for UNKNOWN); the run must still succeed and stretch.
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(stretch_factor=0.0))
+        result = process_image(
+            str(mono_fits), str(tmp_path / "out"), ProcessingParams(stretch_factor=0.0)
+        )
         assert result.success is True
         loaded, _ = _load_fits(result.output_fits_path)
         raw, _ = _load_fits(str(mono_fits))
         assert np.median(loaded) > np.median(raw)
 
     def test_explicit_target_type_recorded(self, tmp_path, mono_fits):
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(target_type="galaxy"))
+        result = process_image(
+            str(mono_fits), str(tmp_path / "out"), ProcessingParams(target_type="galaxy")
+        )
         assert result.success is True
         assert result.target_type == "galaxy"
 
     def test_unknown_target_type_string_falls_back(self, tmp_path, mono_fits):
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(target_type="not_a_target"))
+        result = process_image(
+            str(mono_fits), str(tmp_path / "out"), ProcessingParams(target_type="not_a_target")
+        )
         assert result.success is True
         assert result.target_type == "unknown"
 
@@ -471,15 +495,19 @@ class TestProcessImage:
             "astra_astro.image_process.classify_from_name",
             lambda name: SimpleNamespace(target_type=TargetType.GALAXY),
         )
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(target_type="auto"),
-                               object_name="Messier 31")
+        result = process_image(
+            str(mono_fits),
+            str(tmp_path / "out"),
+            ProcessingParams(target_type="auto"),
+            object_name="Messier 31",
+        )
         assert result.success is True
         assert result.target_type == "galaxy"
 
     def test_auto_without_object_name_stays_unknown(self, tmp_path, mono_fits):
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(target_type="auto"))
+        result = process_image(
+            str(mono_fits), str(tmp_path / "out"), ProcessingParams(target_type="auto")
+        )
         assert result.success is True
         assert result.target_type == "unknown"
 
@@ -492,10 +520,8 @@ class TestProcessImage:
             "astra_astro.image_process.classify_from_name",
             lambda name: SimpleNamespace(target_type=TargetType.EMISSION_NEBULA),
         )
-        params = ProcessingParams(target_type="auto", star_reduction=False,
-                                  stretch_factor=0.0)
-        result = process_image(str(mono_fits), str(tmp_path / "out"), params,
-                               object_name="Rosette")
+        params = ProcessingParams(target_type="auto", star_reduction=False, stretch_factor=0.0)
+        result = process_image(str(mono_fits), str(tmp_path / "out"), params, object_name="Rosette")
         assert result.success is True
         assert result.target_type == "emission_nebula"
         loaded, _ = _load_fits(result.output_fits_path)
@@ -503,18 +529,19 @@ class TestProcessImage:
         b = _statistical_stretch(make_mono(), 0.18)
         assert loaded[10, 10] < b[10, 10]
 
-    def test_star_field_target_skips_background_removal(self, tmp_path, mono_fits,
-                                                        monkeypatch):
+    def test_star_field_target_skips_background_removal(self, tmp_path, mono_fits, monkeypatch):
         # STAR_FIELD has background_removal False in TARGET_PARAMS, but the
         # caller's explicit True wins (params are merged, not overridden).
         monkeypatch.setattr(
             "astra_astro.image_process.classify_from_name",
             lambda name: SimpleNamespace(target_type=TargetType.STAR_FIELD),
         )
-        result = process_image(str(mono_fits), str(tmp_path / "out"),
-                               ProcessingParams(target_type="auto",
-                                                background_removal=True),
-                               object_name="field")
+        result = process_image(
+            str(mono_fits),
+            str(tmp_path / "out"),
+            ProcessingParams(target_type="auto", background_removal=True),
+            object_name="field",
+        )
         assert result.success is True
         assert result.target_type == "star_field"
 
@@ -544,7 +571,9 @@ class TestProcessImageFromDict:
     def test_full_dict_applied(self, tmp_path, colour_fits):
         progress = []
         result = process_image_from_dict(
-            str(colour_fits), str(tmp_path / "out"), dict(self.FULL_DICT),
+            str(colour_fits),
+            str(tmp_path / "out"),
+            dict(self.FULL_DICT),
             progress_callback=lambda s, p, m: progress.append((s, p)),
         )
         assert result["success"] is True
@@ -576,7 +605,8 @@ class TestProcessImageFromDict:
 
     def test_unknown_keys_ignored(self, tmp_path, mono_fits):
         result = process_image_from_dict(
-            str(mono_fits), str(tmp_path / "out"),
+            str(mono_fits),
+            str(tmp_path / "out"),
             {"bogusKey": 42, "stretchMethod": "log"},
         )
         assert result["success"] is True
@@ -585,7 +615,8 @@ class TestProcessImageFromDict:
 
     def test_partial_dict_overrides_only_named_keys(self, tmp_path, mono_fits):
         result = process_image_from_dict(
-            str(mono_fits), str(tmp_path / "out"),
+            str(mono_fits),
+            str(tmp_path / "out"),
             {"noiseReduction": 0.5, "backgroundRemoval": False},
         )
         assert result["success"] is True
@@ -595,17 +626,21 @@ class TestProcessImageFromDict:
         assert params["stretchMethod"] == "statistical"
 
     def test_processing_failure_reported(self, tmp_path):
-        result = process_image_from_dict(
-            str(tmp_path / "missing.fits"), str(tmp_path / "out"), {}
-        )
+        result = process_image_from_dict(str(tmp_path / "missing.fits"), str(tmp_path / "out"), {})
         assert result["success"] is False
         assert result["errorMessage"]
 
     def test_numeric_strings_coerced(self, tmp_path, mono_fits):
         result = process_image_from_dict(
-            str(mono_fits), str(tmp_path / "out"),
-            {"stretchFactor": "0.2", "noiseReduction": "0.5",
-             "contrast": "1.5", "backgroundRemoval": 1, "starReduction": 1},
+            str(mono_fits),
+            str(tmp_path / "out"),
+            {
+                "stretchFactor": "0.2",
+                "noiseReduction": "0.5",
+                "contrast": "1.5",
+                "backgroundRemoval": 1,
+                "starReduction": 1,
+            },
         )
         assert result["success"] is True
         params = result["processingParams"]
@@ -622,9 +657,14 @@ class TestProcessImageFromDict:
 class TestToDict:
     def test_params_to_dict_camel_case(self):
         params = ProcessingParams(
-            target_type="galaxy", stretch_method="log", stretch_factor=0.2,
-            background_removal=False, star_reduction=True,
-            color_calibration=False, noise_reduction=0.4, contrast=1.6,
+            target_type="galaxy",
+            stretch_method="log",
+            stretch_factor=0.2,
+            background_removal=False,
+            star_reduction=True,
+            color_calibration=False,
+            noise_reduction=0.4,
+            contrast=1.6,
         )
         assert params.to_dict() == {
             "targetType": "galaxy",
@@ -639,9 +679,12 @@ class TestToDict:
 
     def test_result_to_dict_keys_and_values(self):
         result = ProcessingResult(
-            success=True, output_fits_path="/a.fits",
-            output_preview_path="/a.png", target_type="galaxy",
-            processing_params={"a": 1}, processing_time=1.5,
+            success=True,
+            output_fits_path="/a.fits",
+            output_preview_path="/a.png",
+            target_type="galaxy",
+            processing_params={"a": 1},
+            processing_time=1.5,
         )
         d = result.to_dict()
         assert d == {
