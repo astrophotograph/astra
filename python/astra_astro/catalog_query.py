@@ -59,6 +59,18 @@ class CatalogObject:
         return result
 
 
+def _cell_text(value) -> Optional[str]:
+    """Return the stripped text of a table cell, or None if it has no usable name.
+
+    Masked cells, None, and text that is empty after stripping all count as
+    missing; zero is a real value and is returned as "0".
+    """
+    if value is None or np.ma.is_masked(value):
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
 def _safe_float(val, default=None) -> Optional[float]:
     """Safely convert a value to float."""
     if val is None:
@@ -152,7 +164,7 @@ def query_ngc_ic(center_ra: float, center_dec: float, radius_deg: float) -> list
                 name = None
                 for col in ["Name", "NGC/IC", "_Name"]:
                     if col in col_names:
-                        name = str(row[col]).strip()
+                        name = _cell_text(row[col])
                         break
                 if name is None:
                     continue
@@ -354,7 +366,7 @@ def query_barnard(center_ra: float, center_dec: float, radius_deg: float) -> lis
                 barn_num = None
                 for col in ["Barn", "Name", "_Name", "B"]:
                     if col in col_names:
-                        barn_num = str(row[col]).strip()
+                        barn_num = _cell_text(row[col])
                         break
                 if barn_num is None:
                     continue
@@ -423,7 +435,7 @@ def query_ldn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                 ldn_num = None
                 for col in ["LDN", "Name", "_Name"]:
                     if col in col_names:
-                        ldn_num = str(row[col]).strip()
+                        ldn_num = _cell_text(row[col])
                         break
                 if ldn_num is None:
                     continue
@@ -507,13 +519,15 @@ def query_lbn(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
             col_names = table.colnames
 
             for row in table:
-                # Find LBN number
+                # Find LBN number; a masked/blank cell falls back to Seq below
                 lbn_num = None
+                found_name_col = False
                 for col in ["LBN", "Name", "_Name"]:
                     if col in col_names:
-                        lbn_num = str(row[col]).strip()
+                        lbn_num = _cell_text(row[col])
+                        found_name_col = True
                         break
-                if lbn_num is None:
+                if not found_name_col:
                     continue
 
                 # Get the Seq number for unique identification
@@ -609,7 +623,7 @@ def query_sharpless(center_ra: float, center_dec: float, radius_deg: float) -> l
                 sh2_num = None
                 for col in ["Sh2", "Name", "_Name", "Sh2-"]:
                     if col in col_names:
-                        sh2_num = str(row[col]).strip()
+                        sh2_num = _cell_text(row[col])
                         break
                 if sh2_num is None:
                     continue
@@ -678,7 +692,7 @@ def query_abell(center_ra: float, center_dec: float, radius_deg: float) -> list[
                 aco_num = None
                 for col in ["ACO", "Abell", "Name", "_Name"]:
                     if col in col_names:
-                        aco_num = str(row[col]).strip()
+                        aco_num = _cell_text(row[col])
                         break
                 if aco_num is None:
                     continue
@@ -746,7 +760,7 @@ def query_pgc(center_ra: float, center_dec: float, radius_deg: float) -> list[Ca
                 pgc_num = None
                 for col in ["PGC", "Name", "_Name"]:
                     if col in col_names:
-                        pgc_num = str(row[col]).strip()
+                        pgc_num = _cell_text(row[col])
                         break
                 if pgc_num is None:
                     continue
@@ -837,7 +851,7 @@ def query_bright_stars(
                 hr_num = None
                 for col in ["HR", "Name", "_Name"]:
                     if col in col_names:
-                        hr_num = str(row[col]).strip()
+                        hr_num = _cell_text(row[col])
                         break
                 if hr_num is None:
                     continue

@@ -114,6 +114,114 @@ def masked_table(cols, masks):
 
 
 # ---------------------------------------------------------------------------
+# _cell_text: name-cell reading shared by the per-catalog queries
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (np.ma.masked, None),
+        (None, None),
+        ("", None),
+        ("   ", None),
+        ("33", "33"),
+        (0, "0"),
+    ],
+    ids=["masked", "none", "empty", "blank", "text", "zero"],
+)
+def test_cell_text(value, expected):
+    assert cq._cell_text(value) == expected
+
+
+MASKED_NAME_PARAMS = [
+    (query_ngc_ic, "Name", "NGC ", "NGC"),
+    (query_barnard, "Barn", "B ", "Barnard"),
+    (query_ldn, "LDN", "LDN ", "LDN"),
+    (query_sharpless, "Sh2", "Sh2-", "Sharpless"),
+    (query_abell, "ACO", "Abell ", "Abell"),
+    (query_pgc, "PGC", "PGC ", "PGC"),
+    (query_bright_stars, "HR", "HR ", "Bright Stars"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Rows with a masked name cell are skipped, the same as a missing column
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "func,num_col,prefix,catalog",
+    MASKED_NAME_PARAMS,
+    ids=["ngc_ic", "barnard", "ldn", "sharpless", "abell", "pgc", "bright_stars"],
+)
+def test_masked_name_cell_skips_row(vizier, func, num_col, prefix, catalog):
+    vizier.configure(
+        tables=[
+            masked_table(
+                {
+                    num_col: ["42", None],
+                    "_RAJ2000": [150.1, 150.2],
+                    "_DEJ2000": [20.1, 20.2],
+                },
+                {num_col: [False, True]},
+            )
+        ]
+    )
+    objs = func(CENTER_RA, CENTER_DEC, RADIUS)
+    assert [(o.name, o.catalog) for o in objs] == [(f"{prefix}42", catalog)]
+
+
+def test_blank_name_cell_skips_row(vizier):
+    """A name cell that strips to nothing is skipped too."""
+    vizier.configure(
+        tables=[table(PGC=["2557", "  "], _RAJ2000=[150.1, 150.2], _DEJ2000=[20.1, 20.2])]
+    )
+    objs = query_pgc(CENTER_RA, CENTER_DEC, RADIUS)
+    assert [o.name for o in objs] == ["PGC 2557"]
+
+
+def test_zero_name_cell_is_kept(vizier):
+    """Zero is a real number: the cell must not be treated as missing."""
+    vizier.configure(tables=[table(PGC=[0], _RAJ2000=[150.1], _DEJ2000=[20.1])])
+    (obj,) = query_pgc(CENTER_RA, CENTER_DEC, RADIUS)
+    assert obj.name == "PGC 0"
+
+
+def test_lbn_no_name_column_skips_rows_even_with_seq(vizier):
+    """Without any name column the row is skipped before Seq is considered."""
+    vizier.configure(tables=[table(Seq=[789.0], _RAJ2000=[150.1], _DEJ2000=[20.1])])
+    assert query_lbn(CENTER_RA, CENTER_DEC, RADIUS) == []
+
+
+def test_lbn_masked_lbn_cell_falls_back_to_seq(vizier):
+    """A masked LBN cell must not become 'LBN --'; Seq is used instead."""
+    vizier.configure(
+        tables=[
+            masked_table(
+                {
+                    "LBN": [None, "123"],
+                    "Seq": [789.0, 124.0],
+                    "_RAJ2000": [150.1, 150.2],
+                    "_DEJ2000": [20.1, 20.2],
+                },
+                {"LBN": [True, False]},
+            )
+        ]
+    )
+    objs = query_lbn(CENTER_RA, CENTER_DEC, RADIUS)
+    assert [o.name for o in objs] == ["LBN 789", "LBN 123"]
+
+
+def test_lbn_masked_lbn_and_no_seq_skips_row(vizier):
+    vizier.configure(
+        tables=[
+            masked_table(
+                {"LBN": [None], "_RAJ2000": [150.1], "_DEJ2000": [20.1]},
+                {"LBN": [True]},
+            )
+        ]
+    )
+    assert query_lbn(CENTER_RA, CENTER_DEC, RADIUS) == []
+
+
+# ---------------------------------------------------------------------------
 # query_ngc_ic
 # ---------------------------------------------------------------------------
 class TestQueryNgcIc:
